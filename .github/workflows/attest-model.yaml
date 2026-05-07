@@ -30,6 +30,7 @@ permissions:
   id-token: write
   contents: write
   attestations: write
+  packages: read
 
 env:
   KATA_VERSION: "3.12.0"
@@ -83,7 +84,7 @@ jobs:
 
       - name: Get cvm-measure version
         run: |
-          CVM_MEASURE_VERSION=$(cvm-measure --version 2>&1 | head -1 || echo "unknown")
+          CVM_MEASURE_VERSION=$(pip show cvm-measure 2>/dev/null | grep '^Version:' | cut -d' ' -f2 || echo "unknown")
           echo "CVM_MEASURE_VERSION=$CVM_MEASURE_VERSION" >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
@@ -105,7 +106,7 @@ jobs:
       # ----------------------------------------------------------------
       - name: Fetch baseline from cohere-cc-baselines
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p cvm-artifacts
           MACHINE_TYPE="${{ inputs.machine_type }}"
@@ -127,9 +128,7 @@ jobs:
           echo "FIRMWARE_REF=${FIRMWARE_SHA384}" >> "$GITHUB_ENV"
 
       - name: Log in to GHCR
-        env:
-          GH_PAT: ${{ secrets.GH_PAT }}
-        run: echo "$GH_PAT" | oras login ghcr.io -u x --password-stdin
+        run: echo "${{ github.token }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Extract UKI from podvm image
         run: |
