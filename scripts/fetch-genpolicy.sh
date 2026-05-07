@@ -44,10 +44,10 @@ trap "rm -rf $TMPDIR" EXIT
 
 if curl -fSL "$TOOLS_URL" -o "${TMPDIR}/kata-tools.tar.zst" 2>/dev/null; then
   echo "Using kata-tools-static tarball (.tar.zst)" >&2
-  tar --zstd -xf "${TMPDIR}/kata-tools.tar.zst" -C "${TMPDIR}" opt/kata/bin/genpolicy
+  tar --zstd -xf "${TMPDIR}/kata-tools.tar.zst" -C "${TMPDIR}" ./opt/kata/bin/genpolicy
 elif curl -fSL "$STATIC_URL" -o "${TMPDIR}/kata-static.tar.xz" 2>/dev/null; then
   echo "Using kata-static tarball (.tar.xz)" >&2
-  tar -xf "${TMPDIR}/kata-static.tar.xz" -C "${TMPDIR}" opt/kata/bin/genpolicy
+  tar -xf "${TMPDIR}/kata-static.tar.xz" -C "${TMPDIR}" ./opt/kata/bin/genpolicy
 else
   echo "ERROR: Could not download genpolicy from Kata release ${KATA_VERSION}" >&2
   echo "  Tried: $TOOLS_URL" >&2

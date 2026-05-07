@@ -15,6 +15,16 @@ on:
         description: "Comma-separated model names to attest (leave empty for all)"
         required: false
         type: string
+      podvm_image_tag:
+        description: "GHCR tag for the podvm disk image (for UKI extraction)"
+        required: false
+        default: "cohere-latest-ubuntu-debug"
+        type: string
+      machine_type:
+        description: "GCP machine type (determines baseline + RAM)"
+        required: false
+        default: "a3-highgpu-1g"
+        type: string
 
 permissions:
   id-token: write
@@ -24,6 +34,9 @@ permissions:
 env:
   KATA_VERSION: "3.12.0"
   CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
+  RAM_GIB: "234"
+  PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
+  BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
 
 jobs:
   attest:
@@ -46,32 +59,27 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
+      - name: Install oras
+        uses: oras-project/setup-oras@v1
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y mtools
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+
       - name: Fetch genpolicy binary
         run: |
-          KATA_TAG="$KATA_VERSION"
-
-          # Newer Kata releases (>=3.13) ship a separate tools tarball (.tar.zst).
-          # Older releases (e.g. 3.12.0) only have the full static bundle (.tar.xz).
-          TOOLS_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_TAG}/kata-tools-static-${KATA_TAG}-amd64.tar.zst"
-          STATIC_URL="https://github.com/kata-containers/kata-containers/releases/download/${KATA_TAG}/kata-static-${KATA_TAG}-amd64.tar.xz"
-
-          echo "Trying tools tarball first..."
-          if curl -fSL "$TOOLS_URL" -o genpolicy.tar.zst 2>/dev/null; then
-            tar --zstd -xf genpolicy.tar.zst opt/kata/bin/genpolicy
-          else
-            echo "Tools tarball not found, falling back to full static bundle..."
-            curl -fSL "$STATIC_URL" -o genpolicy.tar.xz
-            tar -xf genpolicy.tar.xz opt/kata/bin/genpolicy
-          fi
-
-          # Verify integrity using the GitHub release asset digest when available
-          # gh api repos/kata-containers/kata-containers/releases/tags/${KATA_TAG} \
-          #   --jq '.assets[] | select(.name | test("kata-tools-static|kata-static")) | {name, digest: .digest}'
-
-          mv opt/kata/bin/genpolicy /usr/local/bin/genpolicy
-          chmod +x /usr/local/bin/genpolicy
-          genpolicy --version || echo "genpolicy installed (version flag may not be supported)"
-          echo "GENPOLICY_VERSION=${KATA_TAG}" >> "$GITHUB_ENV"
+          ./scripts/fetch-genpolicy.sh \
+            --version "$KATA_VERSION" \
+            --output /usr/local/bin/genpolicy
+          echo "GENPOLICY_VERSION=${KATA_VERSION}" >> "$GITHUB_ENV"
 
       - name: Get cvm-measure version
         run: |
@@ -95,29 +103,50 @@ jobs:
       # ----------------------------------------------------------------
       # Fetch CVM artifacts (shared across all models)
       # ----------------------------------------------------------------
-      - name: Fetch CVM artifacts
+      - name: Fetch baseline from cohere-cc-baselines
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
           mkdir -p cvm-artifacts
+          MACHINE_TYPE="${{ inputs.machine_type }}"
+          BASELINE_PATH="baselines/gcp/tdx/${MACHINE_TYPE}.json"
 
-          # OVMF firmware -- pinned version from GCP TCB integrity bucket
-          # TODO: replace with actual firmware URL/version for your environment
-          echo "TODO: Download OVMF firmware" > cvm-artifacts/OVMF.fd.placeholder
-          # curl -fSL "$OVMF_URL" -o cvm-artifacts/OVMF.fd
+          gh api "/repos/${BASELINES_REPO}/contents/${BASELINE_PATH}" \
+            --jq '.content' | base64 -d > cvm-artifacts/baseline.json
 
-          # UKI (BOOTX64.EFI) -- from podvm image build pipeline
-          # TODO: replace with actual UKI source
-          echo "TODO: Download UKI" > cvm-artifacts/BOOTX64.EFI.placeholder
-          # curl -fSL "$UKI_URL" -o cvm-artifacts/BOOTX64.EFI
+          echo "Baseline downloaded for ${MACHINE_TYPE}:"
+          cat cvm-artifacts/baseline.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  machine_type: {d[\"machine_type\"]}, firmware_sha384: {d[\"firmware_sha384\"][:24]}..., events: {len(d[\"events\"])}')"
+          echo "BASELINE_REF=${BASELINES_REPO}/${BASELINE_PATH}" >> "$GITHUB_ENV"
 
-          # Baseline JSON -- from cohere-cc-baselines repo
-          # TODO: replace with actual baseline fetch
-          echo "TODO: Download baseline" > cvm-artifacts/baseline.json.placeholder
-          # curl -fSL "https://raw.githubusercontent.com/cohere-ai/cohere-cc-baselines/main/baselines/gcp/tdx/a3-highgpu-1g.json" \
-          #   -o cvm-artifacts/baseline.json
+      - name: Fetch OVMF firmware
+        run: |
+          FIRMWARE_SHA384=$(python3 -c "import json; print(json.load(open('cvm-artifacts/baseline.json'))['firmware_sha384'])")
+          curl -fSL "https://storage.googleapis.com/gce_tcb_integrity/ovmf_x64_csm/${FIRMWARE_SHA384}.fd" \
+            -o cvm-artifacts/OVMF.fd
+          echo "Downloaded OVMF firmware ($(du -sh cvm-artifacts/OVMF.fd | cut -f1))"
+          echo "FIRMWARE_REF=${FIRMWARE_SHA384}" >> "$GITHUB_ENV"
 
-          echo "FIRMWARE_REF=TODO" >> "$GITHUB_ENV"
-          echo "UKI_REF=TODO" >> "$GITHUB_ENV"
-          echo "BASELINE_REF=TODO" >> "$GITHUB_ENV"
+      - name: Log in to GHCR
+        env:
+          GH_PAT: ${{ secrets.GH_PAT }}
+        run: echo "$GH_PAT" | oras login ghcr.io -u x --password-stdin
+
+      - name: Extract UKI from podvm image
+        run: |
+          PODVM_TAG="${{ inputs.podvm_image_tag }}"
+          PODVM_REF="${PODVM_IMAGE}:${PODVM_TAG}"
+
+          mkdir -p /tmp/podvm && cd /tmp/podvm
+          oras pull "${PODVM_REF}"
+          ls -lh
+          cd "$GITHUB_WORKSPACE"
+
+          cvm-measure extract-uki \
+            --disk /tmp/podvm/disk.tar.gz \
+            --output cvm-artifacts/BOOTX64.EFI
+
+          echo "UKI extracted ($(du -sh cvm-artifacts/BOOTX64.EFI | cut -f1))"
+          echo "UKI_REF=${PODVM_REF}" >> "$GITHUB_ENV"
 
       # ----------------------------------------------------------------
       # Per-model loop: genpolicy -> initdata -> podspec -> cvm-measure
@@ -175,18 +204,28 @@ jobs:
             fi
 
             # --- Step 3: Compute measurements with cvm-measure ---
-            # TODO: Replace placeholders with real artifact paths once CVM artifacts are fetched
-            # cvm-measure tdx \
-            #   --firmware cvm-artifacts/OVMF.fd \
-            #   --uki cvm-artifacts/BOOTX64.EFI \
-            #   --baseline cvm-artifacts/baseline.json \
-            #   --ram 240 \
-            #   --initdata "artifacts/${MODEL}/initdata.toml" \
-            #   --output-format json > "artifacts/${MODEL}/measurements.json"
+            INITDATA_B64=$(cat "artifacts/${MODEL}/initdata_b64.txt" 2>/dev/null || echo "")
+            if [[ -n "$INITDATA_B64" ]]; then
+              echo "$INITDATA_B64" | base64 -d > "artifacts/${MODEL}/initdata.toml"
+              cvm-measure tdx \
+                --firmware cvm-artifacts/OVMF.fd \
+                --uki cvm-artifacts/BOOTX64.EFI \
+                --baseline cvm-artifacts/baseline.json \
+                --ram ${{ env.RAM_GIB }} \
+                --initdata "artifacts/${MODEL}/initdata.toml" \
+                --output-format json > "artifacts/${MODEL}/measurements.json"
+            else
+              echo "WARNING: No initdata for $MODEL, computing without RTMR3"
+              cvm-measure tdx \
+                --firmware cvm-artifacts/OVMF.fd \
+                --uki cvm-artifacts/BOOTX64.EFI \
+                --baseline cvm-artifacts/baseline.json \
+                --ram ${{ env.RAM_GIB }} \
+                --output-format json > "artifacts/${MODEL}/measurements.json"
+            fi
 
-            # Placeholder measurements for workflow testing
-            echo '{"mrtd":"TODO","rtmr0":"TODO","rtmr1":"TODO","rtmr2":"TODO","rtmr3":"TODO"}' \
-              > "artifacts/${MODEL}/measurements.json"
+            echo "Measurements for $MODEL:"
+            cat "artifacts/${MODEL}/measurements.json"
 
             echo "Completed: $MODEL"
           done
