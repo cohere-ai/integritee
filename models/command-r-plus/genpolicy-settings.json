@@ -1,0 +1,10 @@
+{
+  "request_defaults": {
+    "ExecProcessRequest": {
+      "regex": [
+        "^/bin/sh$",
+        "^/usr/bin/python3$"
+      ]
+    }
+  }
+}

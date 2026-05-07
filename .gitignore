@@ -1,0 +1,32 @@
+# Build artifacts
+artifacts/
+release-assets/
+cvm-artifacts/
+release-body.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# genpolicy downloads
+genpolicy.tar.xz
+opt/
+
+# Environment
+.env
+*.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
