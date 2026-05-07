@@ -54,7 +54,9 @@ jobs:
           python-version: "3.12"
 
       - name: Install cvm-measure
-        run: pip install git+${{ env.CVM_MEASURE_REPO }}
+        run: |
+          git clone --depth 1 ${{ env.CVM_MEASURE_REPO }} /tmp/cvm-measure
+          pip install /tmp/cvm-measure
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
