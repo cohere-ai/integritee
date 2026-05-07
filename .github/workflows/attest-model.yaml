@@ -37,7 +37,6 @@ env:
   CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
   RAM_GIB: "234"
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
-  BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
 
 jobs:
   attest:
@@ -104,20 +103,23 @@ jobs:
       # ----------------------------------------------------------------
       # Fetch CVM artifacts (shared across all models)
       # ----------------------------------------------------------------
-      - name: Fetch baseline from cohere-cc-baselines
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Load baseline
         run: |
           mkdir -p cvm-artifacts
           MACHINE_TYPE="${{ inputs.machine_type }}"
           BASELINE_PATH="baselines/gcp/tdx/${MACHINE_TYPE}.json"
 
-          gh api "/repos/${BASELINES_REPO}/contents/${BASELINE_PATH}" \
-            --jq '.content' | base64 -d > cvm-artifacts/baseline.json
+          if [[ ! -f "$BASELINE_PATH" ]]; then
+            echo "ERROR: No baseline for machine type ${MACHINE_TYPE}" >&2
+            echo "Available baselines:" >&2
+            ls baselines/gcp/tdx/ >&2
+            exit 1
+          fi
+          cp "$BASELINE_PATH" cvm-artifacts/baseline.json
 
-          echo "Baseline downloaded for ${MACHINE_TYPE}:"
-          cat cvm-artifacts/baseline.json | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  machine_type: {d[\"machine_type\"]}, firmware_sha384: {d[\"firmware_sha384\"][:24]}..., events: {len(d[\"events\"])}')"
-          echo "BASELINE_REF=${BASELINES_REPO}/${BASELINE_PATH}" >> "$GITHUB_ENV"
+          echo "Baseline for ${MACHINE_TYPE}:"
+          python3 -c "import sys,json; d=json.load(open('cvm-artifacts/baseline.json')); print(f'  machine_type: {d[\"machine_type\"]}, firmware_sha384: {d[\"firmware_sha384\"][:24]}..., events: {len(d[\"events\"])}')"
+          echo "BASELINE_REF=${BASELINE_PATH}" >> "$GITHUB_ENV"
 
       - name: Fetch OVMF firmware
         run: |
