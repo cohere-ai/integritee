@@ -35,6 +35,7 @@ permissions:
 env:
   KATA_VERSION: "3.12.0"
   CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
+  CVM_MEASURE_REF: "alhassankhedr/cc-191-cvm-measure-add-diskpy-module-with-uki-extraction"
   RAM_GIB: "234"
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
   BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
@@ -56,7 +57,7 @@ jobs:
 
       - name: Install cvm-measure
         run: |
-          git clone --depth 1 ${{ env.CVM_MEASURE_REPO }} /tmp/cvm-measure
+          git clone --depth 1 --branch "${CVM_MEASURE_REF}" "${CVM_MEASURE_REPO}" /tmp/cvm-measure
           pip install /tmp/cvm-measure
 
       - name: Install cosign
