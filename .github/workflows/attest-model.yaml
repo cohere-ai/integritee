@@ -36,7 +36,7 @@ env:
   KATA_VERSION: "3.12.0"
   CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
   # TODO: remove this branch pin once the cvm-measure CLI/UKI extraction branch merges to main.
-  CVM_MEASURE_REF: "alhassankhedr/cc-191-cvm-measure-add-diskpy-module-with-uki-extraction"
+  CVM_MEASURE_REF: "alhassankhedr/cc-167-tdx-measurement-toolkit"
   RAM_GIB: "234"
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
   BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
