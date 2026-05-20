@@ -1,14 +1,13 @@
 #!/usr/bin/env bash
-# Upload an ITA attestation policy and return the policy_id.
+# Update an existing ITA attestation policy slot (blue/green) via PUT.
 #
 # Usage:
 #   ./upload-ita-policy.sh \
 #     --policy-file artifacts/ita-attestation-policy.rego \
-#     --policy-name "model-integrity-v0.0.1" \
+#     --policy-name "model-integrity-policy-a" \
+#     --policy-id "cbeedffa-e224-4664-b6b4-573fcd4133d3" \
 #     --api-url "$ITA_API_URL" \
 #     --api-key "$ITA_ADMIN_API_KEY"
-#
-# Prints the policy_id to stdout on success.
 #
 # ITA REST API docs:
 #   https://docs.trustauthority.intel.com/main/articles/articles/ita/restapi/restapi-policy-management.html
@@ -17,6 +16,7 @@ set -euo pipefail
 
 POLICY_FILE=""
 POLICY_NAME=""
+POLICY_ID=""
 API_URL=""
 API_KEY=""
 
@@ -24,13 +24,14 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --policy-file) POLICY_FILE="$2"; shift 2 ;;
     --policy-name) POLICY_NAME="$2"; shift 2 ;;
+    --policy-id)   POLICY_ID="$2"; shift 2 ;;
     --api-url)     API_URL="$2"; shift 2 ;;
     --api-key)     API_KEY="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; exit 1 ;;
   esac
 done
 
-for var in POLICY_FILE POLICY_NAME API_URL API_KEY; do
+for var in POLICY_FILE POLICY_NAME POLICY_ID API_URL API_KEY; do
   if [[ -z "${!var}" ]]; then
     echo "ERROR: --$(echo "$var" | tr '[:upper:]' '[:lower:]' | tr '_' '-') is required" >&2
     exit 1
@@ -44,23 +45,19 @@ fi
 
 POLICY_CONTENT=$(cat "$POLICY_FILE")
 
-# Base64-encode the policy for the ITA API
-POLICY_B64=$(echo -n "$POLICY_CONTENT" | base64 | tr -d '\n')
+BODY=$(python3 -c "
+import json, sys
+print(json.dumps({
+    'policy_id': sys.argv[1],
+    'policy_name': sys.argv[2],
+    'policy': sys.argv[3],
+}))
+" "$POLICY_ID" "$POLICY_NAME" "$POLICY_CONTENT")
 
-BODY=$(cat <<EOF
-{
-  "policy_name": "$POLICY_NAME",
-  "policy_type": "Appraisal policy",
-  "attestation_type": "TDX",
-  "policy": "$POLICY_B64"
-}
-EOF
-)
+echo "Updating ITA policy ${POLICY_ID} (${POLICY_NAME})" >&2
 
-echo "Uploading ITA policy: $POLICY_NAME" >&2
-
-RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
-  "${API_URL}/management/v1/policies" \
+RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT \
+  "${API_URL}/management/v1/policies/${POLICY_ID}" \
   -H "Accept: application/json" \
   -H "Content-Type: application/json" \
   -H "x-api-key: ${API_KEY}" \
@@ -75,7 +72,4 @@ if [[ "$HTTP_CODE" -lt 200 || "$HTTP_CODE" -ge 300 ]]; then
   exit 1
 fi
 
-POLICY_ID=$(echo "$RESPONSE_BODY" | python3 -c "import sys, json; print(json.load(sys.stdin)['policy_id'])")
-
-echo "Policy uploaded successfully: $POLICY_ID" >&2
-echo "$POLICY_ID"
+echo "Policy updated successfully: $POLICY_ID" >&2

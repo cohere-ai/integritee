@@ -252,21 +252,25 @@ jobs:
           ITA_API_URL: ${{ secrets.ITA_API_URL }}
           ITA_ADMIN_API_KEY: ${{ secrets.ITA_ADMIN_API_KEY }}
         run: |
-          POLICY_NAME="model-integrity-${{ inputs.version }}"
+          # Sets ITA_POLICY_SLOT, ITA_POLICY_ID, ITA_POLICY_NAME
+          eval "$(./scripts/select-ita-slot.sh)"
+          echo "ITA_POLICY_SLOT=$ITA_POLICY_SLOT"
+          echo "ITA_POLICY_ID=$ITA_POLICY_ID"
+          echo "ITA_POLICY_NAME=$ITA_POLICY_NAME"
 
           if [[ -n "$ITA_API_URL" && -n "$ITA_ADMIN_API_KEY" ]]; then
-            POLICY_ID=$(./scripts/upload-ita-policy.sh \
+            ./scripts/upload-ita-policy.sh \
               --policy-file artifacts/ita-attestation-policy.rego \
-              --policy-name "$POLICY_NAME" \
+              --policy-name "$ITA_POLICY_NAME" \
+              --policy-id "$ITA_POLICY_ID" \
               --api-url "$ITA_API_URL" \
-              --api-key "$ITA_ADMIN_API_KEY")
+              --api-key "$ITA_ADMIN_API_KEY"
           else
-            echo "WARNING: ITA credentials not configured, using placeholder policy_id"
-            POLICY_ID="00000000-0000-0000-0000-000000000000"
+            echo "WARNING: ITA credentials not configured, skipping upload"
           fi
 
-          echo "policy_id=$POLICY_ID" >> "$GITHUB_OUTPUT"
-          echo "ITA Policy ID: $POLICY_ID"
+          echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
+          echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
 
       # ----------------------------------------------------------------
       # Build predicates and sign with Sigstore (per model)
@@ -341,7 +345,8 @@ jobs:
             RELEASE_BODY+="**Reason:** ${{ inputs.reason }}\n\n"
           fi
 
-          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy_id }}\`\n\n"
+          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy_id }}\`\n"
+          RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.ita.outputs.policy_slot }}\`\n\n"
           RELEASE_BODY+="## Per-Model Artifacts\n\n"
 
           for MODEL in "${MODEL_ARRAY[@]}"; do
