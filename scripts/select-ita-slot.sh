@@ -21,15 +21,20 @@ SLOT_B_ID="ecdf9171-2f85-47b4-9941-703118f731a8"
 SLOT_A_NAME="model-integrity-policy-a"
 SLOT_B_NAME="model-integrity-policy-b"
 
-LAST_SLOT=$(gh release view --json body -q '.body' 2>/dev/null \
-  | grep -oP 'ITA Policy Slot: `\Kslot-[ab]' || echo "")
-
-echo "Last release used: ${LAST_SLOT:-none detected}" >&2
-
-if [[ "$LAST_SLOT" == "slot-a" ]]; then
-  TARGET_SLOT="slot-b"
+if [[ -n "${ITA_SLOT_OVERRIDE:-}" ]]; then
+  echo "Slot override: $ITA_SLOT_OVERRIDE" >&2
+  TARGET_SLOT="$ITA_SLOT_OVERRIDE"
 else
-  TARGET_SLOT="slot-a"
+  LAST_SLOT=$(gh release view --json body -q '.body' 2>/dev/null \
+    | grep -oP 'ITA Policy Slot: `\Kslot-[ab]' || echo "")
+
+  echo "Last release used: ${LAST_SLOT:-none detected}" >&2
+
+  if [[ "$LAST_SLOT" == "slot-a" ]]; then
+    TARGET_SLOT="slot-b"
+  else
+    TARGET_SLOT="slot-a"
+  fi
 fi
 
 if [[ "$TARGET_SLOT" == "slot-a" ]]; then

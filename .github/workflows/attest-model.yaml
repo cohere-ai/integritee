@@ -25,6 +25,15 @@ on:
         required: false
         default: "a3-highgpu-1g"
         type: string
+      ita_slot:
+        description: "ITA policy slot override (auto = blue/green rotation)"
+        required: false
+        default: "auto"
+        type: choice
+        options:
+          - auto
+          - slot-a
+          - slot-b
 
 permissions:
   id-token: write
@@ -254,7 +263,11 @@ jobs:
           ITA_ADMIN_API_KEY: ${{ secrets.ITA_ADMIN_API_KEY }}
         run: |
           # Sets ITA_POLICY_SLOT, ITA_POLICY_ID, ITA_POLICY_NAME
-          eval "$(./scripts/select-ita-slot.sh)"
+          if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
+            eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./scripts/select-ita-slot.sh)"
+          else
+            eval "$(./scripts/select-ita-slot.sh)"
+          fi
           echo "ITA_POLICY_SLOT=$ITA_POLICY_SLOT"
           echo "ITA_POLICY_ID=$ITA_POLICY_ID"
           echo "ITA_POLICY_NAME=$ITA_POLICY_NAME"
