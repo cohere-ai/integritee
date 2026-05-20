@@ -93,7 +93,12 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker us-docker.pkg.dev --quiet
+        run: |
+          gcloud auth configure-docker us-docker.pkg.dev --quiet
+          # Store an explicit access token so tools that read ~/.docker/config.json
+          # directly (e.g. genpolicy's docker_credential crate) can authenticate
+          # without invoking the gcloud credential helper.
+          gcloud auth print-access-token | docker login -u oauth2accesstoken --password-stdin https://us-docker.pkg.dev
 
       - name: Fetch genpolicy binary
         run: |
