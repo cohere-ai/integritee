@@ -55,26 +55,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       # ----------------------------------------------------------------
       # Setup: tools and dependencies
       # ----------------------------------------------------------------
       - name: Install Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
 
       - name: Install cvm-measure
         run: |
           git clone --depth 1 --branch "${CVM_MEASURE_REF}" "${CVM_MEASURE_REPO}" /tmp/cvm-measure
-          pip install /tmp/cvm-measure
+          pip install /tmp/cvm-measure pyyaml
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
       - name: Install oras
-        uses: oras-project/setup-oras@v1
+        uses: oras-project/setup-oras@v2
 
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y mtools
