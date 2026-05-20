@@ -49,6 +49,10 @@ env:
   RAM_GIB: "234"
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
   BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
+  # TODO: vendor this file into the repo once the fortress settings are stable,
+  #       then remove this runtime fetch.
+  FORTRESS_REPO: "cohere-ai/fortress"
+  FORTRESS_GENPOLICY_SETTINGS: "components/kata-policy/configs/genpolicy-settings-base.json"
 
 jobs:
   attest:
@@ -163,6 +167,14 @@ jobs:
           echo "UKI extracted ($(du -sh cvm-artifacts/BOOTX64.EFI | cut -f1))"
           echo "UKI_REF=${PODVM_REF}" >> "$GITHUB_ENV"
 
+      - name: Fetch genpolicy settings from fortress
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          gh api "/repos/${FORTRESS_REPO}/contents/${FORTRESS_GENPOLICY_SETTINGS}" \
+            --jq '.content' | base64 -d > cvm-artifacts/genpolicy-settings-base.json
+          echo "Downloaded genpolicy settings from ${FORTRESS_REPO}"
+
       # ----------------------------------------------------------------
       # Per-model loop: genpolicy -> initdata -> podspec -> cvm-measure
       # ----------------------------------------------------------------
@@ -181,7 +193,7 @@ jobs:
             # Merge base rules/settings with per-model overrides
             python3 scripts/merge-policy-inputs.py \
               --base-rules rules/rules.rego \
-              --base-settings rules/genpolicy-settings.json \
+              --base-settings cvm-artifacts/genpolicy-settings-base.json \
               --model-dir "models/${MODEL}" \
               --output-dir "artifacts/${MODEL}"
 
