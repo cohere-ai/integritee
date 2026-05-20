@@ -42,7 +42,7 @@ permissions:
   packages: read
 
 env:
-  KATA_VERSION: "3.12.0"
+  KATA_VERSION: "3.27.0"
   CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
   # TODO: remove this branch pin once the cvm-measure CLI/UKI extraction branch merges to main.
   CVM_MEASURE_REF: "alhassankhedr/cc-167-tdx-measurement-toolkit"
@@ -84,7 +84,7 @@ jobs:
         uses: oras-project/setup-oras@v2
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y mtools
+        run: sudo apt-get update && sudo apt-get install -y mtools zstd
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v3
