@@ -78,8 +78,12 @@ gateway can require it at attestation time.
    - decode initdata → `initdata.toml`
    - `cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline …
       --initdata initdata.toml` → `measurements.json` (MRTD + RTMR0–3)
-7. **Generate ITA policy** from `attestation-policy/template.rego` plus
-   per-model match blocks → `ita-attestation-policy.rego`.
+7. **Generate ITA policy** — `scripts/generate-ita-policy.py` reads the
+   template (`attestation-policy/template.rego`), static TDX reference
+   values (`attestation-policy/tdx-static-ref-vals.yaml`), and per-model
+   `measurements.json` files. It replaces the `${TDX_MATCH_BLOCKS}`
+   placeholder with one `matches_tdx if { … }` block per model
+   (Rego logical-OR) → `ita-attestation-policy.rego`.
 8. **Upload policy to ITA** via `scripts/upload-ita-policy.sh`, returning
    a `policy_id`.
 9. **Build in-toto predicate** per model.
@@ -135,17 +139,12 @@ one slot-tag rule (`model_integrity_slot_{a,b} := true`) so ITA's
 content-dedup hash treats them as distinct. They will be overwritten
 in alternation when the workflow starts publishing real measurements.
 
-### ITA upload gotchas
-
-The current `scripts/upload-ita-policy.sh` is incorrect on two points
-and is known broken — fix tracked below:
+### ITA upload notes
 
 - The `policy` JSON field must be **plain rego source text**, not
   base64-encoded.
 - For `attestation_type: "Composite Attestation"`, the request body
-  must **omit `policy_type`** entirely. (Sending
-  `"policy_type": "Appraisal policy"` → ITA returns
-  `Policy type should be empty for Composite Attestation`.)
+  must **omit `policy_type`** entirely.
 - ITA dedups uploads by **semantic content hash** (comments stripped).
   Two policies with identical semantics but different comments will
   collide. To differentiate the two blue/green slots we inject a
@@ -221,21 +220,6 @@ In rough order of dependency:
 - [ ] Merge `cohere-ai/cvm-measure` `cc-167` branch to `main`, then drop
       the `CVM_MEASURE_REF` pin in `attest-model.yaml` (the comment in
       the workflow flags this).
-- [ ] Fix `scripts/upload-ita-policy.sh`:
-      - send rego as plain text, not base64;
-      - omit `policy_type` for `Composite Attestation`;
-      - target a specific slot (`model-integrity-policy-a` or `-b`)
-        via PUT instead of POSTing a new policy on every release.
-- [ ] Rewrite `scripts/generate-ita-policy.py` to emit the
-      `tdx_h100_pp_image` shape (single top-level `match if {…}` +
-      `matches_tdx` + per-model OR helper rules + static TDX fields)
-      rather than multiple top-level `match if` rules — ITA rejects
-      the latter as `Invalid rego syntax`.
-- [ ] Decide on the source of platform-static TDX fields
-      (`tdx_mrseam`, `tdx_seam_attributes`, `tdx_td_attributes`,
-      `tdx_tee_tcb_svn`, `tdx_seamsvn`). Options: extend the baseline
-      JSON, hardcode them in the policy template, or extend
-      `cvm-measure` to emit them.
 - [ ] Stand up `gs://cohere-artifacts-podvm` in the infra repo and have
       `cloud-api-adaptor`'s `deploy-gcp-cohere.yaml` write the PodVM
       disk there. Then point this workflow at GCS instead of GHCR.

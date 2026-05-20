@@ -1,7 +1,8 @@
 """Tests for the ITA attestation policy generator.
 
 These tests exercise the actual script (scripts/generate-ita-policy.py)
-with real measurement data and verify the generated Rego policy structure.
+with real measurement data and verify the generated Rego policy structure
+matches the tdx_h100_pp_image shape expected by ITA.
 """
 
 from __future__ import annotations
@@ -13,12 +14,13 @@ from pathlib import Path
 
 import pytest
 
-from conftest import REPO_ROOT
+from conftest import REPO_ROOT, STATIC_REF_VALS
 
 
 def run_generate_script(
     measurements_dir: Path,
     template_path: Path,
+    static_ref_vals_path: Path,
     output_path: Path,
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
@@ -27,6 +29,7 @@ def run_generate_script(
             str(REPO_ROOT / "scripts" / "generate-ita-policy.py"),
             "--measurements-dir", str(measurements_dir),
             "--template", str(template_path),
+            "--static-ref-vals", str(static_ref_vals_path),
             "--output", str(output_path),
         ],
         capture_output=True,
@@ -34,107 +37,162 @@ def run_generate_script(
     )
 
 
-class TestPolicyGeneration:
-    """Test the complete ITA policy generation flow."""
+class TestPolicyStructure:
+    """Verify the generated policy has the correct tdx_h100_pp_image shape."""
 
-    def test_generates_valid_rego_for_two_models(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+    def test_single_match_entry_point(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
     ):
         output = tmp_path / "policy.rego"
-        result = run_generate_script(artifacts_dir, template_path, output)
-
+        result = run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
         assert result.returncode == 0, f"Script failed: {result.stderr}"
-        assert output.exists()
 
         policy = output.read_text()
-        assert "import rego.v1" in policy
-        assert "default match := false" in policy
+        assert policy.count("match if {") == 1
+        assert "matches_tdx" in policy
+        assert "matches_nvgpu" in policy
 
-    def test_contains_both_model_blocks(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+    def test_matches_tdx_blocks_per_model(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
     ):
         output = tmp_path / "policy.rego"
-        run_generate_script(artifacts_dir, template_path, output)
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
         policy = output.read_text()
 
+        assert policy.count("matches_tdx if {") == 2
         assert "# Model: command-r-plus" in policy
         assert "# Model: aya-expanse" in policy
 
-    def test_each_block_has_all_measurements(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+    def test_nvgpu_rules_preserved(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
     ):
         output = tmp_path / "policy.rego"
-        run_generate_script(artifacts_dir, template_path, output)
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
         policy = output.read_text()
 
-        for register in ["tdx_mrtd", "tdx_rtmr0", "tdx_rtmr1", "tdx_rtmr2", "tdx_rtmr3"]:
-            assert policy.count(register) == 2, (
-                f"Expected {register} to appear twice (once per model)"
-            )
+        assert "nvgpu_base_checks if {" in policy
+        assert policy.count("matches_nvgpu if {") == 2
+        assert "x-nvidia-gpu-driver-version" in policy
 
-    def test_debuggable_check_present(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+
+class TestTdxBlockContent:
+    """Verify the content of generated matches_tdx blocks."""
+
+    def test_dynamic_measurements_present(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path, real_measurements
     ):
         output = tmp_path / "policy.rego"
-        run_generate_script(artifacts_dir, template_path, output)
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
+        policy = output.read_text()
+
+        assert real_measurements["mrtd"] in policy
+        assert "1" * 96 in policy  # aya-expanse mrtd
+
+    def test_static_ref_vals_in_each_block(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path, static_ref_vals
+    ):
+        output = tmp_path / "policy.rego"
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
+        policy = output.read_text()
+
+        for field in ["tdx_mrseam", "tdx_mrsignerseam", "tdx_mrconfigid",
+                       "tdx_mrowner", "tdx_mrownerconfig", "tdx_seam_attributes",
+                       "tdx_td_attributes", "tdx_tee_tcb_svn"]:
+            assert policy.count(f"tdx.{field} ==") == 2, (
+                f"Expected {field} to appear twice (once per model)"
+            )
+
+        assert policy.count("tdx.tdx_seamsvn == 269") == 2
+
+    def test_debuggable_check_in_each_block(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
+    ):
+        output = tmp_path / "policy.rego"
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
         policy = output.read_text()
 
         assert policy.count("tdx_is_debuggable == false") == 2
 
-    def test_measurement_values_are_correct(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path, real_measurements: dict
+    def test_all_rtmrs_present(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
     ):
-        """Verify the generated policy contains the exact measurement hex values."""
         output = tmp_path / "policy.rego"
-        run_generate_script(artifacts_dir, template_path, output)
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
         policy = output.read_text()
 
-        assert real_measurements["mrtd"] in policy
-        assert "1" * 96 in policy  # aya-expanse MRTD
+        for register in ["tdx_mrtd", "tdx_rtmr0", "tdx_rtmr1", "tdx_rtmr2", "tdx_rtmr3"]:
+            assert policy.count(register) >= 2, (
+                f"Expected {register} to appear at least twice (once per model)"
+            )
 
-    def test_match_blocks_are_or_logic(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+    def test_rtmr3_omitted_when_missing(
+        self, tmp_path, template_path, static_ref_vals_path, real_measurements
     ):
-        """Each model gets a separate 'match if' block = logical OR."""
+        meas_dir = tmp_path / "meas"
+        model_dir = meas_dir / "no-rtmr3-model"
+        model_dir.mkdir(parents=True)
+
+        meas = {k: v for k, v in real_measurements.items() if k != "rtmr3"}
+        (model_dir / "measurements.json").write_text(json.dumps(meas))
+
         output = tmp_path / "policy.rego"
-        run_generate_script(artifacts_dir, template_path, output)
+        result = run_generate_script(meas_dir, template_path, static_ref_vals_path, output)
+
+        assert result.returncode == 0
+        policy = output.read_text()
+        assert "tdx_rtmr3" not in policy
+
+    def test_hex_values_are_96_chars(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
+    ):
+        import re
+        output = tmp_path / "policy.rego"
+        run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
         policy = output.read_text()
 
-        assert policy.count("match if {") == 2
+        tdx_block_pattern = re.compile(r'matches_tdx if \{.*?\}', re.DOTALL)
+        tdx_blocks = tdx_block_pattern.findall(policy)
+        for block in tdx_blocks:
+            hex_values = re.findall(r'tdx\.tdx_mr(?:td|seam|signerseam|configid|owner|ownerconfig) == "([a-f0-9]+)"', block)
+            hex_values += re.findall(r'tdx\.tdx_rtmr\d == "([a-f0-9]+)"', block)
+            for val in hex_values:
+                assert len(val) == 96, f"Expected 96-char hex, got {len(val)}: {val[:20]}..."
 
-    def test_single_model(self, tmp_path: Path, template_path: Path, real_measurements: dict):
-        """Policy generation with only one model."""
+
+class TestEdgeCases:
+    """Test error handling and edge cases."""
+
+    def test_single_model(
+        self, tmp_path, template_path, static_ref_vals_path, real_measurements
+    ):
         meas_dir = tmp_path / "meas"
         model_dir = meas_dir / "single-model"
         model_dir.mkdir(parents=True)
         (model_dir / "measurements.json").write_text(json.dumps(real_measurements))
 
         output = tmp_path / "policy.rego"
-        result = run_generate_script(meas_dir, template_path, output)
+        result = run_generate_script(meas_dir, template_path, static_ref_vals_path, output)
 
         assert result.returncode == 0
         policy = output.read_text()
-        assert policy.count("match if {") == 1
+        assert policy.count("matches_tdx if {") == 1
         assert "# Model: single-model" in policy
 
-    def test_no_models_fails(self, tmp_path: Path, template_path: Path):
-        """Empty measurements directory should exit with error."""
+    def test_no_models_fails(self, tmp_path, template_path, static_ref_vals_path):
         empty_dir = tmp_path / "empty"
         empty_dir.mkdir()
 
         output = tmp_path / "policy.rego"
-        result = run_generate_script(empty_dir, template_path, output)
+        result = run_generate_script(empty_dir, template_path, static_ref_vals_path, output)
 
         assert result.returncode != 0
         assert "No measurement files found" in result.stderr
 
     def test_skips_non_directory_entries(
-        self, tmp_path: Path, template_path: Path, real_measurements: dict
+        self, tmp_path, template_path, static_ref_vals_path, real_measurements
     ):
-        """Files at the top level of measurements-dir should be ignored."""
         meas_dir = tmp_path / "meas"
         meas_dir.mkdir()
-
         (meas_dir / "stray_file.json").write_text("{}")
 
         model_dir = meas_dir / "my-model"
@@ -142,30 +200,29 @@ class TestPolicyGeneration:
         (model_dir / "measurements.json").write_text(json.dumps(real_measurements))
 
         output = tmp_path / "policy.rego"
-        result = run_generate_script(meas_dir, template_path, output)
+        result = run_generate_script(meas_dir, template_path, static_ref_vals_path, output)
 
         assert result.returncode == 0
         policy = output.read_text()
-        assert policy.count("match if {") == 1
+        assert policy.count("matches_tdx if {") == 1
 
     def test_output_directory_created_if_missing(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
     ):
         output = tmp_path / "nested" / "deep" / "policy.rego"
-        result = run_generate_script(artifacts_dir, template_path, output)
+        result = run_generate_script(artifacts_dir, template_path, static_ref_vals_path, output)
 
         assert result.returncode == 0
         assert output.exists()
 
-    def test_hex_values_are_96_chars(
-        self, artifacts_dir: Path, template_path: Path, tmp_path: Path
+    def test_missing_placeholder_in_template_fails(
+        self, artifacts_dir, static_ref_vals_path, tmp_path
     ):
-        """All measurement hex strings in the policy should be exactly 96 chars."""
-        output = tmp_path / "policy.rego"
-        run_generate_script(artifacts_dir, template_path, output)
-        policy = output.read_text()
+        bad_template = tmp_path / "bad-template.rego"
+        bad_template.write_text("import rego.v1\ndefault match := false\n")
 
-        import re
-        hex_values = re.findall(r'"([a-f0-9]{90,})"', policy)
-        for val in hex_values:
-            assert len(val) == 96, f"Expected 96-char hex, got {len(val)}: {val[:20]}..."
+        output = tmp_path / "policy.rego"
+        result = run_generate_script(artifacts_dir, bad_template, static_ref_vals_path, output)
+
+        assert result.returncode != 0
+        assert "${TDX_MATCH_BLOCKS}" in result.stderr

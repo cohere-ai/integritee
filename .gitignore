@@ -12,6 +12,8 @@ __pycache__/
 dist/
 build/
 .eggs/
+.venv/
+.pytest_cache/
 
 # genpolicy downloads
 genpolicy.tar.xz

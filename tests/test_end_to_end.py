@@ -19,7 +19,9 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from conftest import REPO_ROOT, REAL_MEASUREMENTS
+import yaml
+
+from conftest import REPO_ROOT, REAL_MEASUREMENTS, STATIC_REF_VALS
 
 
 def run_script(name: str, args: list[str]) -> subprocess.CompletedProcess:
@@ -63,7 +65,13 @@ class TestEndToEndPipeline:
 
         return tmp_path
 
-    def test_full_pipeline(self, pipeline_dir: Path, tmp_path: Path):
+    @pytest.fixture
+    def ref_vals_path(self, tmp_path: Path) -> Path:
+        p = tmp_path / "tdx-static-ref-vals.yaml"
+        p.write_text(yaml.dump(STATIC_REF_VALS, default_flow_style=False))
+        return p
+
+    def test_full_pipeline(self, pipeline_dir: Path, ref_vals_path: Path, tmp_path: Path):
         """Run the complete pipeline: ITA policy gen -> predicate build -> validate."""
         policy_output = tmp_path / "ita-attestation-policy.rego"
         policy_id = "e34efa4e-9dde-4c6b-994f-0e95d3bce4ce"
@@ -72,6 +80,7 @@ class TestEndToEndPipeline:
         result = run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", str(REPO_ROOT / "attestation-policy" / "template.rego"),
+            "--static-ref-vals", str(ref_vals_path),
             "--output", str(policy_output),
         ])
         assert result.returncode == 0, f"ITA policy gen failed: {result.stderr}"
@@ -80,7 +89,8 @@ class TestEndToEndPipeline:
         policy_text = policy_output.read_text()
         assert "# Model: command-r-plus" in policy_text
         assert "# Model: aya-expanse" in policy_text
-        assert policy_text.count("match if {") == 2
+        assert policy_text.count("match if {") == 1
+        assert policy_text.count("matches_tdx if {") == 2
 
         # Step 2: Build predicates
         result = run_script("build-predicate.py", [
@@ -197,20 +207,23 @@ class TestEndToEndPipeline:
         )
         assert pred_v2["previous_rekor_log_index"] == simulated_log_index_v1
 
-    def test_policy_rego_deterministic(self, pipeline_dir: Path, tmp_path: Path):
+    def test_policy_rego_deterministic(self, pipeline_dir: Path, ref_vals_path: Path, tmp_path: Path):
         """Running ITA policy generation twice with same input produces same output."""
         out1 = tmp_path / "policy1.rego"
         out2 = tmp_path / "policy2.rego"
         template = str(REPO_ROOT / "attestation-policy" / "template.rego")
+        ref_vals = str(ref_vals_path)
 
         run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", template,
+            "--static-ref-vals", ref_vals,
             "--output", str(out1),
         ])
         run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", template,
+            "--static-ref-vals", ref_vals,
             "--output", str(out2),
         ])
 
