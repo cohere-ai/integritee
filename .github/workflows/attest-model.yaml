@@ -65,10 +65,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Python dependencies
+        run: pip install pyyaml
+
       - name: Install cvm-measure
         run: |
           git clone --depth 1 --branch "${CVM_MEASURE_REF}" "${CVM_MEASURE_REPO}" /tmp/cvm-measure
-          pip install /tmp/cvm-measure pyyaml
+          pip install /tmp/cvm-measure
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
