@@ -7,11 +7,17 @@ placeholder in the template with one `matches_tdx if { ... }` block per
 model.  Multiple blocks give Rego logical-OR semantics: the policy
 matches if ANY model's measurements match.
 
+ITA deduplicates policies by semantic content hash (comments stripped).
+A no-op nonce rule is injected via --nonce to guarantee every upload
+has a unique hash, even when re-uploading the same measurements to the
+same slot.
+
 Usage:
     python generate-ita-policy.py \
         --measurements-dir artifacts/ \
         --template attestation-policy/template.rego \
         --static-ref-vals attestation-policy/tdx-static-ref-vals.yaml \
+        --nonce "12345678" \
         --output artifacts/ita-attestation-policy.rego
 """
 
@@ -25,6 +31,7 @@ from pathlib import Path
 import yaml
 
 PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
+NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 
 DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
 
@@ -42,6 +49,16 @@ STATIC_STRING_FIELDS = [
 STATIC_INT_FIELDS = [
     "tdx_seamsvn",
 ]
+
+
+def generate_nonce_rule(nonce: str) -> str:
+    """Return a no-op Rego rule that makes every policy upload unique.
+
+    ITA deduplicates by semantic hash (comments are stripped), so we
+    need an actual rule — not just a comment — to ensure re-uploads
+    (even to the same slot with identical measurements) are accepted.
+    """
+    return f'model_integrity_nonce := "{nonce}"'
 
 
 def generate_matches_tdx_block(
@@ -94,6 +111,13 @@ def main() -> None:
         required=True,
         help="Output path for the generated policy",
     )
+    parser.add_argument(
+        "--nonce",
+        required=True,
+        help="Unique value injected as a no-op Rego rule so ITA's "
+        "content-dedup hash differs on every upload (e.g. a CI "
+        "run ID or timestamp)",
+    )
     args = parser.parse_args()
 
     template = Path(args.template).read_text()
@@ -129,6 +153,7 @@ def main() -> None:
         sys.exit(1)
 
     policy = template.replace(PLACEHOLDER, "\n\n".join(blocks))
+    policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule(args.nonce))
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(policy)

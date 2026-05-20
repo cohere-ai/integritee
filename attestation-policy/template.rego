@@ -12,6 +12,8 @@ match if {
     matches_nvgpu
 }
 
+${POLICY_NONCE}
+
 ${TDX_MATCH_BLOCKS}
 
 nvgpu_base_checks if {

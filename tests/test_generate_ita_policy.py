@@ -22,6 +22,7 @@ def run_generate_script(
     template_path: Path,
     static_ref_vals_path: Path,
     output_path: Path,
+    nonce: str = "test-nonce-001",
 ) -> subprocess.CompletedProcess:
     return subprocess.run(
         [
@@ -30,6 +31,7 @@ def run_generate_script(
             "--measurements-dir", str(measurements_dir),
             "--template", str(template_path),
             "--static-ref-vals", str(static_ref_vals_path),
+            "--nonce", nonce,
             "--output", str(output_path),
         ],
         capture_output=True,
@@ -157,6 +159,53 @@ class TestTdxBlockContent:
             hex_values += re.findall(r'tdx\.tdx_rtmr\d == "([a-f0-9]+)"', block)
             for val in hex_values:
                 assert len(val) == 96, f"Expected 96-char hex, got {len(val)}: {val[:20]}..."
+
+
+class TestPolicyNonce:
+    """Verify the nonce rule keeps every upload unique for ITA dedup."""
+
+    def test_nonce_rule_present(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
+    ):
+        output = tmp_path / "policy.rego"
+        run_generate_script(
+            artifacts_dir, template_path, static_ref_vals_path, output,
+            nonce="99999",
+        )
+        policy = output.read_text()
+        assert 'model_integrity_nonce := "99999"' in policy
+
+    def test_different_nonces_produce_different_policies(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
+    ):
+        out_a = tmp_path / "policy_a.rego"
+        out_b = tmp_path / "policy_b.rego"
+
+        run_generate_script(
+            artifacts_dir, template_path, static_ref_vals_path, out_a,
+            nonce="run-1",
+        )
+        run_generate_script(
+            artifacts_dir, template_path, static_ref_vals_path, out_b,
+            nonce="run-2",
+        )
+        assert out_a.read_text() != out_b.read_text()
+
+    def test_same_nonce_produces_identical_policies(
+        self, artifacts_dir, template_path, static_ref_vals_path, tmp_path
+    ):
+        out_1 = tmp_path / "policy_1.rego"
+        out_2 = tmp_path / "policy_2.rego"
+
+        run_generate_script(
+            artifacts_dir, template_path, static_ref_vals_path, out_1,
+            nonce="same-nonce",
+        )
+        run_generate_script(
+            artifacts_dir, template_path, static_ref_vals_path, out_2,
+            nonce="same-nonce",
+        )
+        assert out_1.read_text() == out_2.read_text()
 
 
 class TestEdgeCases:

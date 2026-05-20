@@ -81,6 +81,7 @@ class TestEndToEndPipeline:
             "--measurements-dir", str(pipeline_dir),
             "--template", str(REPO_ROOT / "attestation-policy" / "template.rego"),
             "--static-ref-vals", str(ref_vals_path),
+            "--nonce", "e2e-test-run",
             "--output", str(policy_output),
         ])
         assert result.returncode == 0, f"ITA policy gen failed: {result.stderr}"
@@ -218,12 +219,14 @@ class TestEndToEndPipeline:
             "--measurements-dir", str(pipeline_dir),
             "--template", template,
             "--static-ref-vals", ref_vals,
+            "--nonce", "determinism-test",
             "--output", str(out1),
         ])
         run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", template,
             "--static-ref-vals", ref_vals,
+            "--nonce", "determinism-test",
             "--output", str(out2),
         ])
 
