@@ -276,6 +276,7 @@ jobs:
       - name: Upload policy to ITA
         id: ita
         env:
+          GH_TOKEN: ${{ github.token }}
           ITA_API_URL: ${{ secrets.ITA_API_URL }}
           ITA_ADMIN_API_KEY: ${{ secrets.ITA_ADMIN_API_KEY }}
         run: |
