@@ -26,7 +26,7 @@ if [[ -n "${ITA_SLOT_OVERRIDE:-}" ]]; then
   TARGET_SLOT="$ITA_SLOT_OVERRIDE"
 else
   LAST_SLOT=$(gh release view --json body -q '.body' 2>/dev/null \
-    | grep -oP 'ITA Policy Slot: `\Kslot-[ab]' || echo "")
+    | grep -oP 'ITA Policy Slot.*?`\Kslot-[ab]' || echo "")
 
   echo "Last release used: ${LAST_SLOT:-none detected}" >&2
 
