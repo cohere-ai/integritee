@@ -19,9 +19,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-import yaml
-
-from conftest import REPO_ROOT, REAL_MEASUREMENTS, STATIC_REF_VALS, make_cvm_artifacts_dir
+from conftest import REPO_ROOT, REAL_MEASUREMENTS, make_cvm_artifacts_dir
 
 
 def run_script(name: str, args: list[str]) -> subprocess.CompletedProcess:
@@ -65,13 +63,7 @@ class TestEndToEndPipeline:
 
         return tmp_path
 
-    @pytest.fixture
-    def ref_vals_path(self, tmp_path: Path) -> Path:
-        p = tmp_path / "tdx-static-ref-vals.yaml"
-        p.write_text(yaml.dump(STATIC_REF_VALS, default_flow_style=False))
-        return p
-
-    def test_full_pipeline(self, pipeline_dir: Path, ref_vals_path: Path, tmp_path: Path):
+    def test_full_pipeline(self, pipeline_dir: Path, tmp_path: Path):
         """Run the complete pipeline: ITA policy gen -> predicate build -> validate."""
         policy_output = tmp_path / "ita-attestation-policy.rego"
         policy_id = "e34efa4e-9dde-4c6b-994f-0e95d3bce4ce"
@@ -80,7 +72,6 @@ class TestEndToEndPipeline:
         result = run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", str(REPO_ROOT / "attestation-policy" / "template.rego"),
-            "--static-ref-vals", str(ref_vals_path),
             "--nonce", "e2e-test-run",
             "--output", str(policy_output),
         ])
@@ -205,24 +196,21 @@ class TestEndToEndPipeline:
         )
         assert pred_v2["previous_rekor_log_index"] == simulated_log_index_v1
 
-    def test_policy_rego_deterministic(self, pipeline_dir: Path, ref_vals_path: Path, tmp_path: Path):
+    def test_policy_rego_deterministic(self, pipeline_dir: Path, tmp_path: Path):
         """Running ITA policy generation twice with same input produces same output."""
         out1 = tmp_path / "policy1.rego"
         out2 = tmp_path / "policy2.rego"
         template = str(REPO_ROOT / "attestation-policy" / "template.rego")
-        ref_vals = str(ref_vals_path)
 
         run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", template,
-            "--static-ref-vals", ref_vals,
             "--nonce", "determinism-test",
             "--output", str(out1),
         ])
         run_script("generate-ita-policy.py", [
             "--measurements-dir", str(pipeline_dir),
             "--template", template,
-            "--static-ref-vals", ref_vals,
             "--nonce", "determinism-test",
             "--output", str(out2),
         ])

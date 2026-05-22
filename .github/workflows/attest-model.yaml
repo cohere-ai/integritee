@@ -177,7 +177,6 @@ jobs:
           python3 scripts/generate-ita-policy.py \
             --measurements-dir artifacts/ \
             --template attestation-policy/template.rego \
-            --static-ref-vals attestation-policy/tdx-static-ref-vals.yaml \
             --nonce "${{ github.run_id }}" \
             --output artifacts/ita-attestation-policy.rego
 

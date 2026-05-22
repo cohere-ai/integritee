@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 
@@ -18,34 +17,9 @@ REAL_MEASUREMENTS = {
     "rtmr3": "a1b2c3d4e5f60718293a4b5c6d7e8f901a2b3c4d5e6f0718293a4b5c6d7e8f901a2b3c4d5e6f0718293a4b5c6d7e8f90",
 }
 
-STATIC_REF_VALS = {
-    "tdx_mrseam": "a" * 96,
-    "tdx_mrsignerseam": "0" * 96,
-    "tdx_mrconfigid": "0" * 96,
-    "tdx_mrowner": "0" * 96,
-    "tdx_mrownerconfig": "0" * 96,
-    "tdx_seam_attributes": "0000000000000000",
-    "tdx_td_attributes": "0000001000000000",
-    "tdx_tee_tcb_svn": "0d010800000000000000000000000000",
-    "tdx_seamsvn": 269,
-}
-
-
 @pytest.fixture
 def real_measurements() -> dict:
     return REAL_MEASUREMENTS.copy()
-
-
-@pytest.fixture
-def static_ref_vals() -> dict:
-    return STATIC_REF_VALS.copy()
-
-
-@pytest.fixture
-def static_ref_vals_path(tmp_path: Path, static_ref_vals: dict) -> Path:
-    p = tmp_path / "tdx-static-ref-vals.yaml"
-    p.write_text(yaml.dump(static_ref_vals, default_flow_style=False))
-    return p
 
 
 @pytest.fixture

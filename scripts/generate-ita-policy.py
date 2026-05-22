@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Generate an ITA attestation policy from measurements.
 
-Reads per-model measurement JSON files and static TDX reference values,
-then renders a single Rego policy by replacing the ${TDX_MATCH_BLOCKS}
-placeholder in the template with one `matches_tdx if { ... }` block per
-model.  Multiple blocks give Rego logical-OR semantics: the policy
-matches if ANY model's measurements match.
+Reads per-model measurement JSON files and renders a single Rego policy
+by replacing the ${TDX_MATCH_BLOCKS} placeholder in the template with
+one `matches_tdx if { ... }` block per model.  Multiple blocks give
+Rego logical-OR semantics: the policy matches if ANY model's measurements
+match.  Static TDX reference values are checked via `tdx_base_checks`
+which is defined in the template itself.
 
 ITA deduplicates policies by semantic content hash (comments stripped).
 A no-op nonce rule is injected via --nonce to guarantee every upload
@@ -16,7 +17,6 @@ Usage:
     python generate-ita-policy.py \
         --measurements-dir artifacts/ \
         --template attestation-policy/template.rego \
-        --static-ref-vals attestation-policy/tdx-static-ref-vals.yaml \
         --nonce "12345678" \
         --output artifacts/ita-attestation-policy.rego
 """
@@ -28,27 +28,10 @@ import json
 import sys
 from pathlib import Path
 
-import yaml
-
 PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 
 DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
-
-STATIC_STRING_FIELDS = [
-    "tdx_mrseam",
-    "tdx_mrsignerseam",
-    "tdx_mrconfigid",
-    "tdx_mrowner",
-    "tdx_mrownerconfig",
-    "tdx_seam_attributes",
-    "tdx_td_attributes",
-    "tdx_tee_tcb_svn",
-]
-
-STATIC_INT_FIELDS = [
-    "tdx_seamsvn",
-]
 
 
 def generate_nonce_rule(nonce: str) -> str:
@@ -61,29 +44,19 @@ def generate_nonce_rule(nonce: str) -> str:
     return f'model_integrity_nonce := "{nonce}"'
 
 
-def generate_matches_tdx_block(
-    model: str,
-    measurements: dict,
-    static_ref_vals: dict,
-) -> str:
-    lines = [f"# Model: {model}", "matches_tdx if {", "    tdx := input.tdx", ""]
+def generate_matches_tdx_block(model: str, measurements: dict) -> str:
+    lines = [
+        f"# Model: {model}",
+        "matches_tdx if {",
+        "    tdx_base_checks",
+        "    tdx := input.tdx",
+        "",
+    ]
 
     for field in DYNAMIC_FIELDS:
         val = measurements.get(field)
         if val is not None:
             lines.append(f'    tdx.tdx_{field} == "{val}"')
-
-    for field in STATIC_STRING_FIELDS:
-        val = static_ref_vals.get(field)
-        if val is not None:
-            lines.append(f'    tdx.{field} == "{val}"')
-
-    lines.append("    tdx.tdx_is_debuggable == false")
-
-    for field in STATIC_INT_FIELDS:
-        val = static_ref_vals.get(field)
-        if val is not None:
-            lines.append(f"    tdx.{field} == {val}")
 
     lines.append("}")
     return "\n".join(lines)
@@ -100,11 +73,6 @@ def main() -> None:
         "--template",
         required=True,
         help="Path to the base attestation policy template",
-    )
-    parser.add_argument(
-        "--static-ref-vals",
-        required=True,
-        help="Path to the static TDX reference values YAML file",
     )
     parser.add_argument(
         "--output",
@@ -128,8 +96,6 @@ def main() -> None:
         )
         sys.exit(1)
 
-    static_ref_vals = yaml.safe_load(Path(args.static_ref_vals).read_text())
-
     measurements_dir = Path(args.measurements_dir)
     blocks: list[str] = []
     model_names: list[str] = []
@@ -142,9 +108,7 @@ def main() -> None:
             continue
 
         measurements = json.loads(meas_file.read_text())
-        block = generate_matches_tdx_block(
-            model_dir.name, measurements, static_ref_vals
-        )
+        block = generate_matches_tdx_block(model_dir.name, measurements)
         blocks.append(block)
         model_names.append(model_dir.name)
 
