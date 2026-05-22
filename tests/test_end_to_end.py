@@ -21,7 +21,7 @@ import pytest
 
 import yaml
 
-from conftest import REPO_ROOT, REAL_MEASUREMENTS, STATIC_REF_VALS
+from conftest import REPO_ROOT, REAL_MEASUREMENTS, STATIC_REF_VALS, make_cvm_artifacts_dir
 
 
 def run_script(name: str, args: list[str]) -> subprocess.CompletedProcess:
@@ -94,15 +94,17 @@ class TestEndToEndPipeline:
         assert policy_text.count("matches_tdx if {") == 2
 
         # Step 2: Build predicates
+        cvm_dir = make_cvm_artifacts_dir(tmp_path, overrides={
+            "command-r-plus": {"firmware_ref": "ovmf-2024-08", "uki_ref": "sha384:abc123def456", "baseline_ref": "cohere-cc-baselines@main"},
+            "aya-expanse": {"firmware_ref": "ovmf-2024-08", "uki_ref": "sha384:abc123def456", "baseline_ref": "cohere-cc-baselines@main"},
+        })
         result = run_script("build-predicate.py", [
             "--artifacts-dir", str(pipeline_dir),
+            "--cvm-artifacts-dir", str(cvm_dir),
             "--policy-id", policy_id,
             "--version", "v0.0.1",
             "--genpolicy-version", "3.12.0",
             "--cvm-measure-version", "0.3.0",
-            "--firmware-ref", "ovmf-2024-08",
-            "--uki-ref", "sha384:abc123def456",
-            "--baseline-ref", "cohere-cc-baselines@main",
             "--previous-log-index", "0",
         ])
         assert result.returncode == 0, f"Predicate build failed: {result.stderr}"
@@ -127,15 +129,14 @@ class TestEndToEndPipeline:
 
     def test_pipeline_preserves_measurement_integrity(self, pipeline_dir: Path, tmp_path: Path):
         """Measurements in the predicate must exactly match the input."""
+        cvm_dir = make_cvm_artifacts_dir(tmp_path)
         run_script("build-predicate.py", [
             "--artifacts-dir", str(pipeline_dir),
+            "--cvm-artifacts-dir", str(cvm_dir),
             "--policy-id", "00000000-0000-0000-0000-000000000000",
             "--version", "v0.0.1",
             "--genpolicy-version", "3.12.0",
             "--cvm-measure-version", "0.3.0",
-            "--firmware-ref", "fw",
-            "--uki-ref", "uki",
-            "--baseline-ref", "bl",
             "--previous-log-index", "0",
         ])
 
@@ -153,16 +154,15 @@ class TestEndToEndPipeline:
 
     def test_pipeline_different_policy_ids(self, pipeline_dir: Path, tmp_path: Path):
         """Running with different policy IDs produces different predicates."""
+        cvm_dir = make_cvm_artifacts_dir(tmp_path)
         for pid in ["aaaa-bbbb", "cccc-dddd"]:
             run_script("build-predicate.py", [
                 "--artifacts-dir", str(pipeline_dir),
+                "--cvm-artifacts-dir", str(cvm_dir),
                 "--policy-id", pid,
                 "--version", "v0.0.1",
                 "--genpolicy-version", "3.12.0",
                 "--cvm-measure-version", "0.3.0",
-                "--firmware-ref", "fw",
-                "--uki-ref", "uki",
-                "--baseline-ref", "bl",
                 "--previous-log-index", "0",
             ])
 
@@ -171,17 +171,16 @@ class TestEndToEndPipeline:
         )
         assert pred["policy_id"] == "cccc-dddd"
 
-    def test_pipeline_chain_linking_across_releases(self, pipeline_dir: Path):
+    def test_pipeline_chain_linking_across_releases(self, pipeline_dir: Path, tmp_path: Path):
         """Simulate two consecutive releases and verify chain linking."""
+        cvm_dir = make_cvm_artifacts_dir(tmp_path)
         run_script("build-predicate.py", [
             "--artifacts-dir", str(pipeline_dir),
+            "--cvm-artifacts-dir", str(cvm_dir),
             "--policy-id", "first-release",
             "--version", "v0.0.1",
             "--genpolicy-version", "3.12.0",
             "--cvm-measure-version", "0.3.0",
-            "--firmware-ref", "fw",
-            "--uki-ref", "uki",
-            "--baseline-ref", "bl",
             "--previous-log-index", "0",
         ])
 
@@ -193,13 +192,11 @@ class TestEndToEndPipeline:
 
         run_script("build-predicate.py", [
             "--artifacts-dir", str(pipeline_dir),
+            "--cvm-artifacts-dir", str(cvm_dir),
             "--policy-id", "second-release",
             "--version", "v0.0.2",
             "--genpolicy-version", "3.12.0",
             "--cvm-measure-version", "0.3.0",
-            "--firmware-ref", "fw",
-            "--uki-ref", "uki",
-            "--baseline-ref", "bl",
             "--previous-log-index", str(simulated_log_index_v1),
         ])
 

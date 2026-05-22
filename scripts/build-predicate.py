@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 """Build in-toto attestation predicates for each model.
 
-Reads per-model artifacts (measurements, policy info) and produces a
-predicate JSON conforming to the custom attestation-policy-ledger/v1 type.
+Reads per-model artifacts (measurements, policy info) and per-model CVM
+metadata (meta.json) to produce a predicate JSON conforming to the custom
+attestation-policy-ledger/v1 type.
 
 Usage:
     python build-predicate.py \
         --artifacts-dir artifacts/ \
+        --cvm-artifacts-dir cvm-artifacts/ \
         --policy-id <uuid> \
         --version v0.0.1 \
         --genpolicy-version 3.12.0 \
         --cvm-measure-version 0.3.0 \
-        --firmware-ref <sha384-or-url> \
-        --uki-ref <sha384-or-url> \
-        --baseline-ref <commit-or-url> \
         --previous-log-index 0
 """
 
@@ -25,7 +24,6 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-
 
 PREDICATE_TYPE = "https://cohere.com/attestation-policy-ledger/v1"
 
@@ -73,17 +71,17 @@ def build_predicate(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build in-toto predicates")
     parser.add_argument("--artifacts-dir", required=True)
+    parser.add_argument("--cvm-artifacts-dir", required=True,
+                        help="Directory containing per-model meta.json files")
     parser.add_argument("--policy-id", required=True)
     parser.add_argument("--version", required=True)
     parser.add_argument("--genpolicy-version", required=True)
     parser.add_argument("--cvm-measure-version", required=True)
-    parser.add_argument("--firmware-ref", required=True)
-    parser.add_argument("--uki-ref", required=True)
-    parser.add_argument("--baseline-ref", required=True)
     parser.add_argument("--previous-log-index", type=int, default=0)
     args = parser.parse_args()
 
     artifacts_dir = Path(args.artifacts_dir)
+    cvm_artifacts_dir = Path(args.cvm_artifacts_dir)
     count = 0
 
     for model_dir in sorted(artifacts_dir.iterdir()):
@@ -93,6 +91,14 @@ def main() -> None:
 
         if not meas_file.exists():
             continue
+
+        meta_file = cvm_artifacts_dir / model_dir.name / "meta.json"
+        if not meta_file.exists():
+            print(f"WARNING: No meta.json for {model_dir.name}, skipping",
+                  file=sys.stderr)
+            continue
+
+        meta = json.loads(meta_file.read_text())
 
         measurements = json.loads(meas_file.read_text())
         rego_policy = rego_file.read_text() if rego_file.exists() else ""
@@ -108,9 +114,9 @@ def main() -> None:
             release_version=args.version,
             genpolicy_version=args.genpolicy_version,
             cvm_measure_version=args.cvm_measure_version,
-            firmware_ref=args.firmware_ref,
-            uki_ref=args.uki_ref,
-            baseline_ref=args.baseline_ref,
+            firmware_ref=meta["firmware_ref"],
+            uki_ref=meta["uki_ref"],
+            baseline_ref=meta["baseline_ref"],
         )
 
         output = model_dir / "predicate.json"

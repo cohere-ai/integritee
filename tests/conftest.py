@@ -51,11 +51,14 @@ def static_ref_vals_path(tmp_path: Path, static_ref_vals: dict) -> Path:
 @pytest.fixture
 def artifacts_dir(tmp_path: Path, real_measurements: dict) -> Path:
     """Create a realistic artifacts directory with two models."""
+    artifacts = tmp_path / "artifacts"
+    artifacts.mkdir()
+
     for model, meas_override in [
         ("command-r-plus", {}),
         ("aya-expanse", {"mrtd": "1" * 96, "rtmr0": "2" * 96, "rtmr1": "3" * 96, "rtmr2": "4" * 96, "rtmr3": "5" * 96}),
     ]:
-        model_dir = tmp_path / model
+        model_dir = artifacts / model
         model_dir.mkdir()
 
         m = {**real_measurements, **meas_override}
@@ -65,7 +68,49 @@ def artifacts_dir(tmp_path: Path, real_measurements: dict) -> Path:
         )
         (model_dir / "initdata_b64.txt").write_text("dGVzdGluaXRkYXRh")
 
-    return tmp_path
+    return artifacts
+
+
+DEFAULT_CVM_META = {
+    "machine_type": "a3-highgpu-1g",
+    "podvm_image_tag": "cohere-latest-ubuntu-debug",
+    "ram_gib": 234,
+    "baseline_path": "cvm-artifacts/baselines/a3-highgpu-1g.json",
+    "baseline_ref": "cohere-ai/cohere-cc-baselines/baselines/gcp/tdx/a3-highgpu-1g.json",
+    "firmware_path": "cvm-artifacts/firmware/abc.fd",
+    "firmware_ref": "ovmf-2024-08",
+    "uki_path": "cvm-artifacts/uki/cohere-latest-ubuntu-debug/BOOTX64.EFI",
+    "uki_ref": "sha384:abc",
+}
+
+
+def make_cvm_artifacts_dir(
+    base_path: Path,
+    models: list[str] | None = None,
+    overrides: dict[str, dict] | None = None,
+) -> Path:
+    """Create a cvm-artifacts directory with per-model meta.json files."""
+    cvm_dir = base_path / "cvm-artifacts"
+    cvm_dir.mkdir(exist_ok=True)
+
+    if models is None:
+        models = ["command-r-plus", "aya-expanse"]
+    if overrides is None:
+        overrides = {}
+
+    for model in models:
+        model_dir = cvm_dir / model
+        model_dir.mkdir(exist_ok=True)
+        meta = {**DEFAULT_CVM_META, **overrides.get(model, {})}
+        (model_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
+
+    return cvm_dir
+
+
+@pytest.fixture
+def cvm_artifacts_dir(tmp_path: Path) -> Path:
+    """Create a cvm-artifacts directory with default meta.json files."""
+    return make_cvm_artifacts_dir(tmp_path)
 
 
 @pytest.fixture

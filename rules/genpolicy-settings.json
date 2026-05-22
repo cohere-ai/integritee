@@ -1,0 +1,25 @@
+{
+  "pause_container": {
+    "image": "registry.k8s.io/pause:3.9"
+  },
+  "cluster_config": {
+    "default_namespace": "default"
+  },
+  "request_defaults": {
+    "CreateContainerRequest": {
+      "allow_env_regex": [
+        "^HOSTNAME=",
+        "^[a-zA-Z_][a-zA-Z0-9_]*_SERVICE_HOST=",
+        "^[a-zA-Z_][a-zA-Z0-9_]*_SERVICE_PORT",
+        "^[a-zA-Z_][a-zA-Z0-9_]*_PORT",
+        "^KUBERNETES_"
+      ]
+    },
+    "CopyFileRequest": {
+      "regex": []
+    },
+    "ExecProcessRequest": {
+      "regex": []
+    }
+  }
+}
