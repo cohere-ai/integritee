@@ -125,93 +125,28 @@ jobs:
       # ----------------------------------------------------------------
       # Fetch CVM artifacts (per model, deduplicated)
       # ----------------------------------------------------------------
-      - name: Fetch baselines from cohere-cc-baselines
+      - name: Fetch baselines
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.models.outputs.list }}"
-          mkdir -p cvm-artifacts/baselines
-
-          for MODEL in "${MODEL_ARRAY[@]}"; do
-            MODEL=$(echo "$MODEL" | xargs)
-            META="cvm-artifacts/${MODEL}/meta.json"
-            MACHINE_TYPE=$(jq -r '.machine_type' "$META")
-            BASELINE_DEST="cvm-artifacts/baselines/${MACHINE_TYPE}.json"
-            BASELINE_REF="${BASELINES_REPO}/baselines/gcp/tdx/${MACHINE_TYPE}.json"
-
-            if [[ -f "$BASELINE_DEST" ]]; then
-              echo "${MODEL}: reusing cached baseline for ${MACHINE_TYPE}"
-            else
-              echo "${MODEL}: fetching baseline for ${MACHINE_TYPE}"
-              gh api "/repos/${BASELINES_REPO}/contents/baselines/gcp/tdx/${MACHINE_TYPE}.json" \
-                --jq '.content' | base64 -d > "$BASELINE_DEST"
-              cat "$BASELINE_DEST" | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'  firmware_sha384: {d[\"firmware_sha384\"][:24]}..., events: {len(d[\"events\"])}')"
-            fi
-
-            jq --arg bp "$BASELINE_DEST" --arg br "$BASELINE_REF" \
-              '.baseline_path = $bp | .baseline_ref = $br' "$META" > "${META}.tmp" && mv "${META}.tmp" "$META"
-          done
+          python3 scripts/fetch-baselines.py \
+            --models "${{ steps.models.outputs.list }}" \
+            --cvm-artifacts-dir cvm-artifacts/
 
       - name: Fetch OVMF firmware
         run: |
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.models.outputs.list }}"
-          mkdir -p cvm-artifacts/firmware
-
-          for MODEL in "${MODEL_ARRAY[@]}"; do
-            MODEL=$(echo "$MODEL" | xargs)
-            META="cvm-artifacts/${MODEL}/meta.json"
-            BASELINE_PATH=$(jq -r '.baseline_path' "$META")
-            FIRMWARE_SHA384=$(jq -r '.firmware_sha384' "$BASELINE_PATH")
-            FIRMWARE_DEST="cvm-artifacts/firmware/${FIRMWARE_SHA384}.fd"
-
-            if [[ -f "$FIRMWARE_DEST" ]]; then
-              echo "${MODEL}: reusing cached firmware ${FIRMWARE_SHA384:0:24}..."
-            else
-              echo "${MODEL}: fetching firmware ${FIRMWARE_SHA384:0:24}..."
-              curl -fSL "https://storage.googleapis.com/gce_tcb_integrity/ovmf_x64_csm/${FIRMWARE_SHA384}.fd" \
-                -o "$FIRMWARE_DEST"
-              echo "  Downloaded $(du -sh "$FIRMWARE_DEST" | cut -f1)"
-            fi
-
-            jq --arg fp "$FIRMWARE_DEST" --arg fr "$FIRMWARE_SHA384" \
-              '.firmware_path = $fp | .firmware_ref = $fr' "$META" > "${META}.tmp" && mv "${META}.tmp" "$META"
-          done
+          python3 scripts/fetch-firmware.py \
+            --models "${{ steps.models.outputs.list }}" \
+            --cvm-artifacts-dir cvm-artifacts/
 
       - name: Log in to GHCR
         run: echo "${{ github.token }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Extract UKI from podvm images
         run: |
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.models.outputs.list }}"
-          mkdir -p cvm-artifacts/uki
-
-          for MODEL in "${MODEL_ARRAY[@]}"; do
-            MODEL=$(echo "$MODEL" | xargs)
-            META="cvm-artifacts/${MODEL}/meta.json"
-            PODVM_TAG=$(jq -r '.podvm_image_tag' "$META")
-            PODVM_REF="${PODVM_IMAGE}:${PODVM_TAG}"
-            UKI_DEST="cvm-artifacts/uki/${PODVM_TAG}/BOOTX64.EFI"
-
-            if [[ -f "$UKI_DEST" ]]; then
-              echo "${MODEL}: reusing cached UKI for ${PODVM_TAG}"
-            else
-              echo "${MODEL}: extracting UKI from ${PODVM_REF}"
-              WORK="/tmp/podvm-${PODVM_TAG}"
-              mkdir -p "$WORK" && cd "$WORK"
-              oras pull "${PODVM_REF}"
-              cd "$GITHUB_WORKSPACE"
-
-              mkdir -p "cvm-artifacts/uki/${PODVM_TAG}"
-              cvm-measure extract-uki \
-                --disk "${WORK}/disk.tar.gz" \
-                --output "$UKI_DEST"
-              echo "  UKI extracted ($(du -sh "$UKI_DEST" | cut -f1))"
-              rm -rf "$WORK"
-            fi
-
-            jq --arg up "$UKI_DEST" --arg ur "$PODVM_REF" \
-              '.uki_path = $up | .uki_ref = $ur' "$META" > "${META}.tmp" && mv "${META}.tmp" "$META"
-          done
+          python3 scripts/fetch-uki.py \
+            --models "${{ steps.models.outputs.list }}" \
+            --cvm-artifacts-dir cvm-artifacts/
 
       - name: Fetch genpolicy settings from fortress
         env:
@@ -226,88 +161,13 @@ jobs:
       # ----------------------------------------------------------------
       - name: Generate policies and measurements
         run: |
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.models.outputs.list }}"
-
-          for MODEL in "${MODEL_ARRAY[@]}"; do
-            MODEL=$(echo "$MODEL" | xargs)  # trim whitespace
-            echo "=========================================="
-            echo "Processing model: $MODEL"
-            echo "=========================================="
-
-            mkdir -p "artifacts/${MODEL}"
-
-            # Merge base rules/settings with per-model overrides
-            python3 scripts/merge-policy-inputs.py \
-              --base-rules rules/rules.rego \
-              --base-settings cvm-artifacts/genpolicy-settings-base.json \
-              --model-dir "models/${MODEL}" \
-              --output-dir "artifacts/${MODEL}"
-
-            # --- Step 1: Run genpolicy ---
-            cp "models/${MODEL}/podspec.yaml" "artifacts/${MODEL}/podspec_original.yaml"
-
-            genpolicy \
-              -y "artifacts/${MODEL}/podspec_original.yaml" \
-              -p "artifacts/${MODEL}/merged-rules.rego" \
-              -j "artifacts/${MODEL}/merged-settings.json" \
-              -r > "artifacts/${MODEL}/policy.rego" \
-              || echo "WARNING: genpolicy -r failed for $MODEL"
-
-            genpolicy \
-              -y "artifacts/${MODEL}/podspec_original.yaml" \
-              -p "artifacts/${MODEL}/merged-rules.rego" \
-              -j "artifacts/${MODEL}/merged-settings.json" \
-              -b > "artifacts/${MODEL}/initdata_b64.txt" \
-              || echo "WARNING: genpolicy -b failed for $MODEL"
-
-            # --- Step 2: Create podspec_with_initdata ---
-            INITDATA_B64=$(cat "artifacts/${MODEL}/initdata_b64.txt" 2>/dev/null || echo "")
-            if [[ -n "$INITDATA_B64" ]]; then
-              python3 -c "
-          import yaml, sys
-          with open('models/${MODEL}/podspec.yaml') as f:
-              doc = yaml.safe_load(f)
-          annos = doc['spec']['template']['metadata'].setdefault('annotations', {})
-          annos['io.katacontainers.config.hypervisor.cc_init_data'] = '${INITDATA_B64}'
-          yaml.dump(doc, sys.stdout, default_flow_style=False)
-          " > "artifacts/${MODEL}/podspec_with_initdata.yaml" 2>/dev/null \
-                || cp "models/${MODEL}/podspec.yaml" "artifacts/${MODEL}/podspec_with_initdata.yaml"
-            else
-              cp "models/${MODEL}/podspec.yaml" "artifacts/${MODEL}/podspec_with_initdata.yaml"
-            fi
-
-            # --- Step 3: Compute measurements with cvm-measure ---
-            META="cvm-artifacts/${MODEL}/meta.json"
-            BASELINE=$(jq -r '.baseline_path' "$META")
-            FIRMWARE=$(jq -r '.firmware_path' "$META")
-            UKI=$(jq -r '.uki_path' "$META")
-            RAM=$(jq -r '.ram_gib' "$META")
-
-            INITDATA_B64=$(cat "artifacts/${MODEL}/initdata_b64.txt" 2>/dev/null || echo "")
-            if [[ -n "$INITDATA_B64" ]]; then
-              echo "$INITDATA_B64" | base64 -d > "artifacts/${MODEL}/initdata.toml"
-              cvm-measure tdx \
-                --firmware "$FIRMWARE" \
-                --uki "$UKI" \
-                --baseline "$BASELINE" \
-                --ram "$RAM" \
-                --initdata "artifacts/${MODEL}/initdata.toml" \
-                --output-format json > "artifacts/${MODEL}/measurements.json"
-            else
-              echo "WARNING: No initdata for $MODEL, computing without RTMR3"
-              cvm-measure tdx \
-                --firmware "$FIRMWARE" \
-                --uki "$UKI" \
-                --baseline "$BASELINE" \
-                --ram "$RAM" \
-                --output-format json > "artifacts/${MODEL}/measurements.json"
-            fi
-
-            echo "Measurements for $MODEL:"
-            cat "artifacts/${MODEL}/measurements.json"
-
-            echo "Completed: $MODEL"
-          done
+          python3 scripts/generate-policies-and-measurements.py \
+            --models "${{ steps.models.outputs.list }}" \
+            --models-dir models/ \
+            --artifacts-dir artifacts/ \
+            --cvm-artifacts-dir cvm-artifacts/ \
+            --base-rules rules/rules.rego \
+            --base-settings cvm-artifacts/genpolicy-settings-base.json
 
       # ----------------------------------------------------------------
       # Generate ITA policy (single policy, all models)

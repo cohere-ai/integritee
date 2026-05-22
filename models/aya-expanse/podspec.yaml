@@ -26,7 +26,7 @@ spec:
         - name: regcred
       containers:
         - name: vllm-server
-          image: us-docker.pkg.dev/cohere-confidential-computing/fortress/vllm-server:v0.1.0
+          image: us-central1-docker.pkg.dev/cohere-artifacts/cohere/single-serving-cohere-all:v0.14.1-04162026
           ports:
             - containerPort: 8080
           resources:
