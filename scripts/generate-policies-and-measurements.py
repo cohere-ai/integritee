@@ -62,7 +62,7 @@ def run_genpolicy(artifacts: Path) -> None:
     if result.returncode != 0:
         print(f"  WARNING: genpolicy -r failed: {result.stderr.strip()}")
     else:
-        (artifacts / "policy.rego").write_text(result.stdout)
+        (artifacts / "kata-policy.rego").write_text(result.stdout)
 
     result = run(
         ["genpolicy", "-y", str(podspec), "-p", str(rules), "-j", str(settings), "-b"],

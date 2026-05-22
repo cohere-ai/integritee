@@ -43,7 +43,7 @@ gateway can require it at attestation time.
 +-----------------------------------+
 | GitHub Release (per version):     |
 |   {model}/measurements.json       |
-|   {model}/policy.rego             |
+|   {model}/kata-policy.rego        |
 |   {model}/predicate.json          |
 |   {model}/attestation.sigstore.json|
 |   ita-attestation-policy.rego     |
@@ -73,7 +73,7 @@ gateway can require it at attestation time.
 6. **For each model:**
    - merge `rules/rules.rego` + per-model `rules.rego`
    - merge `rules/genpolicy-settings.json` + per-model override
-   - run `genpolicy -r` → `policy.rego`
+   - run `genpolicy -r` → `kata-policy.rego`
    - run `genpolicy -b` → base64 initdata
    - decode initdata → `initdata.toml`
    - `cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline …

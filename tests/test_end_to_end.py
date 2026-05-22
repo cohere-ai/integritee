@@ -53,7 +53,7 @@ class TestEndToEndPipeline:
             d = tmp_path / model
             d.mkdir()
             (d / "measurements.json").write_text(json.dumps(measurements))
-            (d / "policy.rego").write_text(
+            (d / "kata-policy.rego").write_text(
                 f"package agent_policy\n"
                 f"import rego.v1\n"
                 f"default CreateSandboxRequest := true\n"

@@ -49,7 +49,7 @@ locally before extracting the `policy_id` for ITA token requests.
 Every release contains per-model artifacts:
 
 - `{model}/measurements.json` -- expected TDX register values (MRTD, RTMR[0-3])
-- `{model}/policy.rego` -- full Kata agent policy text
+- `{model}/kata-policy.rego` -- full Kata agent policy text
 - `{model}/predicate.json` -- complete in-toto predicate with all metadata
 - `{model}/attestation.sigstore.json` -- Sigstore bundle (verifiable against public Rekor)
 

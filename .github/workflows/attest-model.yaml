@@ -293,10 +293,9 @@ jobs:
           for MODEL in "${MODEL_ARRAY[@]}"; do
             MODEL=$(echo "$MODEL" | xargs)
 
-            mkdir -p "release-assets/${MODEL}"
-            for f in measurements.json policy.rego podspec_with_initdata.yaml predicate.json attestation.sigstore.json; do
+            for f in measurements.json kata-policy.rego podspec_with_initdata.yaml predicate.json attestation.sigstore.json; do
               if [[ -f "artifacts/${MODEL}/${f}" ]]; then
-                cp "artifacts/${MODEL}/${f}" "release-assets/${MODEL}/${f}"
+                cp "artifacts/${MODEL}/${f}" "release-assets/${MODEL}-${f}"
               fi
             done
 

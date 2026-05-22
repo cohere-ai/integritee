@@ -86,7 +86,7 @@ def main() -> None:
 
     for model_dir in sorted(artifacts_dir.iterdir()):
         meas_file = model_dir / "measurements.json"
-        rego_file = model_dir / "policy.rego"
+        rego_file = model_dir / "kata-policy.rego"
         initdata_file = model_dir / "initdata_b64.txt"
 
         if not meas_file.exists():

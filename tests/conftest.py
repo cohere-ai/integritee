@@ -63,7 +63,7 @@ def artifacts_dir(tmp_path: Path, real_measurements: dict) -> Path:
 
         m = {**real_measurements, **meas_override}
         (model_dir / "measurements.json").write_text(json.dumps(m))
-        (model_dir / "policy.rego").write_text(
+        (model_dir / "kata-policy.rego").write_text(
             "package agent_policy\nimport rego.v1\ndefault match := false\n"
         )
         (model_dir / "initdata_b64.txt").write_text("dGVzdGluaXRkYXRh")
