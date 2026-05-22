@@ -43,6 +43,9 @@ env:
   FORTRESS_REPO: "cohere-ai/fortress"
   FORTRESS_REF: "0ecb69b460b5ca9741f61a1915e7ea560a1fb1ac"
   FORTRESS_GENPOLICY_SETTINGS: "components/kata-policy/configs/genpolicy-settings-base.json"
+  BLOBHEART_REPO: "cohere-ai/blobheart"
+  BLOBHEART_REF: "360a7ee934e6263eca1cf8207c7e6e54d52ea823"
+  BLOBHEART_INITDATA_DIR: "k8s/geofence/components/models_v2/generated"
 
 jobs:
   attest:
@@ -157,7 +160,18 @@ jobs:
           echo "Downloaded genpolicy settings from ${FORTRESS_REPO}@${FORTRESS_REF}"
 
       # ----------------------------------------------------------------
-      # Per-model loop: genpolicy -> initdata -> podspec -> cvm-measure
+      # Fetch initdata from blobheart (short-circuits genpolicy)
+      # ----------------------------------------------------------------
+      - name: Fetch initdata from blobheart
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          python3 scripts/fetch-initdata.py \
+            --models "${{ steps.models.outputs.list }}" \
+            --artifacts-dir artifacts/
+
+      # ----------------------------------------------------------------
+      # Per-model loop: cvm-measure (genpolicy skipped, initdata from blobheart)
       # ----------------------------------------------------------------
       - name: Generate policies and measurements
         run: |
@@ -292,7 +306,7 @@ jobs:
           for MODEL in "${MODEL_ARRAY[@]}"; do
             MODEL=$(echo "$MODEL" | xargs)
 
-            for f in measurements.json kata-policy.rego podspec_with_initdata.yaml predicate.json attestation.sigstore.json; do
+            for f in measurements.json predicate.json attestation.sigstore.json; do
               if [[ -f "artifacts/${MODEL}/${f}" ]]; then
                 cp "artifacts/${MODEL}/${f}" "release-assets/${MODEL}-${f}"
               fi

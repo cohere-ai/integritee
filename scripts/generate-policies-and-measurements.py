@@ -163,12 +163,16 @@ def main() -> None:
         meta_path = cvm_artifacts_dir / model / "meta.json"
         meta = json.loads(meta_path.read_text())
 
-        merge_policy_inputs(base_rules, base_settings, model_dir, model_artifacts)
-
-        shutil.copy2(model_dir / "podspec.yaml", model_artifacts / "podspec_original.yaml")
-        run_genpolicy(model_artifacts)
-
-        create_podspec_with_initdata(model_dir, model_artifacts)
+        initdata_file = model_artifacts / "initdata_b64.txt"
+        if initdata_file.exists() and initdata_file.read_text().strip():
+            print("  Using pre-fetched initdata (genpolicy skipped)")
+        else:
+            # TODO: re-enable once the full podspec can be encoded in this repo.
+            # merge_policy_inputs(base_rules, base_settings, model_dir, model_artifacts)
+            # shutil.copy2(model_dir / "podspec.yaml", model_artifacts / "podspec_original.yaml")
+            # run_genpolicy(model_artifacts)
+            # create_podspec_with_initdata(model_dir, model_artifacts)
+            print("  WARNING: No pre-fetched initdata and genpolicy is disabled")
 
         compute_measurements(model_artifacts, meta)
 
