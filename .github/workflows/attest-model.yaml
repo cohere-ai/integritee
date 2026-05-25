@@ -38,11 +38,6 @@ env:
   CVM_MEASURE_REF: "alhassankhedr/cc-167-tdx-measurement-toolkit"
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
   BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
-  # TODO: vendor this file into the repo once the fortress settings are stable,
-  #       then remove this runtime fetch.
-  FORTRESS_REPO: "cohere-ai/fortress"
-  FORTRESS_REF: "0ecb69b460b5ca9741f61a1915e7ea560a1fb1ac"
-  FORTRESS_GENPOLICY_SETTINGS: "components/kata-policy/configs/genpolicy-settings-base.json"
   BLOBHEART_REPO: "cohere-ai/blobheart"
   BLOBHEART_REF: "360a7ee934e6263eca1cf8207c7e6e54d52ea823"
   BLOBHEART_INITDATA_DIR: "k8s/geofence/components/models_v2/generated"
@@ -151,14 +146,6 @@ jobs:
             --models "${{ steps.models.outputs.list }}" \
             --cvm-artifacts-dir cvm-artifacts/
 
-      - name: Fetch genpolicy settings from fortress
-        env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
-        run: |
-          gh api "/repos/${FORTRESS_REPO}/contents/${FORTRESS_GENPOLICY_SETTINGS}?ref=${FORTRESS_REF}" \
-            --jq '.content' | base64 -d > cvm-artifacts/genpolicy-settings-base.json
-          echo "Downloaded genpolicy settings from ${FORTRESS_REPO}@${FORTRESS_REF}"
-
       # ----------------------------------------------------------------
       # Fetch initdata from blobheart (short-circuits genpolicy)
       # ----------------------------------------------------------------
@@ -175,13 +162,13 @@ jobs:
       # ----------------------------------------------------------------
       - name: Generate policies and measurements
         run: |
-          python3 scripts/generate-policies-and-measurements.py \
+          python3 scripts/generate-measurements.py \
             --models "${{ steps.models.outputs.list }}" \
             --models-dir models/ \
             --artifacts-dir artifacts/ \
             --cvm-artifacts-dir cvm-artifacts/ \
             --base-rules rules/rules.rego \
-            --base-settings cvm-artifacts/genpolicy-settings-base.json
+            --base-settings rules/genpolicy-settings.json
 
       # ----------------------------------------------------------------
       # Generate ITA policy (single policy, all models)

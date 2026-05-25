@@ -35,7 +35,7 @@ def sha384_initdata(model_dir: Path) -> str:
     into TDX RTMR3 by the PodVM. Lets a verifier match the predicate's
     ``initdata_hash`` directly against the digest predicted from RTMR3.
 
-    Prefers ``initdata.toml`` (written by generate-policies-and-measurements);
+    Prefers ``initdata.toml`` (written by generate-measurements);
     falls back to gunzipping ``initdata_b64.txt`` for older artifact layouts.
     """
     toml_file = model_dir / "initdata.toml"
@@ -49,7 +49,9 @@ def sha384_initdata(model_dir: Path) -> str:
             raw = gzip.decompress(raw)
         return hashlib.sha384(raw).hexdigest()
 
-    return ""
+    raise FileNotFoundError(
+        f"No initdata found in {model_dir} (expected initdata.toml or initdata_b64.txt)"
+    )
 
 
 def build_predicate(

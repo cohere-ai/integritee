@@ -8,7 +8,7 @@ For each model this script:
   4. Computes TDX measurements using cvm-measure
 
 Usage:
-    python generate-policies-and-measurements.py \
+    python generate-measurements.py \
         --models model-a,model-b \
         --models-dir models/ \
         --artifacts-dir artifacts/ \
