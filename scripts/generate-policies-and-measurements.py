@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import json
 import shutil
 import subprocess
@@ -28,6 +29,21 @@ import sys
 from pathlib import Path
 
 import yaml
+
+
+def decode_cc_init_data(initdata_b64: str) -> bytes:
+    """Decode a `cc_init_data` annotation value into raw TOML bytes.
+
+    The annotation as injected by Kata is base64(gzip(toml)) — the gzip layer
+    keeps the annotation under the etcd value-size limit. Older callers here
+    only base64-decoded and wrote the still-gzipped bytes to ``initdata.toml``,
+    which silently produced a wrong SHA-384 (RTMR3 prediction matched
+    ``sha384(gzipped)`` instead of ``sha384(toml)``).
+    """
+    raw = base64.b64decode(initdata_b64)
+    if raw[:2] == b"\x1f\x8b":
+        return gzip.decompress(raw)
+    return raw
 
 
 def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -117,7 +133,7 @@ def compute_measurements(
     if initdata_file.exists() and initdata_file.read_text().strip():
         initdata_b64 = initdata_file.read_text().strip()
         initdata_toml = artifacts / "initdata.toml"
-        initdata_toml.write_bytes(base64.b64decode(initdata_b64))
+        initdata_toml.write_bytes(decode_cc_init_data(initdata_b64))
         cmd.extend(["--initdata", str(initdata_toml)])
     else:
         print("  WARNING: No initdata, computing without RTMR3")

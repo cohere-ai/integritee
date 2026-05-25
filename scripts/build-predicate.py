@@ -19,6 +19,8 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
+import gzip
 import hashlib
 import json
 import sys
@@ -28,8 +30,26 @@ from pathlib import Path
 PREDICATE_TYPE = "https://cohere.com/attestation-policy-ledger/v1"
 
 
-def sha256_file(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+def sha384_initdata(model_dir: Path) -> str:
+    """SHA-384 of the raw initdata TOML — the same bytes that get extended
+    into TDX RTMR3 by the PodVM. Lets a verifier match the predicate's
+    ``initdata_hash`` directly against the digest predicted from RTMR3.
+
+    Prefers ``initdata.toml`` (written by generate-policies-and-measurements);
+    falls back to gunzipping ``initdata_b64.txt`` for older artifact layouts.
+    """
+    toml_file = model_dir / "initdata.toml"
+    if toml_file.exists():
+        return hashlib.sha384(toml_file.read_bytes()).hexdigest()
+
+    b64_file = model_dir / "initdata_b64.txt"
+    if b64_file.exists() and b64_file.read_text().strip():
+        raw = base64.b64decode(b64_file.read_text().strip())
+        if raw[:2] == b"\x1f\x8b":
+            raw = gzip.decompress(raw)
+        return hashlib.sha384(raw).hexdigest()
+
+    return ""
 
 
 def build_predicate(
@@ -87,7 +107,6 @@ def main() -> None:
     for model_dir in sorted(artifacts_dir.iterdir()):
         meas_file = model_dir / "measurements.json"
         rego_file = model_dir / "kata-policy.rego"
-        initdata_file = model_dir / "initdata_b64.txt"
 
         if not meas_file.exists():
             continue
@@ -102,7 +121,7 @@ def main() -> None:
 
         measurements = json.loads(meas_file.read_text())
         rego_policy = rego_file.read_text() if rego_file.exists() else ""
-        initdata_hash = sha256_file(initdata_file) if initdata_file.exists() else ""
+        initdata_hash = sha384_initdata(model_dir)
 
         predicate = build_predicate(
             model=model_dir.name,
