@@ -30,8 +30,57 @@ from pathlib import Path
 
 PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
+DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 
 DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
+
+
+def to_nvat_driver_version(apt_pkg_version: str) -> str:
+    """Strip the apt revision suffix (e.g. ``580.159.04-1ubuntu1`` ->
+    ``580.159.04``) to match NVAT's ``x-nvidia-gpu-driver-version``."""
+    return apt_pkg_version.split("-", 1)[0]
+
+
+def resolve_nvidia_driver_version(
+    measurements_dir: Path, cvm_artifacts_dir: Path
+) -> str:
+    """Resolve the driver version from the PodVM image (one image = one
+    driver). Reads ``cvm-artifacts/uki/<podvm_image_tag>/measurements.json``
+    (cached by fetch-uki.py). Fails if selected models reference different
+    PodVM images — one policy emits one ``matches_nvgpu`` block.
+    """
+    versions: dict[str, str] = {}  # podvm_image_tag -> nvat version
+    for model_dir in sorted(measurements_dir.iterdir()):
+        if not model_dir.is_dir():
+            continue
+        meta_file = cvm_artifacts_dir / model_dir.name / "meta.json"
+        if not meta_file.exists():
+            continue
+        meta = json.loads(meta_file.read_text())
+        podvm_tag = meta.get("podvm_image_tag")
+        if not podvm_tag:
+            continue
+        meas_file = cvm_artifacts_dir / "uki" / podvm_tag / "measurements.json"
+        if not meas_file.exists():
+            print(f"ERROR: missing {meas_file}; re-run fetch-uki.py", file=sys.stderr)
+            sys.exit(1)
+        pkg_version = json.loads(meas_file.read_text()).get("nvidia_driver_version")
+        if not pkg_version:
+            print(f"ERROR: {meas_file} has no nvidia_driver_version", file=sys.stderr)
+            sys.exit(1)
+        versions[podvm_tag] = to_nvat_driver_version(pkg_version)
+
+    if not versions:
+        print("ERROR: no podvm_image_tag in any meta.json", file=sys.stderr)
+        sys.exit(1)
+
+    unique = set(versions.values())
+    if len(unique) > 1:
+        details = ", ".join(f"{t}={v}" for t, v in sorted(versions.items()))
+        print(f"ERROR: driver mismatch across PodVM images ({details})", file=sys.stderr)
+        sys.exit(1)
+
+    return unique.pop()
 
 
 def generate_nonce_rule(nonce: str) -> str:
@@ -68,6 +117,11 @@ def main() -> None:
         "--measurements-dir",
         required=True,
         help="Directory containing per-model subdirs with measurements.json",
+    )
+    parser.add_argument(
+        "--cvm-artifacts-dir",
+        required=True,
+        help="Directory with per-model meta.json + cached PodVM measurements",
     )
     parser.add_argument(
         "--template",
@@ -116,14 +170,23 @@ def main() -> None:
         print("ERROR: No measurement files found", file=sys.stderr)
         sys.exit(1)
 
+    driver_version = resolve_nvidia_driver_version(
+        measurements_dir, Path(args.cvm_artifacts_dir)
+    )
+
     policy = template.replace(PLACEHOLDER, "\n\n".join(blocks))
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule(args.nonce))
+    policy = policy.replace(DRIVER_VERSION_PLACEHOLDER, driver_version)
+
+    if DRIVER_VERSION_PLACEHOLDER in policy:
+        print(f"ERROR: {DRIVER_VERSION_PLACEHOLDER} not substituted", file=sys.stderr)
+        sys.exit(1)
 
     Path(args.output).parent.mkdir(parents=True, exist_ok=True)
     Path(args.output).write_text(policy)
     print(
         f"Generated ITA policy with {len(blocks)} model(s): "
-        f"{', '.join(model_names)} -> {args.output}"
+        f"{', '.join(model_names)} (driver={driver_version}) -> {args.output}"
     )
 
 

@@ -20,12 +20,14 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 
 
 def extract_uki(podvm_ref: str, dest: Path) -> None:
+    """Pull the podvm OCI artifact, extract the UKI, and cache the
+    accompanying measurements.json (published by build-podvm-cohere.yaml)
+    next to it for downstream policy generation."""
     with tempfile.TemporaryDirectory(prefix="podvm-") as work_dir:
         subprocess.run(
             ["oras", "pull", podvm_ref],
@@ -39,6 +41,10 @@ def extract_uki(podvm_ref: str, dest: Path) -> None:
              "--output", str(dest)],
             check=True,
         )
+
+        meas_src = Path(work_dir) / "measurements.json"
+        if meas_src.exists():
+            shutil.copy2(meas_src, dest.parent / "measurements.json")
 
     size = dest.stat().st_size / (1024 * 1024)
     print(f"  UKI extracted ({size:.1f}M)")
@@ -66,8 +72,9 @@ def main() -> None:
         podvm_tag = meta["podvm_image_tag"]
         podvm_ref = f"{podvm_image}:{podvm_tag}"
         uki_dest = uki_dir / podvm_tag / "BOOTX64.EFI"
+        meas_cache = uki_dest.parent / "measurements.json"
 
-        if uki_dest.exists():
+        if uki_dest.exists() and meas_cache.exists():
             print(f"{model}: reusing cached UKI for {podvm_tag}")
         else:
             print(f"{model}: extracting UKI from {podvm_ref}")

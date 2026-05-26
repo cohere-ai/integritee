@@ -177,6 +177,7 @@ jobs:
         run: |
           python3 scripts/generate-ita-policy.py \
             --measurements-dir artifacts/ \
+            --cvm-artifacts-dir cvm-artifacts/ \
             --template attestation-policy/template.rego \
             --nonce "${{ github.run_id }}" \
             --output artifacts/ita-attestation-policy.rego

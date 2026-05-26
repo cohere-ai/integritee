@@ -37,7 +37,7 @@ nvgpu_base_checks if {
     nvgpu.secboot == true
     nvgpu.hwmodel == "GH100"
     nvgpu["x-nvidia-gpu-manufacturer"] == "NVIDIA Corporation"
-    nvgpu["x-nvidia-gpu-driver-version"] == "580.126.20"
+    nvgpu["x-nvidia-gpu-driver-version"] == "${NVIDIA_DRIVER_VERSION}"
     nvgpu["x-nvidia-gpu-vbios-version"] == "96.00.CF.00.01"
     nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-nonce-match"] == true
     nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-arch-check"] == true
