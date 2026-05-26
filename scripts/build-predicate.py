@@ -67,8 +67,6 @@ def build_predicate(
     firmware_ref: str,
     uki_ref: str,
     baseline_ref: str,
-    nvidia_driver_version: str,
-    nvidia_driver_pkg: str,
 ) -> dict:
     return {
         "model_path": model,
@@ -88,10 +86,6 @@ def build_predicate(
             "firmware_ref": firmware_ref,
             "uki_ref": uki_ref,
             "baseline_ref": baseline_ref,
-        },
-        "runtime": {
-            "nvidia_driver_version": nvidia_driver_version,
-            "nvidia_driver_pkg": nvidia_driver_pkg,
         },
     }
 
@@ -144,8 +138,6 @@ def main() -> None:
             firmware_ref=meta["firmware_ref"],
             uki_ref=meta["uki_ref"],
             baseline_ref=meta["baseline_ref"],
-            nvidia_driver_version=meta.get("nvidia_driver_version", ""),
-            nvidia_driver_pkg=meta.get("nvidia_driver_pkg", ""),
         )
 
         output = model_dir / "predicate.json"
