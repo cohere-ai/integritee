@@ -125,6 +125,7 @@ def compute_measurements(
         "cvm-measure", "tdx",
         "--firmware", meta["firmware_path"],
         "--uki", meta["uki_path"],
+        "--disk", meta["disk_path"],
         "--baseline", meta["baseline_path"],
         "--ram", str(meta["ram_gib"]),
         "--output-format", "json",
