@@ -42,6 +42,9 @@ def extract_uki(podvm_ref: str, dest: Path) -> None:
             check=True,
         )
 
+        disk_src = Path(work_dir) / "disk.tar.gz"
+        shutil.copy2(disk_src, dest.parent / "disk.tar.gz")
+
         meas_src = Path(work_dir) / "measurements.json"
         if meas_src.exists():
             shutil.copy2(meas_src, dest.parent / "measurements.json")
@@ -72,15 +75,17 @@ def main() -> None:
         podvm_tag = meta["podvm_image_tag"]
         podvm_ref = f"{podvm_image}:{podvm_tag}"
         uki_dest = uki_dir / podvm_tag / "BOOTX64.EFI"
+        disk_dest = uki_dest.parent / "disk.tar.gz"
         meas_cache = uki_dest.parent / "measurements.json"
 
-        if uki_dest.exists() and meas_cache.exists():
+        if uki_dest.exists() and disk_dest.exists() and meas_cache.exists():
             print(f"{model}: reusing cached UKI for {podvm_tag}")
         else:
             print(f"{model}: extracting UKI from {podvm_ref}")
             extract_uki(podvm_ref, uki_dest)
 
         meta["uki_path"] = str(uki_dest)
+        meta["disk_path"] = str(disk_dest)
         meta["uki_ref"] = podvm_ref
         meta_path.write_text(json.dumps(meta, indent=2) + "\n")
 

@@ -125,6 +125,7 @@ def compute_measurements(
         "cvm-measure", "tdx",
         "--firmware", meta["firmware_path"],
         "--uki", meta["uki_path"],
+        "--disk", meta["disk_path"],
         "--baseline", meta["baseline_path"],
         "--ram", str(meta["ram_gib"]),
         "--output-format", "json",
@@ -138,7 +139,14 @@ def compute_measurements(
     else:
         print("  WARNING: No initdata, computing without RTMR3")
 
-    result = run(cmd, capture_output=True, text=True, check=True)
+    try:
+        result = run(cmd, capture_output=True, text=True, check=True)
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            print(exc.stdout, file=sys.stdout)
+        if exc.stderr:
+            print(exc.stderr, file=sys.stderr)
+        raise
     measurements_file.write_text(result.stdout)
 
     measurements = json.loads(result.stdout)
