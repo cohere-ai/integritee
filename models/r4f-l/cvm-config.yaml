@@ -1,3 +1,3 @@
 machine_type: "a3-highgpu-1g"
-podvm_image_tag: "v0-2-0-cohere-1-ubuntu-release"
+podvm_image_tag: "podvm-ubuntu-tdx-nvidia-dev-yousef-podvm-gcp-im-r3"
 ram_gib: 234
