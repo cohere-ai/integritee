@@ -14,8 +14,11 @@ match if {
 
 ${POLICY_NONCE}
 
+# TDX TCB is acceptable if up-to-date OR if out-of-date but within the TTL grace period
+# Based on: https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-platform-tcb.html#tcb-ttl-policy
+
 tcb_level_is_up2date if {
-    # Acceptable TCB status values
+    # Up-to-date TCB status values
     tcb_level_up2date := {"UpToDate", "SWHardeningNeeded", "ConfigurationNeeded", "ConfigurationAndSWHardeningNeeded"}
     tcb_level_up2date[input.tdx.attester_tcb_status]
 }
@@ -29,7 +32,6 @@ tcb_level_outofdate_within_ttl if {
     expiry_date_ns > time.now_ns()
 }
 
-# TCB is acceptable if up-to-date OR if out-of-date but within the TTL grace period
 tcb_level_acceptable if { tcb_level_is_up2date }
 tcb_level_acceptable if { tcb_level_outofdate_within_ttl }
 
