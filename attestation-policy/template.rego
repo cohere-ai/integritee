@@ -14,9 +14,29 @@ match if {
 
 ${POLICY_NONCE}
 
-tdx_base_checks if {
-    tdx := input.tdx
+tcb_level_is_up2date if {
+    # Acceptable TCB status values
+    tcb_level_up2date := {"UpToDate", "SWHardeningNeeded", "ConfigurationNeeded", "ConfigurationAndSWHardeningNeeded"}
+    tcb_level_up2date[input.tdx.attester_tcb_status]
+}
 
+tcb_level_outofdate_within_ttl if {
+    tcb_level_outofdate := {"OutOfDate", "OutOfDateConfigurationNeeded"}
+    tcb_level_outofdate[input.tdx.attester_tcb_status]
+    attester_tcb_date_ns := time.parse_rfc3339_ns(input.tdx.attester_tcb_date)
+    ttl_period := 6 # months
+    expiry_date_ns := time.add_date(attester_tcb_date_ns, 0, ttl_period, 0)
+    expiry_date_ns > time.now_ns()
+}
+
+# TCB is acceptable if up-to-date OR if out-of-date but within the TTL grace period
+tcb_level_acceptable if { tcb_level_is_up2date }
+tcb_level_acceptable if { tcb_level_outofdate_within_ttl }
+
+tdx_base_checks if {
+    tcb_level_acceptable
+
+    tdx := input.tdx
     tdx.tdx_mrseam == "489e585f1c54bc5a02066c8c6ec21619ff0334ec6f21e07e2a35202c59183789c8057e7d97dd591bb08314b185819e72"
     tdx.tdx_mrsignerseam == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     tdx.tdx_mrconfigid == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
@@ -24,9 +44,8 @@ tdx_base_checks if {
     tdx.tdx_mrownerconfig == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     tdx.tdx_seam_attributes == "0000000000000000"
     tdx.tdx_td_attributes == "0000001000000000"
-    tdx.tdx_tee_tcb_svn == "0d010800000000000000000000000000"
     tdx.tdx_is_debuggable == false
-    tdx.tdx_seamsvn == 269
+    tdx.tdx_seamsvn >= 271
 }
 
 ${TDX_MATCH_BLOCKS}
