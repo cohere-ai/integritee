@@ -39,7 +39,7 @@ env:
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
   BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
   BLOBHEART_REPO: "cohere-ai/blobheart"
-  BLOBHEART_REF: "dbcc079250ba280416d88e86f44251f1a744c942"
+  BLOBHEART_REF: "985f60fec4a175222e1e1470fe30cb61264017d2"
   BLOBHEART_INITDATA_DIR: "k8s/geofence/components/models_v2/generated"
 
 jobs:
