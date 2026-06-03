@@ -1,6 +1,6 @@
 """Tests for the TNG client library.
 
-Tests the ModelIntegrityClient's verification and chain-checking logic
+Tests the IntegriteeClient's verification and chain-checking logic
 using locally-constructed test data.
 """
 
@@ -16,8 +16,8 @@ import pytest
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "clients" / "python"))
 
-from model_integrity.client import (
-    ModelIntegrityClient,
+from integritee.client import (
+    IntegriteeClient,
     ReleaseInfo,
     VerificationError,
     VerifiedAttestation,
@@ -25,9 +25,9 @@ from model_integrity.client import (
 
 
 @pytest.fixture
-def client() -> ModelIntegrityClient:
-    return ModelIntegrityClient(
-        repo="cohere-ai/model-integrity",
+def client() -> IntegriteeClient:
+    return IntegriteeClient(
+        repo="cohere-ai/integritee",
         cosign_path="cosign",
     )
 
@@ -36,7 +36,7 @@ def client() -> ModelIntegrityClient:
 def sample_release() -> ReleaseInfo:
     return ReleaseInfo(
         tag="v0.0.1",
-        url="https://github.com/cohere-ai/model-integrity/releases/tag/v0.0.1",
+        url="https://github.com/cohere-ai/integritee/releases/tag/v0.0.1",
         assets={
             "command-r-plus/measurements.json": "https://example.com/meas.json",
             "command-r-plus/attestation.sigstore.json": "https://example.com/attest.json",
@@ -50,21 +50,21 @@ class TestReleaseDiscovery:
     """Test release asset filtering and model matching."""
 
     def test_get_model_assets_filters_by_prefix(
-        self, client: ModelIntegrityClient, sample_release: ReleaseInfo
+        self, client: IntegriteeClient, sample_release: ReleaseInfo
     ):
         assets = client.get_model_assets(sample_release, "command-r-plus")
         assert len(assets) == 3
         assert all(k.startswith("command-r-plus/") for k in assets)
 
     def test_get_model_assets_different_model(
-        self, client: ModelIntegrityClient, sample_release: ReleaseInfo
+        self, client: IntegriteeClient, sample_release: ReleaseInfo
     ):
         assets = client.get_model_assets(sample_release, "aya-expanse")
         assert len(assets) == 1
         assert "aya-expanse/measurements.json" in assets
 
     def test_get_model_assets_unknown_model(
-        self, client: ModelIntegrityClient, sample_release: ReleaseInfo
+        self, client: IntegriteeClient, sample_release: ReleaseInfo
     ):
         assets = client.get_model_assets(sample_release, "nonexistent-model")
         assert len(assets) == 0
@@ -78,27 +78,27 @@ class TestReleaseDiscovery:
 class TestChainVerification:
     """Test the chain linking verification logic."""
 
-    def test_genesis_entry_accepted(self, client: ModelIntegrityClient):
+    def test_genesis_entry_accepted(self, client: IntegriteeClient):
         predicate = {"previous_rekor_log_index": 0}
         assert client.verify_chain(predicate, known_log_index=None) is True
 
-    def test_matching_chain_accepted(self, client: ModelIntegrityClient):
+    def test_matching_chain_accepted(self, client: IntegriteeClient):
         predicate = {"previous_rekor_log_index": 42}
         assert client.verify_chain(predicate, known_log_index=42) is True
 
-    def test_mismatched_chain_rejected(self, client: ModelIntegrityClient):
+    def test_mismatched_chain_rejected(self, client: IntegriteeClient):
         predicate = {"previous_rekor_log_index": 99}
         assert client.verify_chain(predicate, known_log_index=42) is False
 
-    def test_missing_field_rejected(self, client: ModelIntegrityClient):
+    def test_missing_field_rejected(self, client: IntegriteeClient):
         predicate = {}
         assert client.verify_chain(predicate, known_log_index=42) is False
 
-    def test_first_run_accepts_any_index(self, client: ModelIntegrityClient):
+    def test_first_run_accepts_any_index(self, client: IntegriteeClient):
         predicate = {"previous_rekor_log_index": 12345}
         assert client.verify_chain(predicate, known_log_index=None) is True
 
-    def test_zero_to_zero_chain(self, client: ModelIntegrityClient):
+    def test_zero_to_zero_chain(self, client: IntegriteeClient):
         """Genesis entry where known state is also 0."""
         predicate = {"previous_rekor_log_index": 0}
         assert client.verify_chain(predicate, known_log_index=0) is True
@@ -108,7 +108,7 @@ class TestBundleParsing:
     """Test Sigstore bundle predicate extraction."""
 
     def test_extract_predicate_from_dsse_bundle(
-        self, client: ModelIntegrityClient, tmp_path: Path
+        self, client: IntegriteeClient, tmp_path: Path
     ):
         import base64
 
@@ -139,7 +139,7 @@ class TestBundleParsing:
         assert extracted["policy_id"] == "abc-123"
 
     def test_extract_from_empty_bundle_returns_empty(
-        self, client: ModelIntegrityClient, tmp_path: Path
+        self, client: IntegriteeClient, tmp_path: Path
     ):
         bundle_path = tmp_path / "empty.sigstore.json"
         bundle_path.write_text(json.dumps({}))
@@ -180,19 +180,19 @@ class TestClientConfiguration:
     """Test client initialization and configuration."""
 
     def test_default_repo(self):
-        c = ModelIntegrityClient()
-        assert c._repo == "cohere-ai/model-integrity"
+        c = IntegriteeClient()
+        assert c._repo == "cohere-ai/integritee"
 
     def test_custom_repo(self):
-        c = ModelIntegrityClient(repo="org/other-repo")
+        c = IntegriteeClient(repo="org/other-repo")
         assert c._repo == "org/other-repo"
 
     def test_custom_cosign_path(self):
-        c = ModelIntegrityClient(cosign_path="/usr/local/bin/cosign")
+        c = IntegriteeClient(cosign_path="/usr/local/bin/cosign")
         assert c._cosign_path == "/usr/local/bin/cosign"
 
     def test_custom_identity(self):
-        c = ModelIntegrityClient(
+        c = IntegriteeClient(
             expected_identity="https://github.com/org/repo/.github/workflows/w.yaml@refs/heads/main"
         )
         assert "org/repo" in c._expected_identity

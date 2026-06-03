@@ -1,4 +1,4 @@
-# Model Integrity
+# Integritee
 
 Public integrity ledger for Cohere's confidential computing models.
 
@@ -38,7 +38,7 @@ podspec.yaml ─► genpolicy ─► Kata policy + initdata
 TNG discovers the latest policy by fetching the latest GitHub release:
 
 ```
-GET /repos/cohere-ai/model-integrity/releases/latest
+GET /repos/cohere-ai/integritee/releases/latest
 ```
 
 Then downloads `{model}/attestation.sigstore.json` and verifies the Sigstore bundle

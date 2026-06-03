@@ -1,4 +1,4 @@
-"""TNG-side client for discovering and verifying model integrity.
+"""TNG-side client for discovering and verifying Integritee attestations.
 
 Fetches the latest GitHub Release, downloads per-model artifacts,
 verifies the Sigstore bundle locally, and extracts the policy_id
@@ -19,9 +19,9 @@ from urllib.request import Request, urlopen
 logger = logging.getLogger(__name__)
 
 GITHUB_API = "https://api.github.com"
-DEFAULT_REPO = "cohere-ai/model-integrity"
+DEFAULT_REPO = "cohere-ai/integritee"
 EXPECTED_WORKFLOW_REF = (
-    "https://github.com/cohere-ai/model-integrity/"
+    "https://github.com/cohere-ai/integritee/"
     ".github/workflows/attest-model.yaml@refs/heads/main"
 )
 EXPECTED_ISSUER = "https://token.actions.githubusercontent.com"
@@ -52,8 +52,8 @@ class VerificationError(Exception):
     """Raised when Sigstore verification fails."""
 
 
-class ModelIntegrityClient:
-    """Client for fetching and verifying model integrity attestations."""
+class IntegriteeClient:
+    """Client for fetching and verifying Integritee attestations."""
 
     def __init__(
         self,
@@ -237,7 +237,7 @@ class ModelIntegrityClient:
         release = self.get_latest_release()
         logger.info("Latest release: %s", release.tag)
 
-        with tempfile.TemporaryDirectory(prefix="model-integrity-") as tmpdir:
+        with tempfile.TemporaryDirectory(prefix="integritee-") as tmpdir:
             dest = Path(tmpdir)
             artifacts = self.download_model_artifacts(release, model, dest)
 

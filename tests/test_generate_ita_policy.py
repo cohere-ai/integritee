@@ -193,7 +193,7 @@ class TestPolicyNonce:
             nonce="99999",
         )
         policy = output.read_text()
-        assert 'model_integrity_nonce := "99999"' in policy
+        assert 'integritee_nonce := "99999"' in policy
 
     def test_different_nonces_produce_different_policies(
         self, artifacts_dir, template_path, tmp_path

@@ -90,7 +90,7 @@ def generate_nonce_rule(nonce: str) -> str:
     need an actual rule — not just a comment — to ensure re-uploads
     (even to the same slot with identical measurements) are accepted.
     """
-    return f'model_integrity_nonce := "{nonce}"'
+    return f'integritee_nonce := "{nonce}"'
 
 
 def generate_matches_tdx_block(model: str, measurements: dict) -> str:

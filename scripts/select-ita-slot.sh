@@ -18,8 +18,8 @@ set -euo pipefail
 
 SLOT_A_ID="cbeedffa-e224-4664-b6b4-573fcd4133d3"
 SLOT_B_ID="ecdf9171-2f85-47b4-9941-703118f731a8"
-SLOT_A_NAME="model-integrity-policy-a"
-SLOT_B_NAME="model-integrity-policy-b"
+SLOT_A_NAME="integritee-policy-a"
+SLOT_B_NAME="integritee-policy-b"
 
 if [[ -n "${ITA_SLOT_OVERRIDE:-}" ]]; then
   echo "Slot override: $ITA_SLOT_OVERRIDE" >&2

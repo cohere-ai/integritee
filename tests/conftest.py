@@ -1,4 +1,4 @@
-"""Shared fixtures for model-integrity tests."""
+"""Shared fixtures for Integritee tests."""
 
 from __future__ import annotations
 

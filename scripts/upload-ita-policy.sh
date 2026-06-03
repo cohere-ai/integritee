@@ -4,7 +4,7 @@
 # Usage:
 #   ./upload-ita-policy.sh \
 #     --policy-file artifacts/ita-attestation-policy.rego \
-#     --policy-name "model-integrity-policy-a" \
+#     --policy-name "integritee-policy-a" \
 #     --policy-id "cbeedffa-e224-4664-b6b4-573fcd4133d3" \
 #     --api-url "$ITA_API_URL" \
 #     --api-key "$ITA_ADMIN_API_KEY"
