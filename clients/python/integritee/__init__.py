@@ -1,4 +1,4 @@
-"""Model Integrity client library.
+"""Integritee client library.
 
 Provides TNG (and other consumers) with:
 - Discovery: fetch the latest GitHub release for a model
@@ -6,14 +6,14 @@ Provides TNG (and other consumers) with:
 - Extraction: pull the policy_id from the verified predicate
 """
 
-from model_integrity.client import (
-    ModelIntegrityClient,
+from integritee.client import (
+    IntegriteeClient,
     ReleaseInfo,
     VerifiedAttestation,
 )
 
 __all__ = [
-    "ModelIntegrityClient",
+    "IntegriteeClient",
     "ReleaseInfo",
     "VerifiedAttestation",
 ]

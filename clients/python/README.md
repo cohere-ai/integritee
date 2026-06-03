@@ -1,19 +1,19 @@
-# Model Integrity Client
+# Integritee Client
 
-Python client for Cohere's model integrity ledger.
+Python client for Cohere's Integritee attestation ledger.
 
 ## Installation
 
 ```bash
-pip install model-integrity-client
+pip install integritee-client
 ```
 
 ## Usage
 
 ```python
-from model_integrity import ModelIntegrityClient
+from integritee import IntegriteeClient
 
-client = ModelIntegrityClient()
+client = IntegriteeClient()
 
 # Full verification flow (discovery -> download -> verify -> extract)
 attestation = client.get_verified_attestation(

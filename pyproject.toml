@@ -1,5 +1,5 @@
 [project]
-name = "model-integrity"
+name = "integritee"
 version = "0.1.0"
 description = "Public attestation ledger for Cohere's confidential computing models"
 requires-python = ">=3.10"

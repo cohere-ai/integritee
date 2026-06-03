@@ -1,6 +1,6 @@
 # Implementation Plan
 
-Living document for what `model-integrity` actually does today, what its
+Living document for what `integritee` actually does today, what its
 moving parts are, and what work is still outstanding. The single source of
 truth for status/ownership is Linear
 [CC-171](https://linear.app/cohereai/issue/CC-171/design-automated-ci-flow-build-measure-publish-policy);
@@ -19,7 +19,7 @@ gateway can require it at attestation time.
 
 ```
 +--------------------+         +------------------------+
-| model-integrity    |         | cloud-api-adaptor      |
+| integritee         |         | cloud-api-adaptor      |
 | (this repo)        |         | (cohere branch)        |
 +--------------------+         +------------------------+
         |                                  |
@@ -131,11 +131,11 @@ served.
 
 | Slot | Name | `policy_id` |
 |---|---|---|
-| A | `model-integrity-policy-a` | `cbeedffa-e224-4664-b6b4-573fcd4133d3` |
-| B | `model-integrity-policy-b` | `ecdf9171-2f85-47b4-9941-703118f731a8` |
+| A | `integritee-policy-a` | `cbeedffa-e224-4664-b6b4-573fcd4133d3` |
+| B | `integritee-policy-b` | `ecdf9171-2f85-47b4-9941-703118f731a8` |
 
 Both currently host the canonical `tdx_h100_pp_image` policy content plus
-one slot-tag rule (`model_integrity_slot_{a,b} := true`) so ITA's
+one slot-tag rule (`integritee_slot_{a,b} := true`) so ITA's
 content-dedup hash treats them as distinct. They will be overwritten
 in alternation when the workflow starts publishing real measurements.
 
@@ -157,7 +157,7 @@ static service-account keys.
 
 - **WIF pool / provider**: `github-ci-pool` / `github-provider` in
   `cohere-confidential-computing`. Attribute condition restricts the
-  pool to `cohere-ai/model-integrity` and `cohere-ai/cloud-api-adaptor`.
+  pool to `cohere-ai/integritee` and `cohere-ai/cloud-api-adaptor`.
 - **Service account this repo impersonates**: `github-ci@cohere-confidential-computing.iam.gserviceaccount.com`
 - **Repo secrets**:
   - `GCP_WORKLOAD_IDENTITY_PROVIDER` — full provider resource name
