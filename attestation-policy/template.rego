@@ -14,19 +14,39 @@ match if {
 
 ${POLICY_NONCE}
 
-tdx_base_checks if {
-    tdx := input.tdx
+# TDX TCB is acceptable if up-to-date OR if out-of-date but within the TTL grace period
+# Based on: https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-platform-tcb.html#tcb-ttl-policy
 
-    tdx.tdx_mrseam == "ab62561a173acbd18ee50ff37750db44184c6cf5e886df74247cc575e163b04c34b9e18374757c235affa614d4127f6b"
+tcb_level_is_up2date if {
+    # Up-to-date TCB status values
+    tcb_level_up2date := {"UpToDate", "SWHardeningNeeded", "ConfigurationNeeded", "ConfigurationAndSWHardeningNeeded"}
+    tcb_level_up2date[input.tdx.attester_tcb_status]
+}
+
+tcb_level_outofdate_within_ttl if {
+    tcb_level_outofdate := {"OutOfDate", "OutOfDateConfigurationNeeded"}
+    tcb_level_outofdate[input.tdx.attester_tcb_status]
+    attester_tcb_date_ns := time.parse_rfc3339_ns(input.tdx.attester_tcb_date)
+    ttl_period := 6 # months
+    expiry_date_ns := time.add_date(attester_tcb_date_ns, 0, ttl_period, 0)
+    expiry_date_ns > time.now_ns()
+}
+
+tcb_level_acceptable if { tcb_level_is_up2date }
+tcb_level_acceptable if { tcb_level_outofdate_within_ttl }
+
+tdx_base_checks if {
+    tcb_level_acceptable
+
+    tdx := input.tdx
     tdx.tdx_mrsignerseam == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     tdx.tdx_mrconfigid == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     tdx.tdx_mrowner == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     tdx.tdx_mrownerconfig == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
     tdx.tdx_seam_attributes == "0000000000000000"
     tdx.tdx_td_attributes == "0000001000000000"
-    tdx.tdx_tee_tcb_svn == "0f010a00000000000000000000000000"
     tdx.tdx_is_debuggable == false
-    tdx.tdx_seamsvn == 271
+    tdx.tdx_seamsvn >= 271
 }
 
 ${TDX_MATCH_BLOCKS}
