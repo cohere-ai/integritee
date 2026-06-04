@@ -84,7 +84,7 @@ class TestPolicyStructure:
         assert policy.count("tdx_base_checks if {") == 1
         assert "tdx.tdx_mrseam ==" in policy
         assert "tdx.tdx_is_debuggable == false" in policy
-        assert "tdx.tdx_seamsvn == 269" in policy
+        assert "tdx.tdx_seamsvn == 271" in policy
 
     def test_matches_tdx_references_base_checks(
         self, artifacts_dir, template_path, tmp_path
@@ -127,7 +127,7 @@ class TestTdxBlockContent:
                 f"Expected {field} exactly once (in tdx_base_checks)"
             )
 
-        assert policy.count("tdx.tdx_seamsvn == 269") == 1
+        assert policy.count("tdx.tdx_seamsvn == 271") == 1
 
     def test_debuggable_check_in_base_checks(
         self, artifacts_dir, template_path, tmp_path
