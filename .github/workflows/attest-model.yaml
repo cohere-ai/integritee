@@ -32,14 +32,14 @@ permissions:
   packages: read
 
 env:
-  KATA_VERSION: "3.27.0"
+  KATA_VERSION: "3.29.0"
   CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
   # TODO: remove this branch pin once the cvm-measure CLI/UKI extraction branch merges to main.
   CVM_MEASURE_REF: "alhassankhedr/cc-167-tdx-measurement-toolkit"
   PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
   BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
   BLOBHEART_REPO: "cohere-ai/blobheart"
-  BLOBHEART_REF: "1a8e92e08a087b720711d698698c41d3c8e99fe4"
+  BLOBHEART_REF: "aef8d3c58cf568d8d10b7450213b3918a99bbcd4"
   BLOBHEART_INITDATA_DIR: "k8s/geofence/components/models_v2/generated"
 
 jobs:
