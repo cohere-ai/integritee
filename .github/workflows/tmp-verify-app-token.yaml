@@ -1,0 +1,39 @@
+name: tmp verify app token
+
+# TEMPORARY: one-off verification that the model-integrity GitHub App token
+# can read the two cross-repo Internal repos (cohere-cc-baselines, blobheart).
+# Triggers on push to the migration branch because workflow_dispatch only works
+# from the default branch. DELETE this file once verification passes.
+on:
+  push:
+    branches:
+      - vijay/migrate-attest-model-pat
+
+# No default GITHUB_TOKEN permissions needed — we authenticate solely via the
+# minted App token below.
+permissions: {}
+
+jobs:
+  verify:
+    name: Verify App token cross-repo reads
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: cohere-cc-baselines,blobheart
+
+      - name: Verify cross-repo Contents read
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          echo "== cohere-cc-baselines (top-level contents) =="
+          gh api /repos/cohere-ai/cohere-cc-baselines/contents --jq '.[].name'
+          echo "== blobheart (top-level contents) =="
+          gh api /repos/cohere-ai/blobheart/contents --jq '.[].name'
+          echo "SUCCESS: App token can read both cross-repo Internal repos."
