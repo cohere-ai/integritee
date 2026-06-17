@@ -31,6 +31,11 @@ from pathlib import Path
 PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
+DEFAULT_TEMPORARY_GCP_TDX_FIRMWARE_ALLOWLIST = (
+    Path(__file__).resolve().parents[1]
+    / "attestation-policy"
+    / "temporary-gcp-tdx-firmware-allowlist.json"
+)
 
 DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
 
@@ -93,9 +98,48 @@ def generate_nonce_rule(nonce: str) -> str:
     return f'integritee_nonce := "{nonce}"'
 
 
-def generate_matches_tdx_block(model: str, measurements: dict) -> str:
+def load_temporary_gcp_tdx_firmware_allowlist(path: Path | None) -> list[dict]:
+    """Load temporary GCP firmware-derived MRTD/RTMR0 pairs.
+
+    This is a short-term compatibility bridge for Google-managed firmware
+    rollouts while ITA policy generation still relies on static measurements.
+    Remove this once policies consume Google-signed launch endorsements or a
+    proper baseline refresh flow.
+    """
+    if path is None or not path.exists():
+        return []
+
+    allowlist = json.loads(path.read_text())
+    if not isinstance(allowlist, list):
+        print(f"ERROR: {path} must contain a JSON list", file=sys.stderr)
+        sys.exit(1)
+
+    for entry in allowlist:
+        name = entry.get("name", "<unnamed>")
+        for field in ("mrtd", "rtmr0"):
+            val = entry.get(field)
+            if not isinstance(val, str) or len(val) != 96:
+                print(
+                    f"ERROR: temporary GCP TDX firmware allowlist entry "
+                    f"{name} has invalid {field}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+    return allowlist
+
+
+def generate_matches_tdx_block(
+    model: str,
+    measurements: dict,
+    temporary_firmware_label: str | None = None,
+) -> str:
+    comment = f"# Model: {model}"
+    if temporary_firmware_label:
+        comment += f" (TEMPORARY GCP firmware allowlist: {temporary_firmware_label})"
+
     lines = [
-        f"# Model: {model}",
+        comment,
         "matches_tdx if {",
         "    tdx_base_checks",
         "    tdx := input.tdx",
@@ -109,6 +153,27 @@ def generate_matches_tdx_block(model: str, measurements: dict) -> str:
 
     lines.append("}")
     return "\n".join(lines)
+
+
+def expand_measurements_for_temporary_gcp_firmware_allowlist(
+    measurements: dict,
+    temporary_firmware_allowlist: list[dict],
+) -> list[tuple[str | None, dict]]:
+    variants: list[tuple[str | None, dict]] = [(None, measurements)]
+    seen = {(measurements.get("mrtd"), measurements.get("rtmr0"))}
+
+    for firmware in temporary_firmware_allowlist:
+        key = (firmware["mrtd"], firmware["rtmr0"])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        variant = dict(measurements)
+        variant["mrtd"] = firmware["mrtd"]
+        variant["rtmr0"] = firmware["rtmr0"]
+        variants.append((firmware.get("name"), variant))
+
+    return variants
 
 
 def main() -> None:
@@ -140,6 +205,15 @@ def main() -> None:
         "content-dedup hash differs on every upload (e.g. a CI "
         "run ID or timestamp)",
     )
+    parser.add_argument(
+        "--temporary-gcp-tdx-firmware-allowlist",
+        type=Path,
+        default=DEFAULT_TEMPORARY_GCP_TDX_FIRMWARE_ALLOWLIST,
+        help="Temporary workaround: JSON list of additional GCP "
+        "firmware-derived MRTD/RTMR0 pairs to allow. RTMR1-3 remain "
+        "model-specific from measurements.json. Remove once we have a "
+        "long-term Google endorsement or baseline-refresh flow.",
+    )
     args = parser.parse_args()
 
     template = Path(args.template).read_text()
@@ -151,6 +225,9 @@ def main() -> None:
         sys.exit(1)
 
     measurements_dir = Path(args.measurements_dir)
+    temporary_firmware_allowlist = load_temporary_gcp_tdx_firmware_allowlist(
+        args.temporary_gcp_tdx_firmware_allowlist
+    )
     blocks: list[str] = []
     model_names: list[str] = []
 
@@ -162,8 +239,13 @@ def main() -> None:
             continue
 
         measurements = json.loads(meas_file.read_text())
-        block = generate_matches_tdx_block(model_dir.name, measurements)
-        blocks.append(block)
+        for label, variant in expand_measurements_for_temporary_gcp_firmware_allowlist(
+            measurements, temporary_firmware_allowlist
+        ):
+            block = generate_matches_tdx_block(
+                model_dir.name, variant, temporary_firmware_label=label
+            )
+            blocks.append(block)
         model_names.append(model_dir.name)
 
     if not blocks:
