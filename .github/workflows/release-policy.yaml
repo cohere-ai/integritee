@@ -1,4 +1,4 @@
-name: Attest Models
+name: Release Policy
 
 on:
   workflow_dispatch:
@@ -118,15 +118,16 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
-            eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./.github/workflows/attest-model/select-ita-slot.sh)"
+            eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./.github/workflows/release-policy/select-ita-slot.sh)"
           else
-            eval "$(./.github/workflows/attest-model/select-ita-slot.sh)"
+            eval "$(./.github/workflows/release-policy/select-ita-slot.sh)"
           fi
           echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
           echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
           echo "policy_name=$ITA_POLICY_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload policy to ITA
+        if: inputs.dry_run == false
         id: ita
         uses: ./.github/actions/upload-ita-policy
         with:
