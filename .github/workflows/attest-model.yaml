@@ -39,9 +39,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install Python dependencies
-        run: pip install pyyaml
-
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
@@ -54,9 +51,6 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      # ----------------------------------------------------------------
-      # Mint a short-lived GitHub App token for cross-repo reads.
-      # ----------------------------------------------------------------
       - name: Mint GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
@@ -70,44 +64,7 @@ jobs:
         run: echo "${{ github.token }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
       # ----------------------------------------------------------------
-      # Generate policy from the committed manifest
-      # ----------------------------------------------------------------
-      - name: Generate policy
-        id: policy
-        uses: ./.github/actions/generate-policy
-        with:
-          manifest-file: attestation-policy/policy-manifest.yaml
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      # ----------------------------------------------------------------
-      # Upload to ITA (blue/green slot selection)
-      # ----------------------------------------------------------------
-      - name: Select ITA slot
-        id: slot
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
-            eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./scripts/select-ita-slot.sh)"
-          else
-            eval "$(./scripts/select-ita-slot.sh)"
-          fi
-          echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
-          echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
-          echo "policy_name=$ITA_POLICY_NAME" >> "$GITHUB_OUTPUT"
-
-      - name: Upload policy to ITA
-        id: ita
-        uses: ./.github/actions/upload-ita-policy
-        with:
-          policy-file: ${{ steps.policy.outputs.policy-file }}
-          policy-id: ${{ steps.slot.outputs.policy_id }}
-          policy-name: ${{ steps.slot.outputs.policy_name }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
-
-      # ----------------------------------------------------------------
-      # Build predicates and sign with Sigstore (per model)
+      # Initialize predicate with workflow-level context
       # ----------------------------------------------------------------
       - name: Fetch previous release log index
         id: chain
@@ -121,56 +78,83 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Build predicates
+      - name: Initialize predicate
         run: |
-          python3 scripts/build-predicate.py \
-            --artifacts-dir "${{ steps.policy.outputs.measurements-dir }}" \
-            --cvm-artifacts-dir "${{ steps.policy.outputs.cvm-artifacts-dir }}" \
-            --policy-id "${{ steps.ita.outputs.policy-id }}" \
-            --version "${{ inputs.version }}" \
-            --cvm-measure-version "${{ steps.policy.outputs.cvm-measure-version }}" \
-            --previous-log-index "${{ steps.chain.outputs.previous_log_index }}"
+          python3 -c "
+          import json, subprocess
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
+          with open('predicate.json', 'w') as f:
+              json.dump({
+                  'version': '${{ inputs.version }}',
+                  'manifest_commit': commit,
+                  'previous_rekor_log_index': ${{ steps.chain.outputs.previous_log_index }},
+              }, f, indent=2)
+              f.write('\n')
+          "
 
-      - name: Sign attestations with Sigstore (per model)
+      # ----------------------------------------------------------------
+      # Generate policy (appends targets + cvm_measure_version to predicate)
+      # ----------------------------------------------------------------
+      - name: Generate policy
+        uses: ./.github/actions/generate-policy
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+          github-token: ${{ steps.app-token.outputs.token }}
+          output-artifacts-dir: artifacts
+          output-policy-file: attestation-policy.rego
+          predicate-file: predicate.json
+
+      # ----------------------------------------------------------------
+      # Upload to ITA (blue/green slot selection)
+      # ----------------------------------------------------------------
+      - name: Select ITA slot
+        id: slot
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.policy.outputs.models }}"
-          ARTIFACTS_DIR="${{ steps.policy.outputs.measurements-dir }}"
+          if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
+            eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./.github/workflows/attest-model/select-ita-slot.sh)"
+          else
+            eval "$(./scripts/select-ita-slot.sh)"
+          fi
+          echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
+          echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
+          echo "policy_name=$ITA_POLICY_NAME" >> "$GITHUB_OUTPUT"
 
-          for MODEL in "${MODEL_ARRAY[@]}"; do
-            MODEL=$(echo "$MODEL" | xargs)
-            MEAS_FILE="${ARTIFACTS_DIR}/${MODEL}/measurements.json"
-            PREDICATE_FILE="${ARTIFACTS_DIR}/${MODEL}/predicate.json"
+      - name: Upload policy to ITA
+        id: ita
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: attestation-policy.rego
+          policy-id: ${{ steps.slot.outputs.policy_id }}
+          policy-name: ${{ steps.slot.outputs.policy_name }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+          predicate-file: predicate.json
 
-            if [[ ! -f "$MEAS_FILE" || ! -f "$PREDICATE_FILE" ]]; then
-              echo "Skipping $MODEL (missing artifacts)"
-              continue
-            fi
-
-            echo "=========================================="
-            echo "Signing attestation for: $MODEL"
-            echo "=========================================="
-
-            cosign attest-blob \
-              --predicate "$PREDICATE_FILE" \
-              --type "https://cohere.com/attestation-policy-ledger/v1" \
-              --bundle "${ARTIFACTS_DIR}/${MODEL}/attestation.sigstore.json" \
-              -y \
-              "$MEAS_FILE"
-
-            echo "Bundle written: ${ARTIFACTS_DIR}/${MODEL}/attestation.sigstore.json"
-          done
+      # ----------------------------------------------------------------
+      # Sign policy with Sigstore
+      # ----------------------------------------------------------------
+      - name: Sign policy with Sigstore
+        run: |
+          cosign attest-blob \
+            --predicate predicate.json \
+            --type "https://cohere.com/attestation-policy/v1" \
+            --bundle attestation.sigstore.json \
+            -y \
+            attestation-policy.rego
 
       # ----------------------------------------------------------------
       # Create GitHub Release
       # ----------------------------------------------------------------
       - name: Prepare release assets
-        id: assets
         run: |
           mkdir -p release-assets
-          ARTIFACTS_DIR="${{ steps.policy.outputs.measurements-dir }}"
+          cp attestation-policy.rego release-assets/attestation-policy.rego
+          cp predicate.json release-assets/predicate.json
+          cp attestation.sigstore.json release-assets/attestation.sigstore.json
 
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.policy.outputs.models }}"
-          RELEASE_BODY="# Model Attestation Release ${{ inputs.version }}\n\n"
+          RELEASE_BODY="# Attestation Policy Release ${{ inputs.version }}\n\n"
 
           if [[ -n "${{ inputs.reason }}" ]]; then
             RELEASE_BODY+="**Reason:** ${{ inputs.reason }}\n\n"
@@ -178,23 +162,8 @@ jobs:
 
           RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy-id }}\`\n"
           RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.slot.outputs.policy_slot }}\`\n\n"
-          RELEASE_BODY+="## Per-Model Artifacts\n\n"
-
-          for MODEL in "${MODEL_ARRAY[@]}"; do
-            MODEL=$(echo "$MODEL" | xargs)
-
-            for f in measurements.json predicate.json attestation.sigstore.json; do
-              if [[ -f "${ARTIFACTS_DIR}/${MODEL}/${f}" ]]; then
-                cp "${ARTIFACTS_DIR}/${MODEL}/${f}" "release-assets/${MODEL}-${f}"
-              fi
-            done
-
-            MEAS=$(cat "${ARTIFACTS_DIR}/${MODEL}/measurements.json" 2>/dev/null || echo "{}")
-            RELEASE_BODY+="### ${MODEL}\n\n"
-            RELEASE_BODY+="\`\`\`json\n${MEAS}\n\`\`\`\n\n"
-          done
-
-          cp "${{ steps.policy.outputs.policy-file }}" release-assets/ita-attestation-policy.rego
+          RELEASE_BODY+="## Predicate\n\n"
+          RELEASE_BODY+="\`\`\`json\n$(cat predicate.json)\n\`\`\`\n"
 
           echo -e "$RELEASE_BODY" > release-body.md
 
@@ -202,14 +171,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ inputs.version }}"
-
-          ASSET_FLAGS=""
-          for f in $(find release-assets -type f); do
-            ASSET_FLAGS="$ASSET_FLAGS $f"
-          done
-
-          gh release create "$TAG" \
-            --title "Model Attestation $TAG" \
+          gh release create "${{ inputs.version }}" \
+            --title "Attestation Policy ${{ inputs.version }}" \
             --notes-file release-body.md \
-            $ASSET_FLAGS
+            release-assets/*

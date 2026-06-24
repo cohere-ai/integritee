@@ -6,7 +6,6 @@ import base64
 import gzip
 import json
 import subprocess
-import sys
 from pathlib import Path
 
 
@@ -23,7 +22,6 @@ def decode_cc_init_data(initdata_b64: str) -> bytes:
 
 
 def compute_measurements(
-    model: str,
     ram_gib: int,
     initdata_b64: str,
     firmware_path: Path,
@@ -35,6 +33,9 @@ def compute_measurements(
     """Compute TDX measurements and write measurements.json."""
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    initdata_toml = output_dir / "initdata.toml"
+    initdata_toml.write_bytes(decode_cc_init_data(initdata_b64))
+
     cmd = [
         "cvm-measure", "tdx",
         "--firmware", str(firmware_path),
@@ -42,15 +43,9 @@ def compute_measurements(
         "--disk", str(disk_path),
         "--baseline", str(baseline_path),
         "--ram", str(ram_gib),
+        "--initdata", str(initdata_toml),
         "--output-format", "json",
     ]
-
-    if initdata_b64:
-        initdata_toml = output_dir / "initdata.toml"
-        initdata_toml.write_bytes(decode_cc_init_data(initdata_b64))
-        cmd.extend(["--initdata", str(initdata_toml)])
-    else:
-        print(f"  WARNING: {model}: no initdata, computing without RTMR3")
 
     print(f"  $ {' '.join(cmd)}")
     try:

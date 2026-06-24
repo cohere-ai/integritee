@@ -4,13 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       blobheart_refs:
-        description: "Comma-separated blobheart commit SHAs to derive manifests from"
+        description: "Space-separated blobheart commit SHAs to derive manifests from"
         required: true
         type: string
 
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   add-targets:
@@ -33,32 +32,15 @@ jobs:
 
       - name: Derive manifests from blobheart refs
         id: derive
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          IFS=',' read -ra REFS <<< "${{ inputs.blobheart_refs }}"
-          MANIFEST_FILES=""
-
-          for REF in "${REFS[@]}"; do
-            REF=$(echo "$REF" | xargs)
-            echo "========================================"
-            echo "Deriving manifest from blobheart ref: $REF"
-            echo "========================================"
-
-            OUTPUT="/tmp/manifest-${REF}.yaml"
-            python3 .github/actions/derive-manifest/derive.py \
-              --blobheart-ref "$REF" \
-              --output "$OUTPUT"
-
-            MANIFEST_FILES="$MANIFEST_FILES $OUTPUT"
-          done
-
-          echo "manifest-files=$MANIFEST_FILES" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/derive-manifest
+        with:
+          blobheart-refs: ${{ inputs.blobheart_refs }}
+          github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Merge into policy manifest
         id: merge
         run: |
-          python3 scripts/merge-manifest.py \
+          python3 .github/workflows/add-from-blobheart/merge-manifest.py \
             --base attestation-policy/policy-manifest.yaml \
             --new ${{ steps.derive.outputs.manifest-files }} \
             --output attestation-policy/policy-manifest.yaml
@@ -75,28 +57,9 @@ jobs:
             git diff attestation-policy/policy-manifest.yaml
           fi
 
-      - name: Create PR
+      - name: Commit and push
         if: steps.changes.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          BRANCH="add-blobheart-targets-$(date +%Y%m%d-%H%M%S)"
-          git checkout -b "$BRANCH"
           git add attestation-policy/policy-manifest.yaml
-          git commit -m "$(cat <<'EOF'
-          Add targets from blobheart refs
-
-          Blobheart refs: ${{ inputs.blobheart_refs }}
-          EOF
-          )"
-          git push -u origin "$BRANCH"
-          gh pr create \
-            --title "Add attestation targets from blobheart" \
-            --body "$(cat <<'EOF'
-          ## Summary
-
-          Adds new measurement targets to `attestation-policy/policy-manifest.yaml` derived from blobheart ref(s): `${{ inputs.blobheart_refs }}`.
-
-          Targets were resolved via the `derive-manifest` action and merged with content-addressed dedup.
-          EOF
-          )"
+          git commit -m "feat(policy): add attestation targets from blobheart refs ${{ inputs.blobheart_refs }}"
+          git push

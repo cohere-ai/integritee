@@ -22,4 +22,4 @@ runs:
         POLICY_ID: ${{ inputs.policy-id }}
         ITA_API_KEY: ${{ inputs.ita-api-key }}
         ITA_API_URL: ${{ inputs.ita-api-url }}
-      run: "${{ github.action_path }}/delete.sh"
+      run: python3 "${{ github.action_path }}/delete.py"
