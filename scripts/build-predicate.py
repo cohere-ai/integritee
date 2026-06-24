@@ -11,7 +11,6 @@ Usage:
         --cvm-artifacts-dir cvm-artifacts/ \
         --policy-id <uuid> \
         --version v0.0.1 \
-        --genpolicy-version 3.12.0 \
         --cvm-measure-version 0.3.0 \
         --previous-log-index 0
 """
@@ -62,7 +61,6 @@ def build_predicate(
     initdata_hash: str,
     previous_rekor_log_index: int,
     release_version: str,
-    genpolicy_version: str,
     cvm_measure_version: str,
     firmware_ref: str,
     uki_ref: str,
@@ -79,7 +77,6 @@ def build_predicate(
         "initdata_hash": initdata_hash,
         "previous_rekor_log_index": previous_rekor_log_index,
         "tool_versions": {
-            "genpolicy": genpolicy_version,
             "cvm_measure": cvm_measure_version,
         },
         "source_artifacts": {
@@ -97,7 +94,6 @@ def main() -> None:
                         help="Directory containing per-model meta.json files")
     parser.add_argument("--policy-id", required=True)
     parser.add_argument("--version", required=True)
-    parser.add_argument("--genpolicy-version", required=True)
     parser.add_argument("--cvm-measure-version", required=True)
     parser.add_argument("--previous-log-index", type=int, default=0)
     args = parser.parse_args()
@@ -133,7 +129,6 @@ def main() -> None:
             initdata_hash=initdata_hash,
             previous_rekor_log_index=args.previous_log_index,
             release_version=args.version,
-            genpolicy_version=args.genpolicy_version,
             cvm_measure_version=args.cvm_measure_version,
             firmware_ref=meta["firmware_ref"],
             uki_ref=meta["uki_ref"],

@@ -1,0 +1,41 @@
+name: "Upload ITA Policy"
+description: "Create or update an Intel Trust Authority attestation policy"
+
+inputs:
+  policy-file:
+    description: "Path to the .rego policy file"
+    required: true
+  policy-id:
+    description: "Existing policy ID to update (omit to create a new policy)"
+    required: false
+  policy-name:
+    description: "Human-readable name for the policy"
+    required: true
+  ita-api-key:
+    description: "ITA admin API key"
+    required: true
+  ita-api-url:
+    description: "ITA API base URL"
+    required: false
+    default: "https://api.trustauthority.intel.com"
+
+outputs:
+  policy-id:
+    description: "ID of the created/updated policy"
+    value: ${{ steps.upload.outputs.policy-id }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Upload policy to ITA
+      id: upload
+      shell: bash
+      env:
+        POLICY_FILE: ${{ inputs.policy-file }}
+        POLICY_ID: ${{ inputs.policy-id }}
+        POLICY_NAME: ${{ inputs.policy-name }}
+        ITA_API_KEY: ${{ inputs.ita-api-key }}
+        ITA_API_URL: ${{ inputs.ita-api-url }}
+      run: |
+        RESULT=$("${{ github.action_path }}/upload.sh")
+        echo "policy-id=$RESULT" >> "$GITHUB_OUTPUT"

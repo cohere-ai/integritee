@@ -1,0 +1,34 @@
+name: "Derive Manifest"
+description: "Derive a policy manifest from a blobheart ref with fully resolved targets"
+
+inputs:
+  blobheart-ref:
+    description: "Blobheart commit SHA to derive a manifest from"
+    required: true
+  github-token:
+    description: "GitHub token with read access to blobheart"
+    required: true
+
+outputs:
+  manifest-file:
+    description: "Path to the derived policy-manifest.yaml"
+    value: ${{ steps.derive.outputs.manifest-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install pyyaml >/dev/null 2>&1
+
+    - name: Derive manifest from blobheart ref
+      id: derive
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-${{ inputs.blobheart-ref }}.yaml"
+        python3 "${{ github.action_path }}/derive.py" \
+          --blobheart-ref "${{ inputs.blobheart-ref }}" \
+          --output "$MANIFEST_FILE"
+        echo "manifest-file=$MANIFEST_FILE" >> "$GITHUB_OUTPUT"

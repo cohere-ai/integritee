@@ -11,10 +11,6 @@ on:
         description: "Reason for this release"
         required: false
         type: string
-      models:
-        description: "Comma-separated model names to attest (leave empty for all)"
-        required: false
-        type: string
       ita_slot:
         description: "ITA policy slot override (auto = blue/green rotation)"
         required: false
@@ -31,17 +27,6 @@ permissions:
   attestations: write
   packages: read
 
-env:
-  KATA_VERSION: "3.29.0"
-  CVM_MEASURE_REPO: "https://github.com/cohere-ai/cvm-measure.git"
-  # TODO: remove this branch pin once the cvm-measure CLI/UKI extraction branch merges to main.
-  CVM_MEASURE_REF: "alhassankhedr/cc-167-tdx-measurement-toolkit"
-  PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
-  BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
-  BLOBHEART_REPO: "cohere-ai/blobheart"
-  BLOBHEART_REF: "cdd8f1e95524667d24fcba037cbc02425d2d2815"
-  BLOBHEART_INITDATA_DIR: "k8s/geofence/components/models_v2/generated"
-
 jobs:
   attest:
     runs-on: ubuntu-latest
@@ -49,9 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
-      # ----------------------------------------------------------------
-      # Setup: tools and dependencies
-      # ----------------------------------------------------------------
       - name: Install Python
         uses: actions/setup-python@v6
         with:
@@ -60,19 +42,8 @@ jobs:
       - name: Install Python dependencies
         run: pip install pyyaml
 
-      - name: Install cvm-measure
-        run: |
-          git clone --depth 1 --branch "${CVM_MEASURE_REF}" "${CVM_MEASURE_REPO}" /tmp/cvm-measure
-          pip install /tmp/cvm-measure
-
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
-
-      - name: Install oras
-        uses: oras-project/setup-oras@v2
-
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y mtools zstd
 
       - name: Authenticate to GCP
         uses: google-github-actions/auth@v3
@@ -81,49 +52,10 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
 
       - name: Configure Docker for Artifact Registry
-        run: |
-          gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-
-      - name: Fetch genpolicy binary
-        run: |
-          ./scripts/fetch-genpolicy.sh \
-            --version "$KATA_VERSION" \
-            --output /usr/local/bin/genpolicy
-          echo "GENPOLICY_VERSION=${KATA_VERSION}" >> "$GITHUB_ENV"
-
-      - name: Get cvm-measure version
-        run: |
-          CVM_MEASURE_VERSION=$(pip show cvm-measure 2>/dev/null | grep '^Version:' | cut -d' ' -f2 || echo "unknown")
-          echo "CVM_MEASURE_VERSION=$CVM_MEASURE_VERSION" >> "$GITHUB_ENV"
-
-      # ----------------------------------------------------------------
-      # Resolve model list
-      # ----------------------------------------------------------------
-      - name: Resolve models
-        id: models
-        run: |
-          if [[ -n "${{ inputs.models }}" ]]; then
-            MODELS="${{ inputs.models }}"
-          else
-            MODELS=$(ls -1 models/ | tr '\n' ',' | sed 's/,$//')
-          fi
-          echo "list=$MODELS" >> "$GITHUB_OUTPUT"
-          echo "Attesting models: $MODELS"
-
-      # ----------------------------------------------------------------
-      # Resolve per-model CVM config
-      # ----------------------------------------------------------------
-      - name: Resolve per-model CVM config
-        run: |
-          python3 scripts/resolve-cvm-config.py \
-            --models "${{ steps.models.outputs.list }}" \
-            --models-dir models/ \
-            --output-dir cvm-artifacts/
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
       # ----------------------------------------------------------------
       # Mint a short-lived GitHub App token for cross-repo reads.
-      # cohere-cc-baselines and blobheart are Internal repos, so the
-      # auto GITHUB_TOKEN cannot read them — the App token can.
       # ----------------------------------------------------------------
       - name: Mint GitHub App token
         id: app-token
@@ -134,101 +66,45 @@ jobs:
           owner: cohere-ai
           repositories: cohere-cc-baselines,blobheart
 
-      # ----------------------------------------------------------------
-      # Fetch CVM artifacts (per model, deduplicated)
-      # ----------------------------------------------------------------
-      - name: Fetch baselines
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          python3 scripts/fetch-baselines.py \
-            --models "${{ steps.models.outputs.list }}" \
-            --cvm-artifacts-dir cvm-artifacts/
-
-      - name: Fetch OVMF firmware
-        run: |
-          python3 scripts/fetch-firmware.py \
-            --models "${{ steps.models.outputs.list }}" \
-            --cvm-artifacts-dir cvm-artifacts/
-
       - name: Log in to GHCR
         run: echo "${{ github.token }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
 
-      - name: Extract UKI from podvm images
-        run: |
-          python3 scripts/fetch-uki.py \
-            --models "${{ steps.models.outputs.list }}" \
-            --cvm-artifacts-dir cvm-artifacts/
+      # ----------------------------------------------------------------
+      # Generate policy from the committed manifest
+      # ----------------------------------------------------------------
+      - name: Generate policy
+        id: policy
+        uses: ./.github/actions/generate-policy
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+          github-token: ${{ steps.app-token.outputs.token }}
 
       # ----------------------------------------------------------------
-      # Fetch initdata from blobheart (short-circuits genpolicy)
+      # Upload to ITA (blue/green slot selection)
       # ----------------------------------------------------------------
-      - name: Fetch initdata from blobheart
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          python3 scripts/fetch-initdata.py \
-            --models "${{ steps.models.outputs.list }}" \
-            --artifacts-dir artifacts/
-
-      # ----------------------------------------------------------------
-      # Per-model loop: cvm-measure (genpolicy skipped, initdata from blobheart)
-      # ----------------------------------------------------------------
-      - name: Generate policies and measurements
-        run: |
-          python3 scripts/generate-measurements.py \
-            --models "${{ steps.models.outputs.list }}" \
-            --models-dir models/ \
-            --artifacts-dir artifacts/ \
-            --cvm-artifacts-dir cvm-artifacts/ \
-            --base-rules rules/rules.rego \
-            --base-settings rules/genpolicy-settings.json
-
-      # ----------------------------------------------------------------
-      # Generate ITA policy (single policy, all models)
-      # ----------------------------------------------------------------
-      - name: Generate ITA attestation policy
-        run: |
-          python3 scripts/generate-ita-policy.py \
-            --measurements-dir artifacts/ \
-            --cvm-artifacts-dir cvm-artifacts/ \
-            --template attestation-policy/template.rego \
-            --nonce "${{ github.run_id }}" \
-            --output artifacts/ita-attestation-policy.rego
-
-      # ----------------------------------------------------------------
-      # Upload to ITA
-      # ----------------------------------------------------------------
-      - name: Upload policy to ITA
-        id: ita
+      - name: Select ITA slot
+        id: slot
         env:
           GH_TOKEN: ${{ github.token }}
-          ITA_API_URL: ${{ secrets.ITA_API_URL }}
-          ITA_ADMIN_API_KEY: ${{ secrets.ITA_ADMIN_API_KEY }}
         run: |
-          # Sets ITA_POLICY_SLOT, ITA_POLICY_ID, ITA_POLICY_NAME
           if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
             eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./scripts/select-ita-slot.sh)"
           else
             eval "$(./scripts/select-ita-slot.sh)"
           fi
-          echo "ITA_POLICY_SLOT=$ITA_POLICY_SLOT"
-          echo "ITA_POLICY_ID=$ITA_POLICY_ID"
-          echo "ITA_POLICY_NAME=$ITA_POLICY_NAME"
-
-          if [[ -n "$ITA_API_URL" && -n "$ITA_ADMIN_API_KEY" ]]; then
-            ./scripts/upload-ita-policy.sh \
-              --policy-file artifacts/ita-attestation-policy.rego \
-              --policy-name "$ITA_POLICY_NAME" \
-              --policy-id "$ITA_POLICY_ID" \
-              --api-url "$ITA_API_URL" \
-              --api-key "$ITA_ADMIN_API_KEY"
-          else
-            echo "WARNING: ITA credentials not configured, skipping upload"
-          fi
-
-          echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
           echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
+          echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
+          echo "policy_name=$ITA_POLICY_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Upload policy to ITA
+        id: ita
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: ${{ steps.policy.outputs.policy-file }}
+          policy-id: ${{ steps.slot.outputs.policy_id }}
+          policy-name: ${{ steps.slot.outputs.policy_name }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
 
       # ----------------------------------------------------------------
       # Build predicates and sign with Sigstore (per model)
@@ -240,8 +116,6 @@ jobs:
           LATEST=$(gh release view --json tagName -q .tagName 2>/dev/null || echo "")
           if [[ -n "$LATEST" ]]; then
             echo "Previous release: $LATEST"
-            # TODO: extract Rekor log index from previous release's attestation bundle
-            # For now, use 0 (genesis)
           fi
           echo "previous_log_index=$PREV_INDEX" >> "$GITHUB_OUTPUT"
         env:
@@ -250,22 +124,22 @@ jobs:
       - name: Build predicates
         run: |
           python3 scripts/build-predicate.py \
-            --artifacts-dir artifacts/ \
-            --cvm-artifacts-dir cvm-artifacts/ \
-            --policy-id "${{ steps.ita.outputs.policy_id }}" \
+            --artifacts-dir "${{ steps.policy.outputs.measurements-dir }}" \
+            --cvm-artifacts-dir "${{ steps.policy.outputs.cvm-artifacts-dir }}" \
+            --policy-id "${{ steps.ita.outputs.policy-id }}" \
             --version "${{ inputs.version }}" \
-            --genpolicy-version "${{ env.GENPOLICY_VERSION }}" \
-            --cvm-measure-version "${{ env.CVM_MEASURE_VERSION }}" \
+            --cvm-measure-version "${{ steps.policy.outputs.cvm-measure-version }}" \
             --previous-log-index "${{ steps.chain.outputs.previous_log_index }}"
 
       - name: Sign attestations with Sigstore (per model)
         run: |
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.models.outputs.list }}"
+          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.policy.outputs.models }}"
+          ARTIFACTS_DIR="${{ steps.policy.outputs.measurements-dir }}"
 
           for MODEL in "${MODEL_ARRAY[@]}"; do
             MODEL=$(echo "$MODEL" | xargs)
-            MEAS_FILE="artifacts/${MODEL}/measurements.json"
-            PREDICATE_FILE="artifacts/${MODEL}/predicate.json"
+            MEAS_FILE="${ARTIFACTS_DIR}/${MODEL}/measurements.json"
+            PREDICATE_FILE="${ARTIFACTS_DIR}/${MODEL}/predicate.json"
 
             if [[ ! -f "$MEAS_FILE" || ! -f "$PREDICATE_FILE" ]]; then
               echo "Skipping $MODEL (missing artifacts)"
@@ -279,11 +153,11 @@ jobs:
             cosign attest-blob \
               --predicate "$PREDICATE_FILE" \
               --type "https://cohere.com/attestation-policy-ledger/v1" \
-              --bundle "artifacts/${MODEL}/attestation.sigstore.json" \
+              --bundle "${ARTIFACTS_DIR}/${MODEL}/attestation.sigstore.json" \
               -y \
               "$MEAS_FILE"
 
-            echo "Bundle written: artifacts/${MODEL}/attestation.sigstore.json"
+            echo "Bundle written: ${ARTIFACTS_DIR}/${MODEL}/attestation.sigstore.json"
           done
 
       # ----------------------------------------------------------------
@@ -293,33 +167,34 @@ jobs:
         id: assets
         run: |
           mkdir -p release-assets
+          ARTIFACTS_DIR="${{ steps.policy.outputs.measurements-dir }}"
 
-          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.models.outputs.list }}"
+          IFS=',' read -ra MODEL_ARRAY <<< "${{ steps.policy.outputs.models }}"
           RELEASE_BODY="# Model Attestation Release ${{ inputs.version }}\n\n"
 
           if [[ -n "${{ inputs.reason }}" ]]; then
             RELEASE_BODY+="**Reason:** ${{ inputs.reason }}\n\n"
           fi
 
-          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy_id }}\`\n"
-          RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.ita.outputs.policy_slot }}\`\n\n"
+          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy-id }}\`\n"
+          RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.slot.outputs.policy_slot }}\`\n\n"
           RELEASE_BODY+="## Per-Model Artifacts\n\n"
 
           for MODEL in "${MODEL_ARRAY[@]}"; do
             MODEL=$(echo "$MODEL" | xargs)
 
             for f in measurements.json predicate.json attestation.sigstore.json; do
-              if [[ -f "artifacts/${MODEL}/${f}" ]]; then
-                cp "artifacts/${MODEL}/${f}" "release-assets/${MODEL}-${f}"
+              if [[ -f "${ARTIFACTS_DIR}/${MODEL}/${f}" ]]; then
+                cp "${ARTIFACTS_DIR}/${MODEL}/${f}" "release-assets/${MODEL}-${f}"
               fi
             done
 
-            MEAS=$(cat "artifacts/${MODEL}/measurements.json" 2>/dev/null || echo "{}")
+            MEAS=$(cat "${ARTIFACTS_DIR}/${MODEL}/measurements.json" 2>/dev/null || echo "{}")
             RELEASE_BODY+="### ${MODEL}\n\n"
             RELEASE_BODY+="\`\`\`json\n${MEAS}\n\`\`\`\n\n"
           done
 
-          cp artifacts/ita-attestation-policy.rego release-assets/
+          cp "${{ steps.policy.outputs.policy-file }}" release-assets/ita-attestation-policy.rego
 
           echo -e "$RELEASE_BODY" > release-body.md
 
@@ -329,7 +204,6 @@ jobs:
         run: |
           TAG="${{ inputs.version }}"
 
-          # Collect all asset files
           ASSET_FLAGS=""
           for f in $(find release-assets -type f); do
             ASSET_FLAGS="$ASSET_FLAGS $f"
