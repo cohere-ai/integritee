@@ -1,6 +1,9 @@
 name: Release Policy
 
 on:
+  push:
+    branches:
+      - shariq/policy-automation  # temporary: remove before merging
   workflow_dispatch:
     inputs:
       version:
@@ -21,9 +24,9 @@ on:
           - slot-a
           - slot-b
       dry_run:
-        description: "Skip Sigstore signing and GitHub release creation"
+        description: "Skip ITA upload, Sigstore signing, and GitHub release creation"
         required: false
-        default: false
+        default: true
         type: boolean
 
 permissions:
@@ -117,7 +120,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
+          if [[ -n "${{ inputs.ita_slot }}" && "${{ inputs.ita_slot }}" != "auto" ]]; then
             eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./.github/workflows/release-policy/select-ita-slot.sh)"
           else
             eval "$(./.github/workflows/release-policy/select-ita-slot.sh)"
