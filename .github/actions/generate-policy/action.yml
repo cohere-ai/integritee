@@ -1,0 +1,31 @@
+name: "Generate Policy"
+description: "Generate an ITA attestation policy from a policy manifest"
+
+inputs:
+  manifest-file:
+    description: "Path to a policy-manifest.yaml file"
+    required: true
+  github-token:
+    description: "GitHub token with read access to cohere-cc-baselines and GHCR"
+    required: true
+
+outputs:
+  policy-file:
+    description: "Path to the generated .rego policy file"
+  measurements-dir:
+    description: "Path to directory with per-target measurements.json"
+  cvm-artifacts-dir:
+    description: "Path to CVM artifacts directory (per-model meta.json)"
+  cvm-measure-version:
+    description: "Version of cvm-measure used"
+  models:
+    description: "Comma-separated list of model names processed"
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  env:
+    GH_TOKEN: ${{ inputs.github-token }}
+    BASELINES_REPO: "cohere-ai/cohere-cc-baselines"
+    PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
+    INPUT_MANIFEST_FILE: ${{ inputs.manifest-file }}

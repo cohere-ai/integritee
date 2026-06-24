@@ -1,3 +1,0 @@
-machine_type: "a3-highgpu-1g"
-podvm_image_tag: "podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5"
-ram_gib: 234

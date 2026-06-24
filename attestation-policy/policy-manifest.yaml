@@ -1,0 +1,17 @@
+# Policy manifest: defines measurement targets for ITA attestation policy generation.
+#
+# Each target produces one matches_tdx block in the ITA policy (logical OR).
+# A model can appear multiple times with different initdata (e.g. during rollouts).
+#
+# Targets can be added manually or via the add-from-blobheart workflow or derive-manifest action.
+# The merge-manifest.py script handles content-addressed dedup when merging.
+#
+# Fields:
+#   model           - model name (e.g. nmc2606-l)
+#   machine_type    - GCP machine type (e.g. a3-highgpu-1g)
+#   podvm_image_tag - PodVM OCI image tag
+#   ram_gib         - guest RAM in GiB
+#   initdata_b64    - base64-encoded (gzipped) Kata initdata
+#   source          - (optional) provenance URI, e.g. blobheart://<commit-sha>
+
+targets: []

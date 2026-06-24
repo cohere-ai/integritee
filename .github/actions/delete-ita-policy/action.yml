@@ -1,0 +1,25 @@
+name: "Delete ITA Policy"
+description: "Delete an Intel Trust Authority attestation policy"
+
+inputs:
+  policy-id:
+    description: "ID of the policy to delete"
+    required: true
+  ita-api-key:
+    description: "ITA admin API key"
+    required: true
+  ita-api-url:
+    description: "ITA API base URL"
+    required: false
+    default: "https://api.trustauthority.intel.com"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Delete policy from ITA
+      shell: bash
+      env:
+        POLICY_ID: ${{ inputs.policy-id }}
+        ITA_API_KEY: ${{ inputs.ita-api-key }}
+        ITA_API_URL: ${{ inputs.ita-api-url }}
+      run: "${{ github.action_path }}/delete.sh"
