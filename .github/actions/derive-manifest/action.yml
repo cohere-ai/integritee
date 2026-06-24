@@ -1,18 +1,18 @@
 name: "Derive Manifest"
-description: "Derive a policy manifest from a blobheart ref with fully resolved targets"
+description: "Derive policy manifests from one or more blobheart refs with fully resolved targets"
 
 inputs:
-  blobheart-ref:
-    description: "Blobheart commit SHA to derive a manifest from"
+  blobheart-refs:
+    description: "Space-separated blobheart commit SHAs to derive manifests from"
     required: true
   github-token:
     description: "GitHub token with read access to blobheart"
     required: true
 
 outputs:
-  manifest-file:
-    description: "Path to the derived policy-manifest.yaml"
-    value: ${{ steps.derive.outputs.manifest-file }}
+  manifest-files:
+    description: "Space-separated paths to the derived policy-manifest YAML files"
+    value: ${{ steps.derive.outputs.manifest-files }}
 
 runs:
   using: "composite"
@@ -21,14 +21,23 @@ runs:
       shell: bash
       run: pip install pyyaml >/dev/null 2>&1
 
-    - name: Derive manifest from blobheart ref
+    - name: Derive manifests from blobheart refs
       id: derive
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
-        MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-${{ inputs.blobheart-ref }}.yaml"
-        python3 "${{ github.action_path }}/derive.py" \
-          --blobheart-ref "${{ inputs.blobheart-ref }}" \
-          --output "$MANIFEST_FILE"
-        echo "manifest-file=$MANIFEST_FILE" >> "$GITHUB_OUTPUT"
+        MANIFEST_FILES=""
+        for REF in ${{ inputs.blobheart-refs }}; do
+          echo "========================================"
+          echo "Deriving manifest from blobheart ref: $REF"
+          echo "========================================"
+
+          MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-${REF}.yaml"
+          python3 "${{ github.action_path }}/derive.py" \
+            --blobheart-ref "$REF" \
+            --output "$MANIFEST_FILE"
+
+          MANIFEST_FILES="$MANIFEST_FILES $MANIFEST_FILE"
+        done
+        echo "manifest-files=${MANIFEST_FILES# }" >> "$GITHUB_OUTPUT"

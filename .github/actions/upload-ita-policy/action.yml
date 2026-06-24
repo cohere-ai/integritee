@@ -18,6 +18,9 @@ inputs:
     description: "ITA API base URL"
     required: false
     default: "https://api.trustauthority.intel.com"
+  predicate-file:
+    description: "Path to predicate JSON file; read and updated in place with policy_id (optional)"
+    required: false
 
 outputs:
   policy-id:
@@ -36,6 +39,7 @@ runs:
         POLICY_NAME: ${{ inputs.policy-name }}
         ITA_API_KEY: ${{ inputs.ita-api-key }}
         ITA_API_URL: ${{ inputs.ita-api-url }}
+        PREDICATE_FILE: ${{ inputs.predicate-file }}
       run: |
-        RESULT=$("${{ github.action_path }}/upload.sh")
+        RESULT=$(python3 "${{ github.action_path }}/upload.py")
         echo "policy-id=$RESULT" >> "$GITHUB_OUTPUT"

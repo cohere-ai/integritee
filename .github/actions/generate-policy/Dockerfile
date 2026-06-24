@@ -22,7 +22,6 @@ RUN curl -fSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VE
     | tar -xz -C /usr/local/bin oras
 
 WORKDIR /app
-COPY attestation-policy/ attestation-policy/
 COPY generate_policy/ generate_policy/
 
 ENTRYPOINT ["python3", "-m", "generate_policy"]
