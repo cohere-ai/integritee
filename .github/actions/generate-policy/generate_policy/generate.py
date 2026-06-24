@@ -121,7 +121,7 @@ def render_policy(
     model_names = [t["model"] for t in targets]
     print(
         f"Generated ITA policy with {len(blocks)} target(s): "
-        f"{', '.join(model_names)} (driver={driver_version}) -> {output_path}"
+        f"{', '.join(model_names)} (driver={nv_driver_version}) -> {output_path}"
     )
 
 
