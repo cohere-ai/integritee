@@ -20,6 +20,11 @@ on:
           - auto
           - slot-a
           - slot-b
+      dry_run:
+        description: "Skip Sigstore signing and GitHub release creation"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   id-token: write
@@ -115,7 +120,7 @@ jobs:
           if [[ "${{ inputs.ita_slot }}" != "auto" ]]; then
             eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./.github/workflows/attest-model/select-ita-slot.sh)"
           else
-            eval "$(./scripts/select-ita-slot.sh)"
+            eval "$(./.github/workflows/attest-model/select-ita-slot.sh)"
           fi
           echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
           echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
@@ -136,6 +141,7 @@ jobs:
       # Sign policy with Sigstore
       # ----------------------------------------------------------------
       - name: Sign policy with Sigstore
+        if: inputs.dry_run == false
         run: |
           cosign attest-blob \
             --predicate predicate.json \
@@ -145,9 +151,23 @@ jobs:
             attestation-policy.rego
 
       # ----------------------------------------------------------------
+      # Upload workflow artifacts (always, for inspection)
+      # ----------------------------------------------------------------
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: attestation-release-assets
+          if-no-files-found: ignore
+          path: |
+            attestation-policy.rego
+            predicate.json
+            attestation.sigstore.json
+
+      # ----------------------------------------------------------------
       # Create GitHub Release
       # ----------------------------------------------------------------
       - name: Prepare release assets
+        if: inputs.dry_run == false
         run: |
           mkdir -p release-assets
           cp attestation-policy.rego release-assets/attestation-policy.rego
@@ -168,6 +188,7 @@ jobs:
           echo -e "$RELEASE_BODY" > release-body.md
 
       - name: Create release
+        if: inputs.dry_run == false
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
