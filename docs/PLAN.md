@@ -28,7 +28,7 @@ gateway can require it at attestation time.
         |                                  |  and a compute image to GCP
         v                                  v
 +--------------------+         +------------------------+
-| attest-model.yaml  | <-----  | GHCR PodVM artifact    |
+| release-policy.yaml  | <-----  | GHCR PodVM artifact    |
 | (GitHub Actions)   |         |  + disk.tar.gz +       |
 |                    |         |  + measurements.json   |
 |  - genpolicy       |         +------------------------+
@@ -57,7 +57,7 @@ gateway can require it at attestation time.
 +-----------------------------------+
 ```
 
-## Pipeline steps (`.github/workflows/attest-model.yaml`)
+## Pipeline steps (`.github/workflows/release-policy.yaml`)
 
 1. **Install tools** — `cvm-measure`, `genpolicy` (Kata static bundle),
    `cosign`, `oras`, `mtools`.
@@ -97,7 +97,7 @@ gateway can require it at attestation time.
   register values. Currently pinned to feature branch
   `alhassankhedr/cc-167-tdx-measurement-toolkit` because the CLI / UKI
   extraction modules have not been merged to `main` yet. Marker in
-  `attest-model.yaml`:
+  `release-policy.yaml`:
   ```yaml
   # TODO: remove this branch pin once the cvm-measure CLI/UKI extraction
   #       branch merges to main.
@@ -218,7 +218,7 @@ must change too. The blue/green slot strategy lets us:
 In rough order of dependency:
 
 - [ ] Merge `cohere-ai/cvm-measure` `cc-167` branch to `main`, then drop
-      the `CVM_MEASURE_REF` pin in `attest-model.yaml` (the comment in
+      the `CVM_MEASURE_REF` pin in `release-policy.yaml` (the comment in
       the workflow flags this).
 - [ ] Stand up `gs://cohere-artifacts-podvm` in the infra repo and have
       `cloud-api-adaptor`'s `deploy-gcp-cohere.yaml` write the PodVM

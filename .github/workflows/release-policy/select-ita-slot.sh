@@ -6,7 +6,7 @@
 # release is found.
 #
 # Usage:
-#   eval "$(./.github/workflows/attest-model/select-ita-slot.sh)"
+#   eval "$(./.github/workflows/release-policy/select-ita-slot.sh)"
 #   echo "$ITA_POLICY_SLOT"  # slot-a | slot-b
 #   echo "$ITA_POLICY_ID"   # UUID of the target slot
 #   echo "$ITA_POLICY_NAME" # human-readable policy name

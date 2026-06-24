@@ -7,7 +7,7 @@ This repository contains:
 - **Model manifests** (`models/`) -- Kubernetes podspecs for each confidential model
 - **Kata policy rules** (`rules/`) -- shared OPA Rego rules and genpolicy settings
 - **Attestation policy templates** (`attestation-policy/`) -- base ITA policy templates
-- **CI workflow** (`.github/workflows/attest-model.yaml`) -- automated pipeline that generates policies, computes measurements, uploads to Intel Trust Authority, and publishes Sigstore-signed releases
+- **CI workflow** (`.github/workflows/release-policy.yaml`) -- automated pipeline that generates policies, computes measurements, uploads to Intel Trust Authority, and publishes Sigstore-signed releases
 
 ## How It Works
 
@@ -74,13 +74,13 @@ scripts/
   build-predicate.py              # Builds the in-toto predicate JSON
 .github/
   workflows/
-    attest-model.yaml             # Main attestation workflow
+    release-policy.yaml             # Main attestation workflow
 ```
 
 ## Triggering a Release
 
 ```bash
-gh workflow run attest-model.yaml \
+gh workflow run release-policy.yaml \
   -f version=v0.0.1 \
   -f reason="Updated container image for command-r-plus"
 ```
