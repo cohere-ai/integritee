@@ -38,6 +38,11 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    env:
+      DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+      VERSION: ${{ inputs.version || 'dev' }}
+      ITA_SLOT: ${{ inputs.ita_slot || 'auto' }}
+      REASON: ${{ inputs.reason || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -96,7 +101,7 @@ jobs:
           commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
           with open('predicate.json', 'w') as f:
               json.dump({
-                  'version': '${{ inputs.version }}',
+                  'version': '${{ env.VERSION }}',
                   'manifest_commit': commit,
                   'previous_rekor_log_index': ${{ steps.chain.outputs.previous_log_index }},
               }, f, indent=2)
@@ -123,8 +128,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [[ -n "${{ inputs.ita_slot }}" && "${{ inputs.ita_slot }}" != "auto" ]]; then
-            eval "$(ITA_SLOT_OVERRIDE=${{ inputs.ita_slot }} ./.github/workflows/release-policy/select-ita-slot.sh)"
+          if [[ -n "${{ env.ITA_SLOT }}" && "${{ env.ITA_SLOT }}" != "auto" ]]; then
+            eval "$(ITA_SLOT_OVERRIDE=${{ env.ITA_SLOT }} ./.github/workflows/release-policy/select-ita-slot.sh)"
           else
             eval "$(./.github/workflows/release-policy/select-ita-slot.sh)"
           fi
@@ -133,7 +138,7 @@ jobs:
           echo "policy_name=$ITA_POLICY_NAME" >> "$GITHUB_OUTPUT"
 
       - name: Upload policy to ITA
-        if: inputs.dry_run == false
+        if: ${{ env.DRY_RUN == 'false' }}
         id: ita
         uses: ./.github/actions/upload-ita-policy
         with:
@@ -148,7 +153,7 @@ jobs:
       # Sign policy with Sigstore
       # ----------------------------------------------------------------
       - name: Sign policy with Sigstore
-        if: inputs.dry_run == false
+        if: ${{ env.DRY_RUN == 'false' }}
         run: |
           cosign attest-blob \
             --predicate predicate.json \
@@ -174,17 +179,17 @@ jobs:
       # Create GitHub Release
       # ----------------------------------------------------------------
       - name: Prepare release assets
-        if: inputs.dry_run == false
+        if: ${{ env.DRY_RUN == 'false' }}
         run: |
           mkdir -p release-assets
           cp attestation-policy.rego release-assets/attestation-policy.rego
           cp predicate.json release-assets/predicate.json
           cp attestation.sigstore.json release-assets/attestation.sigstore.json
 
-          RELEASE_BODY="# Attestation Policy Release ${{ inputs.version }}\n\n"
+          RELEASE_BODY="# Attestation Policy Release ${{ env.VERSION }}\n\n"
 
-          if [[ -n "${{ inputs.reason }}" ]]; then
-            RELEASE_BODY+="**Reason:** ${{ inputs.reason }}\n\n"
+          if [[ -n "${{ env.REASON }}" ]]; then
+            RELEASE_BODY+="**Reason:** ${{ env.REASON }}\n\n"
           fi
 
           RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy-id }}\`\n"
@@ -195,11 +200,11 @@ jobs:
           echo -e "$RELEASE_BODY" > release-body.md
 
       - name: Create release
-        if: inputs.dry_run == false
+        if: ${{ env.DRY_RUN == 'false' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ inputs.version }}" \
-            --title "Attestation Policy ${{ inputs.version }}" \
+          gh release create "${{ env.VERSION }}" \
+            --title "Attestation Policy ${{ env.VERSION }}" \
             --notes-file release-body.md \
             release-assets/*
