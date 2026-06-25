@@ -1,0 +1,34 @@
+name: "Fetch ITA Policy"
+description: "Fetch an Intel Trust Authority attestation policy by ID and write it to a file"
+
+inputs:
+  policy-id:
+    description: "ID of the policy to fetch"
+    required: true
+  ita-api-key:
+    description: "ITA admin API key"
+    required: true
+  ita-api-url:
+    description: "ITA API base URL"
+    required: false
+    default: "https://api.trustauthority.intel.com"
+
+outputs:
+  policy-file:
+    description: "Path to the fetched .rego policy file"
+    value: ${{ steps.fetch.outputs.policy-file }}
+  policy-name:
+    description: "The policy name"
+    value: ${{ steps.fetch.outputs.policy-name }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Fetch policy from ITA
+      id: fetch
+      shell: bash
+      env:
+        POLICY_ID: ${{ inputs.policy-id }}
+        ITA_API_KEY: ${{ inputs.ita-api-key }}
+        ITA_API_URL: ${{ inputs.ita-api-url }}
+      run: python3 "${{ github.action_path }}/fetch.py"
