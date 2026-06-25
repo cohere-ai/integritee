@@ -52,9 +52,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install cosign
-        uses: sigstore/cosign-installer@v3
-
       - name: Install oras
         uses: oras-project/setup-oras@v1
 
@@ -142,17 +139,16 @@ jobs:
           predicate-file: predicate.json
 
       # ----------------------------------------------------------------
-      # Sign policy with Sigstore
+      # Attest policy with Sigstore
       # ----------------------------------------------------------------
-      - name: Sign policy with Sigstore
+      - name: Attest policy with Sigstore
         if: ${{ env.DRY_RUN == 'false' }}
-        run: |
-          cosign attest-blob \
-            --predicate predicate.json \
-            --type "https://cohere.com/attestation-policy/v1" \
-            --bundle attestation.sigstore.json \
-            -y \
-            attestation-policy.rego
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: attestation-policy.rego
+          predicate-type: https://cohere.com/attestation-policy/v1
+          predicate-path: predicate.json
 
       # ----------------------------------------------------------------
       # Upload workflow artifacts (always, for inspection)
@@ -161,11 +157,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: attestation-release-assets
-          if-no-files-found: ignore
           path: |
             attestation-policy.rego
             predicate.json
-            attestation.sigstore.json
 
       # ----------------------------------------------------------------
       # Create GitHub Release
@@ -176,7 +170,6 @@ jobs:
           mkdir -p release-assets
           cp attestation-policy.rego release-assets/attestation-policy.rego
           cp predicate.json release-assets/predicate.json
-          cp attestation.sigstore.json release-assets/attestation.sigstore.json
 
           RELEASE_BODY=""
 
