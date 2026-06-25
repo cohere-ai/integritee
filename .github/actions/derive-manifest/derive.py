@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Derive a policy manifest from a blobheart ref.
+"""Derive a policy manifest from a blobheart ref or local checkout.
 
 Discovers CC models, extracts initdata, derives machine_type/podvm_image_tag
 from kustomization.yaml, and looks up ram_gib from a static machine-types.yaml.
@@ -9,9 +9,14 @@ Hardcoded blobheart paths:
   - Kustomization: k8s/geofence/components/models_v2/base/kustomization.yaml
   - Initdata: <model>-cc/kata-policy-patch.yaml (cc_init_data annotation)
 
-Usage:
+Usage (remote):
     GH_TOKEN=... python derive.py \
         --blobheart-ref <commit-sha> \
+        --output /tmp/derived-manifest.yaml
+
+Usage (local):
+    python derive.py \
+        --blobheart-dir /path/to/blobheart \
         --output /tmp/derived-manifest.yaml
 """
 
@@ -39,9 +44,11 @@ KATA_IMAGE_ANNOTATION = "io.katacontainers.config.hypervisor.image"
 KATA_MACHINE_ANNOTATION = "io.katacontainers.config.hypervisor.machine_type"
 
 
-def gh_api_contents(repo: str, ref: str, path: str) -> str:
-    """Fetch file contents from GitHub API (base64-decoded)."""
-    api_path = f"/repos/{repo}/contents/{path}?ref={ref}"
+def read_file(root: Path | None, ref: str | None, path: str) -> str:
+    """Read a file from a local dir or the GitHub API."""
+    if root:
+        return (root / path).read_text()
+    api_path = f"/repos/{BLOBHEART_REPO}/contents/{path}?ref={ref}"
     result = subprocess.run(
         ["gh", "api", api_path, "--jq", ".content"],
         capture_output=True, text=True,
@@ -52,9 +59,11 @@ def gh_api_contents(repo: str, ref: str, path: str) -> str:
     return base64.b64decode(result.stdout.strip()).decode()
 
 
-def gh_api_list_dir(repo: str, ref: str, path: str) -> list[str]:
-    """List directory entries from GitHub API."""
-    api_path = f"/repos/{repo}/contents/{path}?ref={ref}"
+def list_dir(root: Path | None, ref: str | None, path: str) -> list[str]:
+    """List subdirectory names from a local dir or the GitHub API."""
+    if root:
+        return sorted(e.name for e in (root / path).iterdir() if e.is_dir())
+    api_path = f"/repos/{BLOBHEART_REPO}/contents/{path}?ref={ref}"
     result = subprocess.run(
         ["gh", "api", api_path, "--jq", ".[].name"],
         capture_output=True, text=True,
@@ -154,17 +163,21 @@ def load_machine_types() -> dict[str, dict]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Derive manifest from blobheart ref")
-    parser.add_argument("--blobheart-ref", required=True, help="Blobheart commit SHA")
+    parser = argparse.ArgumentParser(description="Derive manifest from blobheart ref or local checkout")
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--blobheart-ref", help="Blobheart commit SHA")
+    source_group.add_argument("--blobheart-dir", help="Path to local blobheart checkout")
     parser.add_argument("--output", required=True, help="Output manifest YAML path")
     args = parser.parse_args()
 
+    root = Path(args.blobheart_dir) if args.blobheart_dir else None
     ref = args.blobheart_ref
+    source_label = f"local://{root}" if root else f"blobheart://{ref}"
+
     machine_types = load_machine_types()
+    print(f"Deriving manifest from {source_label}")
 
-    print(f"Deriving manifest from blobheart ref: {ref}")
-
-    entries = gh_api_list_dir(BLOBHEART_REPO, ref, GENERATED_DIR)
+    entries = list_dir(root, ref, GENERATED_DIR)
     cc_models = [e for e in entries if e.endswith(CC_SUFFIX)]
     print(f"Found {len(cc_models)} CC models: {', '.join(cc_models)}")
 
@@ -173,7 +186,7 @@ def main() -> None:
         Path(args.output).write_text(yaml.dump({"targets": []}, sort_keys=False))
         return
 
-    kustomization = gh_api_contents(BLOBHEART_REPO, ref, KUSTOMIZATION_PATH)
+    kustomization = read_file(root, ref, KUSTOMIZATION_PATH)
     label_map = build_cc_label_map(kustomization)
     print(f"CC label map: {json.dumps({k: v.get('machine_type', '?') for k, v in label_map.items()})}")
 
@@ -188,10 +201,10 @@ def main() -> None:
 
         model_path = f"{GENERATED_DIR}/{cc_name}/model.yaml"
         try:
-            model_raw = gh_api_contents(BLOBHEART_REPO, ref, model_path)
+            model_raw = read_file(root, ref, model_path)
             gpu_label = extract_gpu_label(model_raw)
         except SystemExit:
-            print(f"  WARNING: could not fetch model.yaml, skipping")
+            print(f"  WARNING: could not read model.yaml, skipping")
             continue
 
         if not gpu_label:
@@ -216,10 +229,10 @@ def main() -> None:
 
         kata_path = f"{GENERATED_DIR}/{cc_name}/kata-policy-patch.yaml"
         try:
-            kata_raw = gh_api_contents(BLOBHEART_REPO, ref, kata_path)
+            kata_raw = read_file(root, ref, kata_path)
             initdata = extract_initdata(kata_raw)
         except SystemExit:
-            print(f"  WARNING: could not fetch kata-policy-patch.yaml, skipping")
+            print(f"  WARNING: could not read kata-policy-patch.yaml, skipping")
             continue
 
         if not initdata:
@@ -232,7 +245,7 @@ def main() -> None:
             "podvm_image_tag": podvm_image_tag,
             "ram_gib": ram_gib,
             "initdata_b64": initdata,
-            "source": f"blobheart://{ref}",
+            "source": source_label,
         }
         targets.append(target)
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "
