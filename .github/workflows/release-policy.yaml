@@ -127,19 +127,11 @@ jobs:
         id: slot
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          if [[ -n "${{ env.ITA_SLOT }}" && "${{ env.ITA_SLOT }}" != "auto" ]]; then
-            eval "$(ITA_SLOT_OVERRIDE=${{ env.ITA_SLOT }} ./.github/workflows/release-policy/select-ita-slot.sh)"
-          else
-            eval "$(./.github/workflows/release-policy/select-ita-slot.sh)"
-          fi
-          echo "policy_slot=$ITA_POLICY_SLOT" >> "$GITHUB_OUTPUT"
-          echo "policy_id=$ITA_POLICY_ID" >> "$GITHUB_OUTPUT"
-          echo "policy_name=$ITA_POLICY_NAME" >> "$GITHUB_OUTPUT"
+          ITA_SLOT_OVERRIDE: ${{ env.ITA_SLOT }}
+        run: python3 .github/workflows/release-policy/select-ita-slot.py >> "$GITHUB_OUTPUT"
 
       - name: Upload policy to ITA
         if: ${{ env.DRY_RUN == 'false' }}
-        id: ita
         uses: ./.github/actions/upload-ita-policy
         with:
           policy-file: attestation-policy.rego
@@ -186,16 +178,14 @@ jobs:
           cp predicate.json release-assets/predicate.json
           cp attestation.sigstore.json release-assets/attestation.sigstore.json
 
-          RELEASE_BODY="# Attestation Policy Release ${{ env.VERSION }}\n\n"
+          RELEASE_BODY=""
 
           if [[ -n "${{ env.REASON }}" ]]; then
             RELEASE_BODY+="**Reason:** ${{ env.REASON }}\n\n"
           fi
 
-          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.ita.outputs.policy-id }}\`\n"
-          RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.slot.outputs.policy_slot }}\`\n\n"
-          RELEASE_BODY+="## Predicate\n\n"
-          RELEASE_BODY+="\`\`\`json\n$(cat predicate.json)\n\`\`\`\n"
+          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.slot.outputs.policy_id }}\`\n"
+          RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.slot.outputs.policy_slot }}\`\n"
 
           echo -e "$RELEASE_BODY" > release-body.md
 
