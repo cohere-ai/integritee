@@ -31,4 +31,9 @@ runs:
         POLICY_ID: ${{ inputs.policy-id }}
         ITA_API_KEY: ${{ inputs.ita-api-key }}
         ITA_API_URL: ${{ inputs.ita-api-url }}
-      run: python3 "${{ github.action_path }}/fetch.py"
+      run: |
+        RESULT=$(python3 "${{ github.action_path }}/fetch.py")
+        POLICY_FILE=$(echo "$RESULT" | sed -n '1p')
+        POLICY_NAME=$(echo "$RESULT" | sed -n '2p')
+        echo "policy-file=$POLICY_FILE" >> "$GITHUB_OUTPUT"
+        echo "policy-name=$POLICY_NAME" >> "$GITHUB_OUTPUT"
