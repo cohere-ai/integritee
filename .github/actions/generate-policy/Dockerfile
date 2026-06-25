@@ -23,5 +23,6 @@ RUN curl -fSL "https://github.com/oras-project/oras/releases/download/v${ORAS_VE
 
 WORKDIR /app
 COPY generate_policy/ generate_policy/
+ENV PYTHONPATH=/app
 
 ENTRYPOINT ["python3", "-m", "generate_policy"]
