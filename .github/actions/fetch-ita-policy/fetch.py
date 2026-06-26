@@ -10,11 +10,20 @@ Prints "<policy_file>\n<policy_name>" to stdout for the action shell to capture.
 
 from __future__ import annotations
 
-import json
 import os
 import sys
-import urllib.request
 from pathlib import Path
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+def ita_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[429])
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    return session
 
 
 def main() -> None:
@@ -25,23 +34,17 @@ def main() -> None:
 
     url = f"{api_url}/management/v1/policies/{policy_id}"
 
-    req = urllib.request.Request(
-        url,
-        method="GET",
-        headers={
-            "Accept": "application/json",
-            "x-api-key": api_key,
-        },
-    )
+    resp = ita_session().get(url, headers={
+        "Accept": "application/json",
+        "x-api-key": api_key,
+    })
 
-    try:
-        with urllib.request.urlopen(req) as resp:
-            body = json.loads(resp.read())
-    except urllib.error.HTTPError as exc:
-        print(f"ERROR: ITA API returned HTTP {exc.code}", file=sys.stderr)
-        print(exc.read().decode(), file=sys.stderr)
+    if not resp.ok:
+        print(f"ERROR: ITA API returned HTTP {resp.status_code}", file=sys.stderr)
+        print(resp.text, file=sys.stderr)
         sys.exit(1)
 
+    body = resp.json()
     policy_content = body.get("policy", "")
     policy_name = body.get("policy_name", "")
 
