@@ -1,6 +1,8 @@
 name: Add from Blobheart
 
 on:
+  push:
+    branches: [shariq/policy-automation] # temporary: remove before merging
   repository_dispatch:
     types: [blobheart-deploy]
   workflow_dispatch:
@@ -22,8 +24,8 @@ jobs:
   add-targets:
     runs-on: ubuntu-latest
     env:
-      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
-      DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs || 'b6ff57b9de50e018e13f6235bde0aad8d5bd7f8e' }}
+      DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'true' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
