@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime
 import json
 import re
 import subprocess
@@ -239,13 +240,14 @@ def main() -> None:
             print(f"  WARNING: no cc_init_data annotation, skipping")
             continue
 
+        today = datetime.date.today().isoformat()
         target = {
             "model": model,
             "machine_type": machine_type,
             "podvm_image_tag": podvm_image_tag,
             "ram_gib": ram_gib,
             "initdata_b64": initdata,
-            "source": source_label,
+            "desc": f"added {today} from {source_label}",
         }
         targets.append(target)
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "

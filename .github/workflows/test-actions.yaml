@@ -184,7 +184,9 @@ jobs:
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify single-ref manifest
-        run: diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml ${{ steps.derive-single.outputs.manifest-files }}
+        run: |
+          grep -v '  desc:' ${{ steps.derive-single.outputs.manifest-files }} > /tmp/actual-no-desc.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-no-desc.yaml
 
       - name: Derive manifest (multiple refs, same ref twice)
         id: derive-multi
@@ -201,7 +203,8 @@ jobs:
             exit 1
           fi
           for f in ${{ steps.derive-multi.outputs.manifest-files }}; do
-            diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml "$f"
+            grep -v '  desc:' "$f" > /tmp/actual-no-desc.yaml
+            diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-no-desc.yaml
           done
 
       - name: Clone blobheart at pinned ref
@@ -215,8 +218,7 @@ jobs:
         with:
           blobheart-dir: /tmp/blobheart
 
-      - name: Verify local-dir manifest (ignoring source field which differs for local)
+      - name: Verify local-dir manifest (ignoring desc field which differs for local)
         run: |
-          grep -v '  source:' .github/workflows/test-actions/derive-manifest/expected-manifest.yaml > /tmp/expected-no-source.yaml
-          grep -v '  source:' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-no-source.yaml
-          diff /tmp/expected-no-source.yaml /tmp/actual-no-source.yaml
+          grep -v '  desc:' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-no-desc.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-no-desc.yaml
