@@ -13,13 +13,19 @@ inputs:
     required: false
     default: "https://api.trustauthority.intel.com"
 
+outputs:
+  existed:
+    description: "'true' if the policy was found and deleted, 'false' if it was already gone"
+    value: ${{ steps.delete.outputs.existed }}
+
 runs:
   using: "composite"
   steps:
     - name: Delete policy from ITA
+      id: delete
       shell: bash
       env:
         POLICY_ID: ${{ inputs.policy-id }}
         ITA_API_KEY: ${{ inputs.ita-api-key }}
         ITA_API_URL: ${{ inputs.ita-api-url }}
-      run: python3 "${{ github.action_path }}/delete.py"
+      run: python3 "${{ github.action_path }}/delete.py" >> "$GITHUB_OUTPUT"
