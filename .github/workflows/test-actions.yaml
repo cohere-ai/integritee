@@ -131,6 +131,7 @@ jobs:
         run: diff test-policy.rego "${{ steps.fetch-updated.outputs.policy-file }}"
 
       - name: Delete test policy from ITA
+        id: delete-first
         if: always()
         uses: ./.github/actions/delete-ita-policy
         with:
@@ -138,24 +139,27 @@ jobs:
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ secrets.ITA_API_URL }}
 
-      - name: Fetch deleted policy (should fail)
-        id: fetch-deleted
+      - name: Delete again (idempotent, should report not found)
+        id: delete-second
         if: always()
-        continue-on-error: true
-        uses: ./.github/actions/fetch-ita-policy
+        uses: ./.github/actions/delete-ita-policy
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ secrets.ITA_API_URL }}
 
-      - name: Assert fetch failed after delete
+      - name: Assert delete outputs
         if: always()
         run: |
-          if [ "${{ steps.fetch-deleted.outcome }}" != "failure" ]; then
-            echo "ERROR: fetch should have failed after delete"
+          if [ "${{ steps.delete-first.outputs.existed }}" != "true" ]; then
+            echo "ERROR: first delete should report existed=true"
             exit 1
           fi
-          echo "DELETE verified: fetch correctly failed after policy deletion"
+          if [ "${{ steps.delete-second.outputs.existed }}" != "false" ]; then
+            echo "ERROR: second delete should report existed=false"
+            exit 1
+          fi
+          echo "DELETE verified: first=existed, second=not found (idempotent)"
 
   test-derive-manifest:
     runs-on: ubuntu-latest
