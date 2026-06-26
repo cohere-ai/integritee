@@ -29,7 +29,7 @@ jobs:
           repositories: cohere-cc-baselines
 
       - name: Log in to GHCR
-        run: echo "${{ github.token }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
 
       - name: Initialize predicate
         run: echo '{}' > predicate.json
@@ -212,5 +212,8 @@ jobs:
         with:
           blobheart-dir: /tmp/blobheart
 
-      - name: Verify local-dir manifest
-        run: diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml ${{ steps.derive-local.outputs.manifest-files }}
+      - name: Verify local-dir manifest (ignoring source field which differs for local)
+        run: |
+          grep -v '  source:' .github/workflows/test-actions/derive-manifest/expected-manifest.yaml > /tmp/expected-no-source.yaml
+          grep -v '  source:' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-no-source.yaml
+          diff /tmp/expected-no-source.yaml /tmp/actual-no-source.yaml
