@@ -32,9 +32,12 @@ def main() -> None:
         with urllib.request.urlopen(req) as resp:
             print(f"Policy deleted: {policy_id} (HTTP {resp.status})", file=sys.stderr)
     except urllib.error.HTTPError as exc:
-        print(f"ERROR: ITA API returned HTTP {exc.code}", file=sys.stderr)
-        print(exc.read().decode(), file=sys.stderr)
-        sys.exit(1)
+        if exc.code == 404:
+            print(f"Policy already deleted or not found: {policy_id} (HTTP 404)", file=sys.stderr)
+        else:
+            print(f"ERROR: ITA API returned HTTP {exc.code}", file=sys.stderr)
+            print(exc.read().decode(), file=sys.stderr)
+            sys.exit(1)
 
 
 if __name__ == "__main__":
