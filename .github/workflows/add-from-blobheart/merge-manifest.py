@@ -82,7 +82,7 @@ def main() -> None:
         for target in new_targets:
             h = target_hash(target)
             model = target.get("model", "unknown")
-            source = target.get("source", "")
+            desc = target.get("desc", "")
 
             if h in seen:
                 existing = seen[h]
@@ -94,7 +94,7 @@ def main() -> None:
                 seen[h] = target
                 base_targets.append(target)
                 added += 1
-                print(f"  {model}: added (source: {source})")
+                print(f"  {model}: added ({desc})")
 
     write_manifest(Path(args.output), base_targets)
     print(f"\nMerge complete: {added} added, {skipped} skipped, "
