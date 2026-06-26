@@ -1,12 +1,19 @@
 name: Add from Blobheart
 
 on:
+  repository_dispatch:
+    types: [blobheart-deploy]
   workflow_dispatch:
     inputs:
       blobheart_refs:
         description: "Space-separated blobheart commit SHAs to derive manifests from"
         required: true
         type: string
+      dry_run:
+        description: "If true, show what would change without committing"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -14,6 +21,9 @@ permissions:
 jobs:
   add-targets:
     runs-on: ubuntu-latest
+    env:
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
+      DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -34,7 +44,7 @@ jobs:
         id: derive
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: ${{ inputs.blobheart_refs }}
+          blobheart-refs: ${{ env.BLOBHEART_REFS }}
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Merge into policy manifest
@@ -57,9 +67,15 @@ jobs:
             git diff attestation-policy/policy-manifest.yaml
           fi
 
+      - name: Upload merged manifest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: merged-policy-manifest
+          path: attestation-policy/policy-manifest.yaml
+
       - name: Commit and push
-        if: steps.changes.outputs.changed == 'true'
+        if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
         run: |
           git add attestation-policy/policy-manifest.yaml
-          git commit -m "feat(policy): add attestation targets from blobheart refs ${{ inputs.blobheart_refs }}"
+          git commit -m "feat(policy): add attestation targets from blobheart refs ${{ env.BLOBHEART_REFS }}"
           git push
