@@ -1,4 +1,3 @@
-package integritee_policy
 import rego.v1
 default match := false
 match if { matches_tdx; matches_nvgpu }
