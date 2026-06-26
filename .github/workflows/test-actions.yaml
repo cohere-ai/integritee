@@ -4,9 +4,8 @@ on:
   pull_request:
     paths:
       - ".github/actions/**"
-      - ".github/workflows/**"
-      - "attestation-policy/**"
-      - "tests/**"
+      - ".github/workflows/test-actions.yaml"
+      - ".github/workflows/test-actions/**"
 
 permissions:
   contents: read
