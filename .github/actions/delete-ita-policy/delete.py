@@ -3,13 +3,25 @@
 
 Reads configuration from environment variables:
   POLICY_ID, ITA_API_KEY, ITA_API_URL
+
+Prints "existed=true" if the policy was deleted, "existed=false" if not found.
 """
 
 from __future__ import annotations
 
 import os
 import sys
-import urllib.request
+
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+
+
+def ita_session() -> requests.Session:
+    session = requests.Session()
+    retries = Retry(total=3, backoff_factor=1, status_forcelist=[429])
+    session.mount("https://", HTTPAdapter(max_retries=retries))
+    return session
 
 
 def main() -> None:
@@ -19,27 +31,23 @@ def main() -> None:
 
     print(f"Deleting ITA policy: {policy_id}", file=sys.stderr)
 
-    req = urllib.request.Request(
-        f"{api_url}/management/v1/policies/{policy_id}",
-        method="DELETE",
-        headers={
-            "Accept": "application/json",
-            "x-api-key": api_key,
-        },
-    )
+    url = f"{api_url}/management/v1/policies/{policy_id}"
 
-    try:
-        with urllib.request.urlopen(req) as resp:
-            print(f"Policy deleted: {policy_id} (HTTP {resp.status})", file=sys.stderr)
-            print("existed=true")
-    except urllib.error.HTTPError as exc:
-        if exc.code == 404:
-            print(f"Policy already deleted or not found: {policy_id} (HTTP 404)", file=sys.stderr)
-            print("existed=false")
-        else:
-            print(f"ERROR: ITA API returned HTTP {exc.code}", file=sys.stderr)
-            print(exc.read().decode(), file=sys.stderr)
-            sys.exit(1)
+    resp = ita_session().delete(url, headers={
+        "Accept": "application/json",
+        "x-api-key": api_key,
+    })
+
+    if resp.ok:
+        print(f"Policy deleted: {policy_id} (HTTP {resp.status_code})", file=sys.stderr)
+        print("existed=true")
+    elif resp.status_code == 404:
+        print(f"Policy already deleted or not found: {policy_id} (HTTP 404)", file=sys.stderr)
+        print("existed=false")
+    else:
+        print(f"ERROR: ITA API returned HTTP {resp.status_code}", file=sys.stderr)
+        print(resp.text, file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
