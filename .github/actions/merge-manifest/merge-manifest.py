@@ -73,11 +73,12 @@ def main() -> None:
 
     added = 0
     skipped = 0
+    added_models: list[str] = []
 
     for new_path_str in args.new:
         new_path = Path(new_path_str)
         new_targets = load_manifest(new_path)
-        print(f"Processing {new_path} ({len(new_targets)} targets)")
+        print(f"Processing {new_path} ({len(new_targets)} targets)", file=sys.stderr)
 
         for target in new_targets:
             h = target_hash(target)
@@ -88,20 +89,26 @@ def main() -> None:
                 existing = seen[h]
                 ex_model = existing.get("model", "?")
                 ex_initdata = existing.get("initdata_b64", "")[:12]
-                print(f"  {model}: skip, matches existing {ex_model} (initdata {ex_initdata}...)")
+                print(f"  {model}: skip, matches existing {ex_model} (initdata {ex_initdata}...)", file=sys.stderr)
                 skipped += 1
             else:
                 seen[h] = target
                 base_targets.append(target)
                 added += 1
-                print(f"  {model}: added ({desc})")
+                added_models.append(model)
+                print(f"  {model}: added ({desc})", file=sys.stderr)
 
-    write_manifest(Path(args.output), base_targets)
+    output_path = Path(args.output)
+    write_manifest(output_path, base_targets)
+    total = len(base_targets)
     print(f"\nMerge complete: {added} added, {skipped} skipped, "
-          f"{len(base_targets)} total targets in {args.output}")
+          f"{total} total targets in {args.output}", file=sys.stderr)
 
-    if added == 0:
-        sys.exit(0)
+    print(f"added={added}")
+    print(f"skipped={skipped}")
+    print(f"total={total}")
+    print(f"manifest-file={output_path.resolve()}")
+    print(f"added-models={','.join(added_models)}")
 
 
 if __name__ == "__main__":

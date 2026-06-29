@@ -1,0 +1,51 @@
+name: "Demo: Blobheart Release Flow"
+
+on:
+  push:
+    branches: [shariq/policy-automation]
+  workflow_dispatch:
+    inputs:
+      blobheart_refs:
+        description: "Space-separated blobheart commit SHAs"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    env:
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || 'b6ff57b9de50e018e13f6235bde0aad8d5bd7f8e' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart
+
+      - name: Trigger add-from-blobheart (dry run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/dispatches \
+            -f event_type=blobheart-deploy \
+            -f 'client_payload[blobheart_refs]=${{ env.BLOBHEART_REFS }}' \
+            -f 'client_payload[dry_run]=true'
+
+      - name: Verify against policy (with retry)
+        uses: Wandalen/wretry.action@v3.8.0  # SHA pinning not supported, see https://github.com/Wandalen/wretry.action/issues/189
+        with:
+          action: cohere-ai/integritee/.github/actions/verify-against-policy@main
+          with: |
+            blobheart-refs: ${{ env.BLOBHEART_REFS }}
+            github-token: ${{ steps.app-token.outputs.token }}
+          attempt_limit: 5
+          attempt_delay: 30000

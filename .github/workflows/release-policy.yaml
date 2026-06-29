@@ -1,6 +1,8 @@
 name: Release Policy
 
 on:
+  push:
+    branches: [shariq/policy-automation]
   workflow_dispatch:
     inputs:
       version:
