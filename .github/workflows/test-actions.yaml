@@ -161,6 +161,52 @@ jobs:
           fi
           echo "DELETE verified: first=existed, second=not found (idempotent)"
 
+  test-verify-against-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart,integritee
+
+      - name: Verify known ref against policy (should pass)
+        id: verify
+        uses: ./.github/actions/verify-against-policy
+        with:
+          blobheart-refs: "89ec4181ececbddabc81deb82183b556b4d5ec04"
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Assert release tag is set
+        run: |
+          if [ -z "${{ steps.verify.outputs.release-tag }}" ]; then
+            echo "ERROR: release-tag output is empty"
+            exit 1
+          fi
+          echo "Verified against release: ${{ steps.verify.outputs.release-tag }}"
+
+      - name: Verify uncovered ref against policy (should fail)
+        id: verify-fail
+        continue-on-error: true
+        uses: ./.github/actions/verify-against-policy
+        with:
+          blobheart-refs: "8abd02c84e4764cb0e721a810588054f37bb6ca4"
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Assert verification failed
+        run: |
+          if [ "${{ steps.verify-fail.outcome }}" != "failure" ]; then
+            echo "ERROR: expected verification to fail for uncovered ref, got ${{ steps.verify-fail.outcome }}"
+            exit 1
+          fi
+          echo "Correctly rejected uncovered ref"
+
   test-merge-manifest:
     runs-on: ubuntu-latest
     steps:
