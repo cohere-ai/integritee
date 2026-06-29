@@ -124,12 +124,16 @@ def main() -> None:
         print(f"Latest release: {release_tag}", file=sys.stderr)
 
         release_manifest = runner_temp / "release-manifest.yaml"
-        content = gh(
-            "api",
-            f"repos/cohere-ai/integritee/contents/attestation-policy/policy-manifest.yaml?ref={release_tag}",
-            "-H", "Accept: application/vnd.github.v3.raw",
-        )
-        release_manifest.write_text(content)
+        try:
+            content = gh(
+                "api",
+                f"repos/cohere-ai/integritee/contents/attestation-policy/policy-manifest.yaml?ref={release_tag}",
+                "-H", "Accept: application/vnd.github.v3.raw",
+            )
+            release_manifest.write_text(content)
+        except RuntimeError:
+            print(f"policy-manifest.yaml not found at release {release_tag}, treating as empty", file=sys.stderr)
+            release_manifest.write_text("targets: []\n")
 
         merge_output = run_script(merge_script, [
             "--base", str(release_manifest),
