@@ -9,7 +9,7 @@ inputs:
     description: "Space-separated blobheart commit SHAs (mutually exclusive with blobheart-dir)"
     required: false
   blobheart-dir:
-    description: "Path to a local blobheart checkout (mutually exclusive with blobheart-dir)"
+    description: "Path to a local blobheart checkout (mutually exclusive with blobheart-refs)"
     required: false
   github-token:
     description: "GitHub token with read access to blobheart and integritee releases"
@@ -31,20 +31,17 @@ outputs:
 runs:
   using: "composite"
   steps:
-    - name: Derive manifest from blobheart
-      id: derive
-      uses: cohere-ai/integritee/.github/actions/derive-manifest@main
-      with:
-        blobheart-refs: ${{ inputs.blobheart-refs }}
-        blobheart-dir: ${{ inputs.blobheart-dir }}
-        github-token: ${{ inputs.github-token }}
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install pyyaml >/dev/null 2>&1
 
     - name: Verify policy coverage
       id: verify
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-        MANIFEST_FILES: ${{ steps.derive.outputs.manifest-files }}
+        BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
+        BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
         RETRIES: ${{ inputs.retries }}
         RETRY_DELAY: ${{ inputs.retry-delay }}
         ACTION_PATH: ${{ github.action_path }}
