@@ -1,25 +1,32 @@
 name: "Verify Against Policy"
 description: >
-  Single-shot check: verifies that the latest integritee release covers all
-  targets derived from the given blobheart ref. Exits 0 if all targets are
-  covered, exits 1 if any are missing. Callers should use a retry wrapper
-  (e.g. Wandalen/wretry.action) if the release may not exist yet.
+  Verifies that the latest integritee release covers all targets derived from
+  the given blobheart ref. Retries automatically to allow time for a newly
+  triggered release to propagate.
 
 inputs:
   blobheart-refs:
     description: "Space-separated blobheart commit SHAs (mutually exclusive with blobheart-dir)"
     required: false
   blobheart-dir:
-    description: "Path to a local blobheart checkout (mutually exclusive with blobheart-refs)"
+    description: "Path to a local blobheart checkout (mutually exclusive with blobheart-dir)"
     required: false
   github-token:
     description: "GitHub token with read access to blobheart and integritee releases"
     required: true
+  retries:
+    description: "Number of retries after the initial attempt (0 = no retry)"
+    required: false
+    default: "0"
+  retry-delay:
+    description: "Seconds to wait between retry attempts"
+    required: false
+    default: "30"
 
 outputs:
   release-tag:
-    description: "The release tag that was checked against (empty if no release exists)"
-    value: ${{ steps.fetch-release.outputs.release-tag }}
+    description: "The release tag that was checked against"
+    value: ${{ steps.verify.outputs.release-tag }}
 
 runs:
   using: "composite"
@@ -32,46 +39,13 @@ runs:
         blobheart-dir: ${{ inputs.blobheart-dir }}
         github-token: ${{ inputs.github-token }}
 
-    - name: Fetch release manifest
-      id: fetch-release
+    - name: Verify policy coverage
+      id: verify
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
-      run: |
-        RELEASE_TAG=$(gh release view --repo cohere-ai/integritee --json tagName -q .tagName 2>/dev/null || echo "")
-        if [[ -z "$RELEASE_TAG" ]]; then
-          echo "ERROR: No releases found on cohere-ai/integritee" >&2
-          echo "release-tag=" >> "$GITHUB_OUTPUT"
-          exit 1
-        fi
-        echo "Latest release: $RELEASE_TAG"
-        echo "release-tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
-
-        gh api "repos/cohere-ai/integritee/contents/attestation-policy/policy-manifest.yaml?ref=$RELEASE_TAG" \
-          -H "Accept: application/vnd.github.v3.raw" \
-          > "$RUNNER_TEMP/release-manifest.yaml"
-
-        echo "Downloaded policy-manifest.yaml from release $RELEASE_TAG"
-
-    - name: Check coverage via merge
-      id: merge
-      uses: cohere-ai/integritee/.github/actions/merge-manifest@main
-      with:
-        base: ${{ runner.temp }}/release-manifest.yaml
-        new: ${{ steps.derive.outputs.manifest-files }}
-
-    - name: Verify all targets covered
-      id: check
-      shell: bash
-      run: |
-        ADDED="${{ steps.merge.outputs.added }}"
-        RELEASE_TAG="${{ steps.fetch-release.outputs.release-tag }}"
-        MISSING="${{ steps.merge.outputs.added-models }}"
-
-        if [[ "$ADDED" == "0" ]]; then
-          echo "All targets are covered by release $RELEASE_TAG"
-          exit 0
-        fi
-
-        echo "ERROR: $ADDED target(s) not covered by release $RELEASE_TAG: $MISSING" >&2
-        exit 1
+        MANIFEST_FILES: ${{ steps.derive.outputs.manifest-files }}
+        RETRIES: ${{ inputs.retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python3 "${{ github.action_path }}/verify.py" >> "$GITHUB_OUTPUT"
