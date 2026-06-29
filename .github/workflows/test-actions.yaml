@@ -174,7 +174,7 @@ jobs:
           client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: cohere-ai
-          repositories: blobheart,integritee
+          repositories: blobheart
 
       - name: Verify known ref against policy (should pass)
         id: verify
