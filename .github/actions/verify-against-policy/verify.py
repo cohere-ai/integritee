@@ -43,26 +43,36 @@ def run_script(script: Path, args: list[str]) -> dict[str, str]:
     return outputs
 
 
+def run_derive(derive_script: Path, args: list[str], token: str) -> None:
+    """Run derive.py with the blobheart token, redirecting all output to stderr."""
+    env = {**os.environ, "GH_TOKEN": token}
+    result = subprocess.run(
+        ["python3", str(derive_script), *args],
+        capture_output=True, text=True, env=env,
+    )
+    if result.stdout:
+        print(result.stdout, file=sys.stderr, end="")
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="")
+    if result.returncode != 0:
+        raise RuntimeError(f"derive.py failed (exit {result.returncode})")
+
+
 def derive_manifests(derive_script: Path, runner_temp: Path,
-                     blobheart_refs: str | None, blobheart_dir: str | None) -> list[str]:
+                     blobheart_refs: str | None, blobheart_dir: str | None,
+                     token: str) -> list[str]:
     """Call derive.py for each ref or a local dir, returning manifest file paths."""
     manifest_files = []
 
     if blobheart_dir:
         out = runner_temp / "derived-manifest-local.yaml"
-        subprocess.run(
-            ["python3", str(derive_script), "--blobheart-dir", blobheart_dir, "--output", str(out)],
-            check=True,
-        )
+        run_derive(derive_script, ["--blobheart-dir", blobheart_dir, "--output", str(out)], token)
         manifest_files.append(str(out))
     elif blobheart_refs:
         for ref in blobheart_refs.split():
             print(f"Deriving manifest from blobheart ref: {ref}", file=sys.stderr)
             out = runner_temp / f"derived-manifest-{ref}.yaml"
-            subprocess.run(
-                ["python3", str(derive_script), "--blobheart-ref", ref, "--output", str(out)],
-                check=True,
-            )
+            run_derive(derive_script, ["--blobheart-ref", ref, "--output", str(out)], token)
             manifest_files.append(str(out))
     else:
         print("ERROR: one of BLOBHEART_REFS or BLOBHEART_DIR must be set", file=sys.stderr)
@@ -74,6 +84,7 @@ def derive_manifests(derive_script: Path, runner_temp: Path,
 def main() -> None:
     blobheart_refs = os.environ.get("BLOBHEART_REFS") or None
     blobheart_dir = os.environ.get("BLOBHEART_DIR") or None
+    blobheart_token = os.environ["BLOBHEART_TOKEN"]
     retries = int(os.environ.get("RETRIES", "0"))
     retry_delay = int(os.environ.get("RETRY_DELAY", "30"))
     runner_temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
@@ -83,7 +94,7 @@ def main() -> None:
     merge_script = action_path / ".." / "merge-manifest" / "merge-manifest.py"
 
     print("Deriving manifests from blobheart...", file=sys.stderr)
-    manifest_files = derive_manifests(derive_script, runner_temp, blobheart_refs, blobheart_dir)
+    manifest_files = derive_manifests(derive_script, runner_temp, blobheart_refs, blobheart_dir, blobheart_token)
 
     max_attempts = retries + 1
     release_tag = ""
