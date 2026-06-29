@@ -161,6 +161,62 @@ jobs:
           fi
           echo "DELETE verified: first=existed, second=not found (idempotent)"
 
+  test-merge-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Merge with new and duplicate targets
+        id: merge
+        uses: ./.github/actions/merge-manifest
+        with:
+          base: .github/workflows/test-actions/merge-manifest/base-manifest.yaml
+          new: .github/workflows/test-actions/merge-manifest/new-manifest.yaml
+
+      - name: Assert counts
+        run: |
+          if [ "${{ steps.merge.outputs.added }}" != "1" ]; then
+            echo "ERROR: expected added=1, got ${{ steps.merge.outputs.added }}"
+            exit 1
+          fi
+          if [ "${{ steps.merge.outputs.skipped }}" != "1" ]; then
+            echo "ERROR: expected skipped=1, got ${{ steps.merge.outputs.skipped }}"
+            exit 1
+          fi
+          if [ "${{ steps.merge.outputs.total }}" != "2" ]; then
+            echo "ERROR: expected total=2, got ${{ steps.merge.outputs.total }}"
+            exit 1
+          fi
+          echo "Merge counts OK: added=1, skipped=1, total=2"
+
+      - name: Assert merged manifest contains both models
+        run: |
+          python3 -c "
+          import yaml
+          doc = yaml.safe_load(open('${{ steps.merge.outputs.manifest-file }}'))
+          models = [t['model'] for t in doc['targets']]
+          assert 'existing-model' in models, 'missing existing-model'
+          assert 'new-model' in models, 'missing new-model'
+          assert len(models) == 2, f'expected 2 targets, got {len(models)}'
+          print(f'Merged manifest OK: {models}')
+          "
+
+      - name: Merge again (all duplicates)
+        id: merge-dedup
+        uses: ./.github/actions/merge-manifest
+        with:
+          base: ${{ steps.merge.outputs.manifest-file }}
+          new: .github/workflows/test-actions/merge-manifest/new-manifest.yaml
+
+      - name: Assert no additions on re-merge
+        run: |
+          if [ "${{ steps.merge-dedup.outputs.added }}" != "0" ]; then
+            echo "ERROR: expected added=0 on re-merge, got ${{ steps.merge-dedup.outputs.added }}"
+            exit 1
+          fi
+          echo "Re-merge dedup OK: added=0, skipped=${{ steps.merge-dedup.outputs.skipped }}"
+
   test-derive-manifest:
     runs-on: ubuntu-latest
     steps:

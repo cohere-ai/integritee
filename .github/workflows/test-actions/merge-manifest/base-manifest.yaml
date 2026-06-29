@@ -1,0 +1,6 @@
+targets:
+- model: existing-model
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-v1
+  ram_gib: 234
+  initdata_b64: dGVzdC1pbml0ZGF0YS1leGlzdGluZw==
