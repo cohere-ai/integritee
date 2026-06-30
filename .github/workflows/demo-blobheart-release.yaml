@@ -17,7 +17,7 @@ jobs:
   demo:
     runs-on: ubuntu-latest
     env:
-      BLOBHEART_REFS: ${{ inputs.blobheart_refs || 'b6ff57b9de50e018e13f6235bde0aad8d5bd7f8e' }}
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || '47ded742780246155c119caa1b3f90fd8b598c58' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3

@@ -180,7 +180,7 @@ jobs:
         id: verify
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "89ec4181ececbddabc81deb82183b556b4d5ec04"
+          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
           blobheart-token: ${{ steps.app-token.outputs.token }}
           policy-manifest: .github/workflows/test-actions/derive-manifest/expected-manifest.yaml
 
@@ -283,7 +283,7 @@ jobs:
         id: derive-single
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "89ec4181ececbddabc81deb82183b556b4d5ec04"
+          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify single-ref manifest
@@ -295,7 +295,7 @@ jobs:
         id: derive-multi
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "89ec4181ececbddabc81deb82183b556b4d5ec04 89ec4181ececbddabc81deb82183b556b4d5ec04"
+          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58 47ded742780246155c119caa1b3f90fd8b598c58"
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify multi-ref produces two manifest files
@@ -313,7 +313,7 @@ jobs:
       - name: Clone blobheart at pinned ref
         run: |
           git clone --depth 1 https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/cohere-ai/blobheart.git /tmp/blobheart
-          cd /tmp/blobheart && git fetch --depth 1 origin 89ec4181ececbddabc81deb82183b556b4d5ec04 && git checkout FETCH_HEAD
+          cd /tmp/blobheart && git fetch --depth 1 origin 47ded742780246155c119caa1b3f90fd8b598c58 && git checkout FETCH_HEAD
 
       - name: Derive manifest (local dir)
         id: derive-local
