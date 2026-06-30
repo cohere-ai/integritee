@@ -11,9 +11,17 @@ inputs:
   blobheart-dir:
     description: "Path to a local blobheart checkout (mutually exclusive with blobheart-refs)"
     required: false
-  github-token:
+  blobheart-token:
     description: "GitHub token with read access to blobheart (used for deriving manifests)"
-    required: true
+    required: false
+    default: ${{ github.token }}
+  integritee-token:
+    description: "GitHub token with read access to integritee releases (defaults to github.token)"
+    required: false
+    default: ${{ github.token }}
+  policy-manifest:
+    description: "Path to a local policy-manifest.yaml to verify against (skips fetching from latest release)"
+    required: false
   retries:
     description: "Number of retries after the initial attempt (0 = no retry)"
     required: false
@@ -39,10 +47,11 @@ runs:
       id: verify
       shell: bash
       env:
-        GITHUB_TOKEN: ${{ github.token }}
-        BLOBHEART_TOKEN: ${{ inputs.github-token }}
+        BLOBHEART_TOKEN: ${{ inputs.blobheart-token }}
+        INTEGRITEE_TOKEN: ${{ inputs.integritee-token }}
         BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
         BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
+        POLICY_MANIFEST: ${{ inputs.policy-manifest }}
         RETRIES: ${{ inputs.retries }}
         RETRY_DELAY: ${{ inputs.retry-delay }}
         ACTION_PATH: ${{ github.action_path }}

@@ -181,7 +181,8 @@ jobs:
         uses: ./.github/actions/verify-against-policy
         with:
           blobheart-refs: "89ec4181ececbddabc81deb82183b556b4d5ec04"
-          github-token: ${{ steps.app-token.outputs.token }}
+          blobheart-token: ${{ steps.app-token.outputs.token }}
+          policy-manifest: .github/workflows/test-actions/derive-manifest/expected-manifest.yaml
 
       - name: Assert release tag is set
         run: |
@@ -197,7 +198,7 @@ jobs:
         uses: ./.github/actions/verify-against-policy
         with:
           blobheart-refs: "8abd02c84e4764cb0e721a810588054f37bb6ca4"
-          github-token: ${{ steps.app-token.outputs.token }}
+          blobheart-token: ${{ steps.app-token.outputs.token }}
 
       - name: Assert verification failed
         run: |
