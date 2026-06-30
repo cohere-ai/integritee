@@ -12,13 +12,11 @@ inputs:
     description: "Path to a local blobheart checkout (mutually exclusive with blobheart-refs)"
     required: false
   blobheart-token:
-    description: "GitHub token with read access to blobheart (used for deriving manifests)"
+    description: "GitHub token with read access to blobheart (required when using blobheart-refs)"
     required: false
-    default: ${{ github.token }}
   integritee-token:
-    description: "GitHub token with read access to integritee releases (defaults to github.token)"
+    description: "GitHub token with read access to integritee releases (not required when using local policy-manifest)"
     required: false
-    default: ${{ github.token }}
   policy-manifest:
     description: "Path to a local policy-manifest.yaml to verify against (skips fetching from latest release)"
     required: false

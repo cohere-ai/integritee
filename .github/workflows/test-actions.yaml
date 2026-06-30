@@ -199,6 +199,7 @@ jobs:
         with:
           blobheart-refs: "8abd02c84e4764cb0e721a810588054f37bb6ca4"
           blobheart-token: ${{ steps.app-token.outputs.token }}
+          integritee-token: ${{ github.token }}
 
       - name: Assert verification failed
         run: |
