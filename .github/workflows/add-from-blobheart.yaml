@@ -24,7 +24,7 @@ jobs:
   add-targets:
     runs-on: ubuntu-latest
     env:
-      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs || 'b6ff57b9de50e018e13f6235bde0aad8d5bd7f8e' }}
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs || '47ded742780246155c119caa1b3f90fd8b598c58' }}
       DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'true' }}
     steps:
       - name: Checkout
