@@ -250,7 +250,7 @@ jobs:
           # Verify sources union on deduped target
           existing = next(t for t in doc['targets'] if t['model'] == 'existing-model')
           assert 'aabbccddaabbccddaabbccddaabbccddaabbccdd' in existing['sources'], 'missing original source on existing-model'
-          assert '1122334411223344112233441122334411223344' in existing['sources'], 'missing new source on existing-model (union failed)'
+          assert '112233aa112233aa112233aa112233aa112233aa' in existing['sources'], 'missing new source on existing-model (union failed)'
           print(f'Merged manifest OK: {models}, existing-model sources={existing[\"sources\"]}')
           "
 
