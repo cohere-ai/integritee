@@ -83,20 +83,23 @@ def main() -> None:
         for target in new_targets:
             h = target_hash(target)
             model = target.get("model", "unknown")
-            desc = target.get("desc", "")
+            incoming_sources = target.get("sources", [])
 
             if h in seen:
                 existing = seen[h]
+                existing_sources = existing.setdefault("sources", [])
+                for s in incoming_sources:
+                    if s not in existing_sources:
+                        existing_sources.append(s)
                 ex_model = existing.get("model", "?")
-                ex_initdata = existing.get("initdata_b64", "")[:12]
-                print(f"  {model}: skip, matches existing {ex_model} (initdata {ex_initdata}...)", file=sys.stderr)
+                print(f"  {model}: dedup, sources updated on {ex_model}", file=sys.stderr)
                 skipped += 1
             else:
                 seen[h] = target
                 base_targets.append(target)
                 added += 1
                 added_models.append(model)
-                print(f"  {model}: added ({desc})", file=sys.stderr)
+                print(f"  {model}: added (sources={incoming_sources})", file=sys.stderr)
 
     output_path = Path(args.output)
     write_manifest(output_path, base_targets)

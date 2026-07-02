@@ -247,7 +247,8 @@ def main() -> None:
             "podvm_image_tag": podvm_image_tag,
             "ram_gib": ram_gib,
             "initdata_b64": initdata,
-            "desc": f"added {today} from {source_label}",
+            "added": today,
+            "sources": [ref] if ref else ["local"],
         }
         targets.append(target)
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "
