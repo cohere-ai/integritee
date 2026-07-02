@@ -247,7 +247,11 @@ jobs:
           assert 'existing-model' in models, 'missing existing-model'
           assert 'new-model' in models, 'missing new-model'
           assert len(models) == 2, f'expected 2 targets, got {len(models)}'
-          print(f'Merged manifest OK: {models}')
+          # Verify sources union on deduped target
+          existing = next(t for t in doc['targets'] if t['model'] == 'existing-model')
+          assert 'aabbccddaabbccddaabbccddaabbccddaabbccdd' in existing['sources'], 'missing original source on existing-model'
+          assert '1122334411223344112233441122334411223344' in existing['sources'], 'missing new source on existing-model (union failed)'
+          print(f'Merged manifest OK: {models}, existing-model sources={existing[\"sources\"]}')
           "
 
       - name: Merge again (all duplicates)
@@ -289,8 +293,8 @@ jobs:
 
       - name: Verify single-ref manifest
         run: |
-          grep -v '  desc:' ${{ steps.derive-single.outputs.manifest-files }} > /tmp/actual-no-desc.yaml
-          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-no-desc.yaml
+          grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-single.outputs.manifest-files }} > /tmp/actual-content.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
 
       - name: Derive manifest (multiple refs, same ref twice)
         id: derive-multi
@@ -307,8 +311,8 @@ jobs:
             exit 1
           fi
           for f in ${{ steps.derive-multi.outputs.manifest-files }}; do
-            grep -v '  desc:' "$f" > /tmp/actual-no-desc.yaml
-            diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-no-desc.yaml
+            grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' "$f" > /tmp/actual-content.yaml
+            diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
           done
 
       - name: Clone blobheart at pinned ref
@@ -322,7 +326,7 @@ jobs:
         with:
           blobheart-dir: /tmp/blobheart
 
-      - name: Verify local-dir manifest (ignoring desc field which differs for local)
+      - name: Verify local-dir manifest (ignoring dynamic fields)
         run: |
-          grep -v '  desc:' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-no-desc.yaml
-          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-no-desc.yaml
+          grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-content.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml

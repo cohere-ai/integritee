@@ -20,6 +20,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: add-from-blobheart
+  cancel-in-progress: false
+
 jobs:
   add-targets:
     runs-on: ubuntu-latest
@@ -39,7 +43,7 @@ jobs:
           owner: cohere-ai
           repositories: blobheart
 
-      - name: Derive manifests from blobheart refs
+      - name: Derive manifests from blobheart sources
         id: derive
         uses: ./.github/actions/derive-manifest
         with:
@@ -56,13 +60,13 @@ jobs:
       - name: Update policy manifest
         id: changes
         run: |
-          if [[ "${{ steps.merge.outputs.added }}" == "0" ]]; then
+          cp "${{ steps.merge.outputs.manifest-file }}" attestation-policy/policy-manifest.yaml
+          if git diff --quiet attestation-policy/policy-manifest.yaml; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No new targets to add"
+            echo "No changes to manifest (all targets already tracked with this ref)"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "New targets detected: ${{ steps.merge.outputs.added }} added"
-            cp "${{ steps.merge.outputs.manifest-file }}" attestation-policy/policy-manifest.yaml
+            echo "Manifest updated: ${{ steps.merge.outputs.added }} new targets, sources updated on deduped targets"
             git diff attestation-policy/policy-manifest.yaml
           fi
 
@@ -76,5 +80,5 @@ jobs:
         if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
         run: |
           git add attestation-policy/policy-manifest.yaml
-          git commit -m "feat(policy): add attestation targets from blobheart refs ${{ env.BLOBHEART_REFS }}"
+          git commit -m "feat(policy): add attestation targets from blobheart sources ${{ env.BLOBHEART_REFS }}"
           git push
