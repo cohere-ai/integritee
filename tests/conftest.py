@@ -78,6 +78,12 @@ def make_cvm_artifacts_dir(
         meta = {**DEFAULT_CVM_META, **overrides.get(model, {})}
         (model_dir / "meta.json").write_text(json.dumps(meta, indent=2) + "\n")
 
+        uki_dir = cvm_dir / "uki" / meta["podvm_image_tag"]
+        uki_dir.mkdir(parents=True, exist_ok=True)
+        (uki_dir / "measurements.json").write_text(
+            json.dumps({"nvidia_driver_version": "580.159.04-1ubuntu1"})
+        )
+
     return cvm_dir
 
 
