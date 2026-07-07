@@ -169,6 +169,7 @@ jobs:
           mkdir -p release-assets
           cp attestation-policy.rego release-assets/attestation-policy.rego
           cp predicate.json release-assets/predicate.json
+          cp "${{ steps.attest.outputs.bundle-path }}" release-assets/attestation-bundle.sigstore.json
 
           RELEASE_BODY=""
 
