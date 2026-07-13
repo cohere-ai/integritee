@@ -41,6 +41,8 @@ jobs:
           output-artifacts-dir: artifacts
           output-policy-file: generated-policy.rego
           predicate-file: predicate.json
+          # Keep KAT deterministic; release-policy uses the real allowlist default.
+          temporary-gcp-tdx-firmware-allowlist: .github/workflows/test-actions/generate-policy/empty-temporary-firmware-allowlist.json
 
       - name: Verify generated rego matches expected
         run: |

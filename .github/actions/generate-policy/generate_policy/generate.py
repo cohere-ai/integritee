@@ -28,6 +28,61 @@ def to_nvat_driver_version(apt_pkg_version: str) -> str:
     return apt_pkg_version.split("-", 1)[0]
 
 
+def load_temporary_gcp_tdx_firmware_allowlist(path: Path | None) -> list[dict]:
+    """Load temporary GCP firmware-derived MRTD/RTMR0 pairs.
+
+    Short-term compatibility bridge for Google-managed firmware rollouts
+    while ITA policies use static measurements. Remove once policies
+    consume Google-signed launch endorsements or a proper baseline refresh.
+    """
+    if path is None or not path.exists():
+        return []
+
+    allowlist = json.loads(path.read_text())
+    if not isinstance(allowlist, list):
+        print(f"ERROR: {path} must contain a JSON list", file=sys.stderr)
+        sys.exit(1)
+
+    for entry in allowlist:
+        name = entry.get("name", "<unnamed>")
+        for field in ("mrtd", "rtmr0"):
+            val = entry.get(field)
+            if not isinstance(val, str) or len(val) != 96:
+                print(
+                    f"ERROR: temporary GCP TDX firmware allowlist entry "
+                    f"{name} has invalid {field}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+
+    return allowlist
+
+
+def expand_measurements_for_temporary_gcp_firmware_allowlist(
+    measurements: dict,
+    temporary_firmware_allowlist: list[dict],
+) -> list[tuple[str | None, dict]]:
+    """Return (label, measurements) variants with allowlisted MRTD/RTMR0.
+
+    RTMR1-3 stay model/target-specific from the computed measurements.
+    """
+    variants: list[tuple[str | None, dict]] = [(None, measurements)]
+    seen = {(measurements.get("mrtd"), measurements.get("rtmr0"))}
+
+    for firmware in temporary_firmware_allowlist:
+        key = (firmware["mrtd"], firmware["rtmr0"])
+        if key in seen:
+            continue
+        seen.add(key)
+
+        variant = dict(measurements)
+        variant["mrtd"] = firmware["mrtd"]
+        variant["rtmr0"] = firmware["rtmr0"]
+        variants.append((firmware.get("name"), variant))
+
+    return variants
+
+
 def resolve_nvidia_driver_version(
     targets: list[dict], artifacts_dir: Path
 ) -> str:
@@ -66,10 +121,19 @@ def generate_nonce_rule() -> str:
 
 
 def generate_matches_tdx_block(
-    index: int, model: str, measurements: dict
+    index: int,
+    model: str,
+    measurements: dict,
+    temporary_firmware_label: str | None = None,
 ) -> str:
+    comment = f"# Target {index}: {model}"
+    if temporary_firmware_label:
+        comment += (
+            f" (TEMPORARY GCP firmware allowlist: {temporary_firmware_label})"
+        )
+
     lines = [
-        f"# Target {index}: {model}",
+        comment,
         "matches_tdx if {",
         "    tdx_base_checks",
         "    tdx := input.tdx",
@@ -90,6 +154,7 @@ def render_policy(
     nv_driver_version: str,
     template_path: Path,
     output_path: Path,
+    temporary_firmware_allowlist: list[dict] | None = None,
 ) -> None:
     """Render the Rego policy file from targets with pre-computed measurements."""
     template = template_path.read_text()
@@ -97,11 +162,21 @@ def render_policy(
         print(f"ERROR: Template does not contain {PLACEHOLDER}", file=sys.stderr)
         sys.exit(1)
 
+    allowlist = temporary_firmware_allowlist or []
     blocks: list[str] = []
     for i, target in enumerate(targets):
         measurements = target["measurements"]
-        block = generate_matches_tdx_block(i, target["model"], measurements)
-        blocks.append(block)
+        for label, variant in expand_measurements_for_temporary_gcp_firmware_allowlist(
+            measurements, allowlist
+        ):
+            blocks.append(
+                generate_matches_tdx_block(
+                    i,
+                    target["model"],
+                    variant,
+                    temporary_firmware_label=label,
+                )
+            )
 
     if not blocks:
         print("ERROR: No targets to generate policy from", file=sys.stderr)
@@ -120,8 +195,11 @@ def render_policy(
 
     model_names = [t["model"] for t in targets]
     print(
-        f"Generated ITA policy with {len(blocks)} target(s): "
-        f"{', '.join(model_names)} (driver={nv_driver_version}) -> {output_path}"
+        f"Generated ITA policy with {len(blocks)} matches_tdx block(s) "
+        f"from {len(targets)} target(s): "
+        f"{', '.join(model_names)} (driver={nv_driver_version}"
+        f"{f', firmware_allowlist={len(allowlist)}' if allowlist else ''}"
+        f") -> {output_path}"
     )
 
 
@@ -147,6 +225,7 @@ def generate_policy(
     template_path: Path,
     policy_output: Path,
     predicate_file: Path | None = None,
+    temporary_gcp_tdx_firmware_allowlist: Path | None = None,
 ) -> None:
     """Run the full pipeline: read manifest, fetch, measure, render policy, update predicate.
 
@@ -165,6 +244,16 @@ def generate_policy(
         sys.exit(1)
 
     print(f"Loaded {len(targets)} targets from {manifest_file}")
+
+    temporary_firmware_allowlist = load_temporary_gcp_tdx_firmware_allowlist(
+        temporary_gcp_tdx_firmware_allowlist
+    )
+    if temporary_firmware_allowlist:
+        print(
+            f"Loaded {len(temporary_firmware_allowlist)} temporary GCP "
+            f"firmware allowlist entries from "
+            f"{temporary_gcp_tdx_firmware_allowlist}"
+        )
 
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     predicate_targets: list[dict] = []
@@ -228,7 +317,13 @@ def generate_policy(
     print("Generating ITA policy")
     print(f"{'=' * 60}")
     nv_driver_version = resolve_nvidia_driver_version(targets, artifacts_dir)
-    render_policy(targets, nv_driver_version, template_path, policy_output)
+    render_policy(
+        targets,
+        nv_driver_version,
+        template_path,
+        policy_output,
+        temporary_firmware_allowlist=temporary_firmware_allowlist,
+    )
 
     if predicate_file:
         predicate = json.loads(predicate_file.read_text()) if predicate_file.exists() else {}

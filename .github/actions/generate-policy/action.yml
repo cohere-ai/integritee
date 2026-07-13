@@ -17,6 +17,14 @@ inputs:
   predicate-file:
     description: "Path to predicate JSON file; read and updated in place with target data (optional)"
     required: false
+  temporary-gcp-tdx-firmware-allowlist:
+    description: >
+      Temporary workaround: JSON list of additional GCP firmware-derived
+      MRTD/RTMR0 pairs to allow. RTMR1-3 remain target-specific from
+      measurements. Remove once we have a long-term Google endorsement
+      or baseline-refresh flow. Pass an empty string to disable.
+    required: false
+    default: attestation-policy/temporary-gcp-tdx-firmware-allowlist.json
 
 runs:
   using: "docker"
@@ -29,3 +37,4 @@ runs:
     INPUT_OUTPUT_ARTIFACTS_DIR: ${{ inputs.output-artifacts-dir }}
     INPUT_OUTPUT_POLICY_FILE: ${{ inputs.output-policy-file }}
     INPUT_PREDICATE_FILE: ${{ inputs.predicate-file }}
+    INPUT_TEMPORARY_GCP_TDX_FIRMWARE_ALLOWLIST: ${{ inputs.temporary-gcp-tdx-firmware-allowlist }}

@@ -31,6 +31,9 @@ def main() -> None:
         sys.exit(1)
 
     predicate_env = os.environ.get("INPUT_PREDICATE_FILE", "")
+    allowlist_env = os.environ.get(
+        "INPUT_TEMPORARY_GCP_TDX_FIRMWARE_ALLOWLIST", ""
+    ).strip()
 
     generate_policy(
         manifest_file=Path(manifest_file),
@@ -40,6 +43,9 @@ def main() -> None:
         template_path=Path(__file__).parent / "policy-template.rego",
         policy_output=Path(policy_file),
         predicate_file=Path(predicate_env) if predicate_env else None,
+        temporary_gcp_tdx_firmware_allowlist=(
+            Path(allowlist_env) if allowlist_env else None
+        ),
     )
 
 
