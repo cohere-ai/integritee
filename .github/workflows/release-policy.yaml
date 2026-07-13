@@ -2,21 +2,23 @@ name: Release Policy
 
 on:
   push:
-    branches: [shariq/policy-automation]
+    branches: [main]
+    paths:
+      - "attestation-policy/policy-manifest.yaml"
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (e.g. v0.0.1)"
-        required: true
+        description: "Release version (empty = next v0.0.1aN)"
+        required: false
         type: string
       reason:
         description: "Reason for this release"
         required: false
         type: string
       ita_slot:
-        description: "ITA policy slot override (auto = blue/green rotation)"
+        description: "ITA policy slot"
         required: false
-        default: "auto"
+        default: "slot-a"
         type: choice
         options:
           - auto
@@ -34,17 +36,29 @@ permissions:
   attestations: write
   packages: read
 
+concurrency:
+  group: production-ita-policy-release
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
-      VERSION: ${{ inputs.version || 'dev' }}
-      ITA_SLOT: ${{ inputs.ita_slot || 'auto' }}
+      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+      VERSION: ${{ inputs.version || '' }}
+      ITA_SLOT: ${{ inputs.ita_slot || 'slot-a' }}
       REASON: ${{ inputs.reason || '' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Resolve release version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_VERSION: ${{ env.VERSION }}
+        run: >-
+          python3 .github/workflows/release-policy/manage.py resolve-version
+          --requested "$REQUESTED_VERSION"
 
       - name: Install Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1  # v6.3.0
@@ -78,31 +92,11 @@ jobs:
       # ----------------------------------------------------------------
       # Initialize predicate with workflow-level context
       # ----------------------------------------------------------------
-      - name: Fetch previous release log index
-        id: chain
-        run: |
-          PREV_INDEX=0
-          LATEST=$(gh release view --json tagName -q .tagName 2>/dev/null || echo "")
-          if [[ -n "$LATEST" ]]; then
-            echo "Previous release: $LATEST"
-          fi
-          echo "previous_log_index=$PREV_INDEX" >> "$GITHUB_OUTPUT"
-        env:
-          GH_TOKEN: ${{ github.token }}
-
       - name: Initialize predicate
-        run: |
-          python3 -c "
-          import json, subprocess
-          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD']).decode().strip()
-          with open('predicate.json', 'w') as f:
-              json.dump({
-                  'version': '${{ env.VERSION }}',
-                  'manifest_commit': commit,
-                  'previous_rekor_log_index': ${{ steps.chain.outputs.previous_log_index }},
-              }, f, indent=2)
-              f.write('\n')
-          "
+        run: >-
+          python3 .github/workflows/release-policy/manage.py init-predicate
+          --version "$VERSION"
+          --output predicate.json
 
       # ----------------------------------------------------------------
       # Generate policy (appends targets + cvm_measure_version to predicate)
@@ -124,10 +118,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           ITA_SLOT_OVERRIDE: ${{ env.ITA_SLOT }}
-        run: python3 .github/workflows/release-policy/select-ita-slot.py >> "$GITHUB_OUTPUT"
+        run: >-
+          python3 .github/workflows/release-policy/manage.py select-slot
+          --override "$ITA_SLOT_OVERRIDE" >> "$GITHUB_OUTPUT"
+
+      - name: Verify manifest targets use selected ITA slot
+        if: ${{ env.DRY_RUN == 'false' }}
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+          policy-id: ${{ steps.slot.outputs.policy_id }}
 
       - name: Upload policy to ITA
         if: ${{ env.DRY_RUN == 'false' }}
+        id: upload
         uses: ./.github/actions/upload-ita-policy
         with:
           policy-file: attestation-policy.rego
@@ -136,6 +140,19 @@ jobs:
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ secrets.ITA_API_URL }}
           predicate-file: predicate.json
+
+      - name: Fetch uploaded policy from ITA
+        if: ${{ env.DRY_RUN == 'false' }}
+        id: fetch
+        uses: ./.github/actions/fetch-ita-policy
+        with:
+          policy-id: ${{ steps.upload.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Verify uploaded policy
+        if: ${{ env.DRY_RUN == 'false' }}
+        run: diff attestation-policy.rego "${{ steps.fetch.outputs.policy-file }}"
 
       # ----------------------------------------------------------------
       # Attest policy with Sigstore
@@ -165,29 +182,31 @@ jobs:
       # ----------------------------------------------------------------
       - name: Prepare release assets
         if: ${{ env.DRY_RUN == 'false' }}
-        run: |
-          mkdir -p release-assets
-          cp attestation-policy.rego release-assets/attestation-policy.rego
-          cp predicate.json release-assets/predicate.json
-          cp "${{ steps.attest.outputs.bundle-path }}" release-assets/attestation-bundle.sigstore.json
-
-          RELEASE_BODY=""
-
-          if [[ -n "${{ env.REASON }}" ]]; then
-            RELEASE_BODY+="**Reason:** ${{ env.REASON }}\n\n"
-          fi
-
-          RELEASE_BODY+="**ITA Policy ID:** \`${{ steps.slot.outputs.policy_id }}\`\n"
-          RELEASE_BODY+="**ITA Policy Slot:** \`${{ steps.slot.outputs.policy_slot }}\`\n"
-
-          echo -e "$RELEASE_BODY" > release-body.md
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          POLICY_ID: ${{ steps.slot.outputs.policy_id }}
+          POLICY_SLOT: ${{ steps.slot.outputs.policy_slot }}
+        run: >-
+          python3 .github/workflows/release-policy/manage.py prepare-assets
+          --policy attestation-policy.rego
+          --manifest attestation-policy/policy-manifest.yaml
+          --predicate predicate.json
+          --bundle "$BUNDLE_PATH"
+          --output-dir release-assets
+          --release-notes release-body.md
+          --policy-id "$POLICY_ID"
+          --policy-slot "$POLICY_SLOT"
+          --reason "$REASON"
 
       - name: Create release
         if: ${{ env.DRY_RUN == 'false' }}
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release create "${{ env.VERSION }}" \
-            --title "Attestation Policy ${{ env.VERSION }}" \
-            --notes-file release-body.md \
-            release-assets/*
+        run: >-
+          gh release create "$VERSION"
+          --title "Attestation Policy $VERSION"
+          --notes-file release-body.md
+          release-assets/attestation-policy.rego
+          release-assets/policy-manifest.yaml
+          release-assets/predicate.json
+          release-assets/attestation-bundle.sigstore.json

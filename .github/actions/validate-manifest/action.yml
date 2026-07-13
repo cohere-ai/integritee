@@ -1,0 +1,28 @@
+name: Validate Policy Manifest
+description: Validate policy manifest schema, uniqueness, sources, and initdata
+
+inputs:
+  manifest-file:
+    description: Policy manifest YAML file
+    required: true
+  policy-id:
+    description: ITA policy ID that every target initdata must contain
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install pyyaml >/dev/null 2>&1
+
+    - name: Validate manifest
+      shell: bash
+      env:
+        MANIFEST_FILE: ${{ inputs.manifest-file }}
+        POLICY_ID: ${{ inputs.policy-id }}
+      run: >-
+        python3 "${{ github.action_path }}/validate_manifest.py"
+        "$MANIFEST_FILE"
+        --policy-id "$POLICY_ID"

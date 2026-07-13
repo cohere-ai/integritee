@@ -1,8 +1,10 @@
 name: Add from Blobheart
+run-name: Blobheart policy ${{ github.event.client_payload.correlation_id || github.run_id }}
 
 on:
+  # Temporary dry-run trigger; remove before merging to main.
   push:
-    branches: [shariq/policy-automation] # temporary: remove before merging
+    branches: [shariq/policy-automation]
   repository_dispatch:
     types: [blobheart-deploy]
   workflow_dispatch:
@@ -18,7 +20,9 @@ on:
         default: false
 
 permissions:
+  actions: read
   contents: write
+  pull-requests: write
 
 concurrency:
   group: add-from-blobheart
@@ -27,12 +31,15 @@ concurrency:
 jobs:
   add-targets:
     runs-on: ubuntu-latest
+    timeout-minutes: 90
     env:
-      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs || '47ded742780246155c119caa1b3f90fd8b598c58' }}
-      DRY_RUN: ${{ inputs.dry_run || github.event.client_payload.dry_run || 'true' }}
+      BLOBHEART_REFS: ${{ github.event_name == 'push' && '47ded742780246155c119caa1b3f90fd8b598c58' || inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
+      DRY_RUN: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run || github.event.client_payload.dry_run) }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
 
       - name: Mint GitHub App token
         id: app-token
@@ -41,7 +48,16 @@ jobs:
           client-id: ${{ secrets.GH_APP_CLIENT_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: cohere-ai
-          repositories: blobheart
+          repositories: blobheart,integritee
+          permission-actions: read
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Validate Blobheart refs
+        run: >-
+          python3 .github/workflows/add-from-blobheart/manage.py validate
+          --blobheart-refs "$BLOBHEART_REFS"
+          --dry-run "$DRY_RUN"
 
       - name: Derive manifests from blobheart sources
         id: derive
@@ -59,16 +75,20 @@ jobs:
 
       - name: Update policy manifest
         id: changes
-        run: |
-          cp "${{ steps.merge.outputs.manifest-file }}" attestation-policy/policy-manifest.yaml
-          if git diff --quiet attestation-policy/policy-manifest.yaml; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-            echo "No changes to manifest (all targets already tracked with this ref)"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-            echo "Manifest updated: ${{ steps.merge.outputs.added }} new targets, sources updated on deduped targets"
-            git diff attestation-policy/policy-manifest.yaml
-          fi
+        env:
+          MERGED_MANIFEST: ${{ steps.merge.outputs.manifest-file }}
+          ADDED_TARGETS: ${{ steps.merge.outputs.added }}
+        run: >-
+          python3 .github/workflows/add-from-blobheart/manage.py update
+          --merged "$MERGED_MANIFEST"
+          --manifest attestation-policy/policy-manifest.yaml
+          --added "$ADDED_TARGETS"
+
+      - name: Validate policy manifest update
+        if: steps.changes.outputs.changed == 'true'
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
 
       - name: Upload merged manifest
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
@@ -76,9 +96,24 @@ jobs:
           name: merged-policy-manifest
           path: attestation-policy/policy-manifest.yaml
 
-      - name: Commit and push
+      - name: Create and merge manifest PR
+        id: manifest-pr
         if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
-        run: |
-          git add attestation-policy/policy-manifest.yaml
-          git commit -m "feat(policy): add attestation targets from blobheart sources ${{ env.BLOBHEART_REFS }}"
-          git push
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: >-
+          python3 .github/workflows/add-from-blobheart/manage.py publish-pr
+          --manifest attestation-policy/policy-manifest.yaml
+          --blobheart-refs "$BLOBHEART_REFS"
+          --repository "$GITHUB_REPOSITORY"
+
+      - name: Wait for production policy release
+        if: env.DRY_RUN == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR_MERGE_SHA: ${{ steps.manifest-pr.outputs.merge-sha }}
+        run: >-
+          python3 .github/workflows/add-from-blobheart/manage.py wait-release
+          --repository "$GITHUB_REPOSITORY"
+          --manifest attestation-policy/policy-manifest.yaml
+          --release-sha "$PR_MERGE_SHA"

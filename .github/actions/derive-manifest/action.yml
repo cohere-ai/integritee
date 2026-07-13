@@ -28,17 +28,24 @@ runs:
       id: derive
       shell: bash
       env:
+        BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
+        BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         MANIFEST_FILES=""
-        if [[ -n "${{ inputs.blobheart-dir }}" ]]; then
+        if [[ -n "$BLOBHEART_DIR" ]]; then
           MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-local.yaml"
           python3 "${{ github.action_path }}/derive.py" \
-            --blobheart-dir "${{ inputs.blobheart-dir }}" \
+            --blobheart-dir "$BLOBHEART_DIR" \
             --output "$MANIFEST_FILE"
           MANIFEST_FILES="$MANIFEST_FILE"
         else
-          for REF in ${{ inputs.blobheart-refs }}; do
+          read -r -a REFS <<< "$BLOBHEART_REFS"
+          if [[ ${#REFS[@]} -eq 0 ]]; then
+            echo "At least one Blobheart ref is required"
+            exit 1
+          fi
+          for REF in "${REFS[@]}"; do
             echo "========================================"
             echo "Deriving manifest from blobheart ref: $REF"
             echo "========================================"

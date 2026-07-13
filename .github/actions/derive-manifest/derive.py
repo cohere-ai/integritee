@@ -164,6 +164,7 @@ def load_machine_types() -> dict[str, dict]:
 
 
 def main() -> None:
+    """Derive a policy manifest from local or remote Blobheart."""
     parser = argparse.ArgumentParser(description="Derive manifest from blobheart ref or local checkout")
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument("--blobheart-ref", help="Blobheart commit SHA")
@@ -173,6 +174,10 @@ def main() -> None:
 
     root = Path(args.blobheart_dir) if args.blobheart_dir else None
     ref = args.blobheart_ref
+    if ref and not re.fullmatch(r"[0-9a-f]{40}", ref):
+        parser.error("--blobheart-ref must be a 40-character lowercase SHA")
+    if root and not root.is_dir():
+        parser.error(f"--blobheart-dir is not a directory: {root}")
     source_label = f"local://{root}" if root else f"blobheart://{ref}"
 
     machine_types = load_machine_types()
