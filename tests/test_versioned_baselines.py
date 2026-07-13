@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import subprocess
 import sys
@@ -242,13 +243,19 @@ def test_generate_policy_measures_and_records_each_baseline(
     monkeypatch.setattr(generate, "compute_measurements", fake_measurements)
 
     manifest = tmp_path / "manifest.yaml"
+    initdata = b"test"
+    initdata_sha384 = hashlib.sha384(initdata).hexdigest()
+    initdata_dir = tmp_path / "initdata"
+    initdata_dir.mkdir()
+    (initdata_dir / f"{initdata_sha384}.toml").write_bytes(initdata)
     manifest.write_text(
         "targets:\n"
         "  - model: cmp-l\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
         "    ram_gib: 234\n"
-        "    initdata_b64: dGVzdA==\n"
+        f"    initdata_file: initdata/{initdata_sha384}.toml\n"
+        f"    initdata_sha384: {initdata_sha384}\n"
     )
     predicate = tmp_path / "predicate.json"
     predicate.write_text("{}")

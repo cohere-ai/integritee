@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "attestation-policy/policy-manifest.yaml"
+      - "attestation-policy/initdata/**"
   workflow_dispatch:
     inputs:
       version:
@@ -208,5 +209,6 @@ jobs:
           --notes-file release-body.md
           release-assets/attestation-policy.rego
           release-assets/policy-manifest.yaml
+          release-assets/policy-manifest-bundle.tar.gz
           release-assets/predicate.json
           release-assets/attestation-bundle.sigstore.json

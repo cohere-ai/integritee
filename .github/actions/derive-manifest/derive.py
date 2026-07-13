@@ -24,11 +24,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
 import datetime
+import gzip
+import hashlib
 import json
 import re
 import subprocess
 import sys
+import zlib
 from pathlib import Path
 
 import yaml
@@ -43,6 +47,7 @@ CC_LABEL = "cohere.com/confidential-compute=true"
 
 KATA_IMAGE_ANNOTATION = "io.katacontainers.config.hypervisor.image"
 KATA_MACHINE_ANNOTATION = "io.katacontainers.config.hypervisor.machine_type"
+INITDATA_DIR = "initdata"
 
 
 def read_file(root: Path | None, ref: str | None, path: str) -> str:
@@ -139,6 +144,27 @@ def extract_initdata(kata_policy_yaml: str) -> str | None:
     return annotations.get("io.katacontainers.config.hypervisor.cc_init_data")
 
 
+def decode_initdata(value: str) -> bytes:
+    """Decode and decompress a cc_init_data annotation."""
+    try:
+        decoded = base64.b64decode(value, validate=True)
+        return gzip.decompress(decoded) if decoded[:2] == b"\x1f\x8b" else decoded
+    except (binascii.Error, gzip.BadGzipFile, EOFError, zlib.error) as error:
+        raise ValueError(f"invalid cc_init_data: {error}") from error
+
+
+def write_initdata(value: str, output_dir: Path) -> tuple[str, str]:
+    """Write decoded initdata by SHA-384 and return its metadata."""
+    decoded = decode_initdata(value)
+    digest = hashlib.sha384(decoded).hexdigest()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path = output_dir / f"{digest}.toml"
+    if output_path.exists() and output_path.read_bytes() != decoded:
+        raise ValueError(f"initdata digest collision: {digest}")
+    output_path.write_bytes(decoded)
+    return f"{INITDATA_DIR}/{output_path.name}", digest
+
+
 def extract_gpu_label(model_yaml: str) -> str | None:
     """Extract cohere.com/gpu label from a model's model.yaml.
 
@@ -170,10 +196,17 @@ def main() -> None:
     source_group.add_argument("--blobheart-ref", help="Blobheart commit SHA")
     source_group.add_argument("--blobheart-dir", help="Path to local blobheart checkout")
     parser.add_argument("--output", required=True, help="Output manifest YAML path")
+    parser.add_argument(
+        "--initdata-dir",
+        type=Path,
+        help="Directory for decoded initdata (default: <output-dir>/initdata)",
+    )
     args = parser.parse_args()
 
     root = Path(args.blobheart_dir) if args.blobheart_dir else None
     ref = args.blobheart_ref
+    output_path = Path(args.output)
+    initdata_dir = args.initdata_dir or output_path.parent / INITDATA_DIR
     if ref and not re.fullmatch(r"[0-9a-f]{40}", ref):
         parser.error("--blobheart-ref must be a 40-character lowercase SHA")
     if root and not root.is_dir():
@@ -245,22 +278,29 @@ def main() -> None:
             print(f"  WARNING: no cc_init_data annotation, skipping")
             continue
 
+        try:
+            initdata_file, initdata_sha384 = write_initdata(initdata, initdata_dir)
+        except ValueError as error:
+            print(f"  ERROR: {error}", file=sys.stderr)
+            sys.exit(1)
+
         today = datetime.date.today().isoformat()
         target = {
             "model": model,
             "machine_type": machine_type,
             "podvm_image_tag": podvm_image_tag,
             "ram_gib": ram_gib,
-            "initdata_b64": initdata,
+            "initdata_file": initdata_file,
+            "initdata_sha384": initdata_sha384,
             "added": today,
             "sources": [ref] if ref else ["local"],
         }
         targets.append(target)
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "
-              f"ram_gib={ram_gib}, initdata={len(initdata)} chars")
+              f"ram_gib={ram_gib}, initdata_sha384={initdata_sha384}")
 
-    Path(args.output).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.output).write_text(
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
         yaml.dump({"targets": targets}, default_flow_style=False, sort_keys=False)
     )
     print(f"\nDerived {len(targets)} targets -> {args.output}")

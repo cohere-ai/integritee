@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -14,6 +15,7 @@ from pathlib import Path
 
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+SHA384_FILE_RE = re.compile(r"[0-9a-f]{96}\.toml")
 
 
 def run(
@@ -46,44 +48,66 @@ def validate(args: argparse.Namespace) -> None:
         raise SystemExit(f"invalid Blobheart commit SHA: {invalid[0]}")
 
 
+def install_initdata(source_dir: Path, destination_dir: Path) -> None:
+    """Copy content-addressed initdata files into the repository."""
+    if not source_dir.is_dir():
+        raise SystemExit(f"initdata directory does not exist: {source_dir}")
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    for source in source_dir.iterdir():
+        if not source.is_file() or not SHA384_FILE_RE.fullmatch(source.name):
+            raise SystemExit(f"unexpected initdata file: {source}")
+        source_initdata = source.read_bytes()
+        expected_digest = source.stem
+        if hashlib.sha384(source_initdata).hexdigest() != expected_digest:
+            raise SystemExit(f"initdata digest does not match filename: {source.name}")
+
+        destination = destination_dir / source.name
+        if destination.exists() and destination.read_bytes() != source_initdata:
+            raise SystemExit(f"initdata digest collision: {source.name}")
+        if not destination.exists():
+            shutil.copyfile(source, destination)
+
+
 def update(args: argparse.Namespace) -> None:
     """Install the merged manifest and report changes."""
     output_path = os.environ.get("GITHUB_OUTPUT")
     if not output_path:
         raise SystemExit("GITHUB_OUTPUT is required")
     shutil.copyfile(args.merged, args.manifest)
+    install_initdata(args.initdata_source, args.initdata_dir)
 
-    status = run(
+    status_lines = run(
         "git",
-        "diff",
-        "--quiet",
-        "--",
-        str(args.manifest),
-        check=False,
-    ).returncode
-    if status not in {0, 1}:
-        raise SystemExit("failed to compare the merged policy manifest")
-    changed = status == 1
+        "status",
+        "--porcelain=v1",
+        "--untracked-files=all",
+        capture_output=True,
+    ).stdout.splitlines()
+    changed_files = [line[3:] for line in status_lines]
+    initdata_prefix = f"{args.initdata_dir}/"
+    unexpected = [
+        path
+        for path in changed_files
+        if path != str(args.manifest) and not path.startswith(initdata_prefix)
+    ]
+    if unexpected:
+        raise SystemExit(f"unexpected changed files: {unexpected}")
+
+    changed = bool(changed_files)
     with Path(output_path).open("a") as output:
         output.write(f"changed={str(changed).lower()}\n")
     if not changed:
         print("No changes to manifest; all targets already track this ref")
         return
 
-    changed_files = run(
-        "git",
-        "diff",
-        "--name-only",
-        capture_output=True,
-    ).stdout.splitlines()
-    if changed_files != [str(args.manifest)]:
-        raise SystemExit(f"unexpected changed files: {changed_files}")
-
     print(
         f"Manifest updated: {args.added} new targets; "
         "sources updated on deduplicated targets"
     )
     run("git", "diff", "--", str(args.manifest))
+    for path in changed_files:
+        if path.startswith(initdata_prefix):
+            print(f"Added initdata: {path}")
 
 
 def publish(args: argparse.Namespace) -> None:
@@ -104,7 +128,7 @@ def publish(args: argparse.Namespace) -> None:
         "user.email",
         "integritee-policy-automation[bot]@users.noreply.github.com",
     )
-    run("git", "add", str(args.manifest))
+    run("git", "add", str(args.manifest), str(args.initdata_dir))
     run(
         "git",
         "commit",
@@ -215,11 +239,14 @@ def parser() -> argparse.ArgumentParser:
     update_parser = commands.add_parser("update")
     update_parser.add_argument("--merged", type=Path, required=True)
     update_parser.add_argument("--manifest", type=Path, required=True)
+    update_parser.add_argument("--initdata-source", type=Path, required=True)
+    update_parser.add_argument("--initdata-dir", type=Path, required=True)
     update_parser.add_argument("--added", type=int, required=True)
     update_parser.set_defaults(handler=update)
 
     publish_parser = commands.add_parser("publish")
     publish_parser.add_argument("--manifest", type=Path, required=True)
+    publish_parser.add_argument("--initdata-dir", type=Path, required=True)
     publish_parser.add_argument("--blobheart-refs", required=True)
     publish_parser.add_argument("--repository", required=True)
     publish_parser.set_defaults(handler=publish)

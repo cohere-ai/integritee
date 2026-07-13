@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tarfile
 from pathlib import Path
 
 ALPHA_TAG_RE = re.compile(r"v0\.0\.1a([0-9]+)")
@@ -143,6 +144,14 @@ def prepare_assets(args: argparse.Namespace) -> None:
         if not source.is_file():
             raise SystemExit(f"release asset does not exist: {source}")
         shutil.copyfile(source, args.output_dir / destination)
+
+    initdata_dir = args.manifest.parent / "initdata"
+    if not initdata_dir.is_dir():
+        raise SystemExit(f"initdata directory does not exist: {initdata_dir}")
+    bundle_path = args.output_dir / "policy-manifest-bundle.tar.gz"
+    with tarfile.open(bundle_path, "w:gz") as archive:
+        archive.add(args.manifest, arcname="policy-manifest.yaml")
+        archive.add(initdata_dir, arcname="initdata")
 
     sections = []
     if args.reason:

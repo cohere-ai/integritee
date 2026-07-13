@@ -16,6 +16,9 @@ outputs:
   manifest-files:
     description: "Space-separated paths to the derived policy-manifest YAML files"
     value: ${{ steps.derive.outputs.manifest-files }}
+  initdata-dir:
+    description: "Directory containing content-addressed decoded initdata files"
+    value: ${{ steps.derive.outputs.initdata-dir }}
 
 runs:
   using: "composite"
@@ -33,10 +36,12 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
       run: |
         MANIFEST_FILES=""
+        INITDATA_DIR="${RUNNER_TEMP}/initdata"
         if [[ -n "$BLOBHEART_DIR" ]]; then
           MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-local.yaml"
           python3 "${{ github.action_path }}/derive.py" \
             --blobheart-dir "$BLOBHEART_DIR" \
+            --initdata-dir "$INITDATA_DIR" \
             --output "$MANIFEST_FILE"
           MANIFEST_FILES="$MANIFEST_FILE"
         else
@@ -53,9 +58,11 @@ runs:
             MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-${REF}.yaml"
             python3 "${{ github.action_path }}/derive.py" \
               --blobheart-ref "$REF" \
+              --initdata-dir "$INITDATA_DIR" \
               --output "$MANIFEST_FILE"
 
             MANIFEST_FILES="$MANIFEST_FILES $MANIFEST_FILE"
           done
         fi
         echo "manifest-files=${MANIFEST_FILES# }" >> "$GITHUB_OUTPUT"
+        echo "initdata-dir=$INITDATA_DIR" >> "$GITHUB_OUTPUT"

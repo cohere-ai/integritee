@@ -4,13 +4,9 @@
 from __future__ import annotations
 
 import argparse
-import base64
-import binascii
-import gzip
 import hashlib
 import re
 import sys
-import zlib
 from pathlib import Path
 from typing import Any
 
@@ -21,37 +17,57 @@ CONTENT_FIELDS = (
     "machine_type",
     "podvm_image_tag",
     "ram_gib",
-    "initdata_b64",
 )
-REQUIRED_FIELDS = set(CONTENT_FIELDS) | {"sources"}
+REQUIRED_FIELDS = set(CONTENT_FIELDS) | {
+    "initdata_file",
+    "initdata_sha384",
+    "sources",
+}
 SHA_RE = re.compile(r"[0-9a-f]{40}")
+SHA384_RE = re.compile(r"[0-9a-f]{96}")
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
     r"[0-9a-f]{4}-[0-9a-f]{12}"
 )
 
 
-def content_hash(target: dict[str, Any]) -> str:
+def content_hash(target: dict[str, Any], initdata_sha384: str) -> str:
     """Hash the fields that define a policy target."""
-    value = "|".join(str(target[field]) for field in CONTENT_FIELDS)
+    values = [str(target[field]) for field in CONTENT_FIELDS]
+    values.append(initdata_sha384)
+    value = "|".join(values)
     return hashlib.sha256(value.encode()).hexdigest()
 
 
-def decode_initdata(value: Any) -> bytes:
-    """Decode and decompress a target's initdata."""
-    if not isinstance(value, str) or not value:
-        raise ValueError("initdata_b64 must be a non-empty string")
-    try:
-        decoded = base64.b64decode(value, validate=True)
-        return gzip.decompress(decoded) if decoded[:2] == b"\x1f\x8b" else decoded
-    except (binascii.Error, gzip.BadGzipFile, EOFError, zlib.error) as error:
-        raise ValueError(f"invalid initdata_b64: {error}") from error
+def resolve_initdata(target: dict[str, Any], manifest_path: Path) -> tuple[bytes, str]:
+    """Load file-backed initdata and return its bytes and SHA-384."""
+    if "initdata_b64" in target:
+        raise ValueError("initdata_b64 is not supported")
+    relative = target["initdata_file"]
+    digest = target["initdata_sha384"]
+    if not isinstance(digest, str) or not SHA384_RE.fullmatch(digest):
+        raise ValueError("initdata_sha384 must be 96 lowercase hex characters")
+    expected_relative = f"initdata/{digest}.toml"
+    if relative != expected_relative:
+        raise ValueError(f"initdata_file must be {expected_relative}")
+
+    initdata_path = manifest_path.parent / expected_relative
+    if not initdata_path.is_file():
+        raise ValueError(f"initdata file does not exist: {relative}")
+    value = initdata_path.read_bytes()
+    actual_digest = hashlib.sha384(value).hexdigest()
+    if actual_digest != digest:
+        raise ValueError(
+            f"initdata_sha384 mismatch: expected {digest}, got {actual_digest}"
+        )
+    return value, digest
 
 
 def validate_target(
     target: Any,
     index: int,
     policy_id: str,
+    manifest_path: Path,
 ) -> tuple[str | None, list[str]]:
     """Validate one manifest target."""
     label = f"target {index}"
@@ -78,13 +94,14 @@ def validate_target(
                 errors.append(f"{label} has invalid source ref: {source}")
 
     try:
-        initdata = decode_initdata(target["initdata_b64"])
+        initdata, initdata_digest = resolve_initdata(target, manifest_path)
         if policy_id and policy_id.encode() not in initdata:
             errors.append(f"{label} initdata does not contain policy {policy_id}")
     except ValueError as error:
         errors.append(f"{label} {error}")
+        return None, errors
 
-    return content_hash(target), errors
+    return content_hash(target, initdata_digest), errors
 
 
 def validate_manifest(path: Path, policy_id: str = "") -> list[str]:
@@ -102,7 +119,12 @@ def validate_manifest(path: Path, policy_id: str = "") -> list[str]:
     errors: list[str] = []
     hashes: set[str] = set()
     for index, target in enumerate(targets):
-        target_hash, target_errors = validate_target(target, index, policy_id)
+        target_hash, target_errors = validate_target(
+            target,
+            index,
+            policy_id,
+            path,
+        )
         errors.extend(target_errors)
         if target_hash is not None:
             if target_hash in hashes:

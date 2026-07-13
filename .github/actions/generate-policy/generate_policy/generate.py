@@ -20,7 +20,7 @@ from .fetch import (
     fetch_oci_digest,
     fetch_uki,
 )
-from .measure import compute_measurements
+from .measure import compute_measurements, resolve_initdata
 
 PLACEHOLDER = "${TDX_MEASUREMENTS_BY_MODEL}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
@@ -288,6 +288,12 @@ def generate_policy(
         print(f"  UKI: {podvm_tag}")
         fetch_uki(podvm_ref, uki_dest)
 
+        try:
+            initdata = resolve_initdata(target, manifest_file)
+        except ValueError as error:
+            print(f"ERROR: {model}: {error}", file=sys.stderr)
+            sys.exit(1)
+
         measured_variants: list[dict] = []
         for baseline_variant in baseline_variants:
             version = baseline_variant["version"]
@@ -311,7 +317,7 @@ def generate_policy(
             print(f"  Computing measurements for {fw_sha384[:12]}.../{version}...")
             measurements = compute_measurements(
                 ram_gib=target["ram_gib"],
-                initdata_b64=target["initdata_b64"],
+                initdata=initdata,
                 firmware_path=firmware_path,
                 baseline_path=baseline_path,
                 uki_path=uki_dest / "BOOTX64.EFI",
@@ -331,16 +337,7 @@ def generate_policy(
         primary_variant = measured_variants[0]
         target["measurements"] = primary_variant["measurements"]
         target["baseline_variants"] = measured_variants
-
-        initdata_toml = (
-            target_dir
-            / primary_variant["firmware_sha384"]
-            / primary_variant["version"]
-            / "initdata.toml"
-        )
-        initdata_hash = ""
-        if initdata_toml.exists():
-            initdata_hash = hashlib.sha384(initdata_toml.read_bytes()).hexdigest()
+        initdata_hash = hashlib.sha384(initdata).hexdigest()
 
         predicate_targets.append({
             **target,

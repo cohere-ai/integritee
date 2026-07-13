@@ -79,6 +79,8 @@ jobs:
           python3 .github/workflows/add-from-blobheart/manage.py update
           --merged "$MERGED_MANIFEST"
           --manifest attestation-policy/policy-manifest.yaml
+          --initdata-source "${{ steps.derive.outputs.initdata-dir }}"
+          --initdata-dir attestation-policy/initdata
           --added "$ADDED_TARGETS"
 
       - name: Validate policy manifest update
@@ -91,7 +93,9 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: merged-policy-manifest
-          path: attestation-policy/policy-manifest.yaml
+          path: |
+            attestation-policy/policy-manifest.yaml
+            attestation-policy/initdata/
 
       - name: Commit and push manifest
         id: publish
@@ -101,6 +105,7 @@ jobs:
         run: >-
           python3 .github/workflows/add-from-blobheart/manage.py publish
           --manifest attestation-policy/policy-manifest.yaml
+          --initdata-dir attestation-policy/initdata
           --blobheart-refs "$BLOBHEART_REFS"
           --repository "$GITHUB_REPOSITORY"
 

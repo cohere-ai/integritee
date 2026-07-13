@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """Merge one or more new policy manifests into a base manifest with dedup.
 
-Content-addressed deduplication: a SHA-256 hash of all content fields
-(model, machine_type, podvm_image_tag, ram_gib, initdata_b64) is computed
-per target.  Targets with identical hashes are considered duplicates.
+Content-addressed deduplication uses the SHA-384 of file-backed initdata.
 
 Usage:
     python merge-manifest.py \
@@ -21,12 +19,30 @@ from pathlib import Path
 
 import yaml
 
-CONTENT_FIELDS = ("model", "machine_type", "podvm_image_tag", "ram_gib", "initdata_b64")
+CONTENT_FIELDS = ("model", "machine_type", "podvm_image_tag", "ram_gib")
+
+
+def initdata_sha384(target: dict) -> str:
+    """Validate and return a file-backed initdata SHA-384 digest."""
+    if "initdata_b64" in target:
+        raise ValueError("initdata_b64 is not supported")
+    digest = target.get("initdata_sha384")
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 96
+        or any(character not in "0123456789abcdef" for character in digest)
+    ):
+        raise ValueError("target has invalid initdata_sha384")
+    expected_file = f"initdata/{digest}.toml"
+    if target.get("initdata_file") != expected_file:
+        raise ValueError(f"initdata_file must be {expected_file}")
+    return digest
 
 
 def target_hash(target: dict) -> str:
     """Compute a deterministic content hash for dedup."""
     parts = [str(target.get(f, "")) for f in CONTENT_FIELDS]
+    parts.append(initdata_sha384(target))
     return hashlib.sha256("|".join(parts).encode()).hexdigest()
 
 
@@ -69,7 +85,11 @@ def main() -> None:
     else:
         base_targets = []
 
-    seen: dict[str, dict] = {target_hash(t): t for t in base_targets}
+    try:
+        seen: dict[str, dict] = {target_hash(t): t for t in base_targets}
+    except (ValueError, TypeError) as error:
+        print(f"ERROR: invalid base target: {error}", file=sys.stderr)
+        sys.exit(1)
 
     added = 0
     skipped = 0
@@ -81,7 +101,11 @@ def main() -> None:
         print(f"Processing {new_path} ({len(new_targets)} targets)", file=sys.stderr)
 
         for target in new_targets:
-            h = target_hash(target)
+            try:
+                h = target_hash(target)
+            except (ValueError, TypeError) as error:
+                print(f"ERROR: invalid target in {new_path}: {error}", file=sys.stderr)
+                sys.exit(1)
             model = target.get("model", "unknown")
             incoming_sources = target.get("sources", [])
 

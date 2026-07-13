@@ -2,28 +2,44 @@
 
 from __future__ import annotations
 
-import base64
-import gzip
+import hashlib
 import json
 import subprocess
+import sys
 from pathlib import Path
 
 
-def decode_cc_init_data(initdata_b64: str) -> bytes:
-    """Decode a cc_init_data annotation value into raw TOML bytes.
+def resolve_initdata(target: dict, manifest_file: Path) -> bytes:
+    """Load and verify file-backed target initdata."""
+    if "initdata_b64" in target:
+        raise ValueError("initdata_b64 is not supported")
 
-    The annotation is base64(gzip(toml)) -- the gzip layer keeps the
-    annotation under the etcd value-size limit.
-    """
-    raw = base64.b64decode(initdata_b64)
-    if raw[:2] == b"\x1f\x8b":
-        return gzip.decompress(raw)
-    return raw
+    digest = target.get("initdata_sha384")
+    relative = target.get("initdata_file")
+    expected_relative = f"initdata/{digest}.toml"
+    if (
+        not isinstance(digest, str)
+        or len(digest) != 96
+        or any(character not in "0123456789abcdef" for character in digest)
+        or relative != expected_relative
+    ):
+        raise ValueError("target has invalid file-backed initdata")
+
+    initdata_path = manifest_file.parent / expected_relative
+    if not initdata_path.is_file():
+        raise ValueError(f"initdata file does not exist: {relative}")
+    initdata = initdata_path.read_bytes()
+    actual_digest = hashlib.sha384(initdata).hexdigest()
+    if actual_digest != digest:
+        raise ValueError(
+            f"initdata digest mismatch: expected {digest}, got {actual_digest}"
+        )
+    return initdata
 
 
 def compute_measurements(
     ram_gib: int,
-    initdata_b64: str,
+    initdata: bytes,
     firmware_path: Path,
     baseline_path: Path,
     uki_path: Path,
@@ -34,7 +50,7 @@ def compute_measurements(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     initdata_toml = output_dir / "initdata.toml"
-    initdata_toml.write_bytes(decode_cc_init_data(initdata_b64))
+    initdata_toml.write_bytes(initdata)
 
     cmd = [
         "cvm-measure", "tdx",
