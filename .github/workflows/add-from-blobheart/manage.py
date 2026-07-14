@@ -86,32 +86,16 @@ def update(args: argparse.Namespace) -> None:
     run("git", "diff", "--", str(args.manifest))
 
 
-def publish_pr(args: argparse.Namespace) -> None:
-    """Create and merge the generated manifest PR."""
+def publish(args: argparse.Namespace) -> None:
+    """Commit and push the generated manifest directly."""
     refs = args.blobheart_refs.split()
     if not refs or any(not SHA_RE.fullmatch(ref) for ref in refs):
         raise SystemExit("blobheart refs must be 40-character lowercase SHAs")
     validate_repository(args.repository)
 
-    run_id = os.environ.get("GITHUB_RUN_ID", "")
     output_path = os.environ.get("GITHUB_OUTPUT")
-    if not run_id.isdigit():
-        raise SystemExit("GITHUB_RUN_ID must be numeric")
     if not output_path:
         raise SystemExit("GITHUB_OUTPUT is required")
-
-    short_ref = refs[0][:12]
-    branch = f"automation/blobheart-policy-{short_ref}-{run_id}"
-    body = f"""## Summary
-- derive confidential-computing targets from Blobheart commit(s) `{args.blobheart_refs}`
-- update the generated production policy manifest
-
-## Validation
-- source refs are pinned 40-character commit SHAs
-- target content is deduplicated by model, machine type, PodVM image, RAM, and initdata
-
-Automated manifest update; no hand-authored policy code.
-"""
 
     run("git", "config", "user.name", "integritee-policy-automation[bot]")
     run(
@@ -120,7 +104,6 @@ Automated manifest update; no hand-authored policy code.
         "user.email",
         "integritee-policy-automation[bot]@users.noreply.github.com",
     )
-    run("git", "switch", "-c", branch)
     run("git", "add", str(args.manifest))
     run(
         "git",
@@ -130,52 +113,17 @@ Automated manifest update; no hand-authored policy code.
         f"{args.blobheart_refs}",
     )
     run("gh", "auth", "setup-git")
-    run("git", "push", "--set-upstream", "origin", branch)
-
-    pr_url = run(
-        "gh",
-        "pr",
-        "create",
-        "--repo",
-        args.repository,
-        "--base",
-        "main",
-        "--head",
-        branch,
-        "--title",
-        f"feat(policy): add targets from Blobheart {short_ref}",
-        "--body",
-        body,
+    run("git", "push", "origin", "HEAD")
+    release_sha = run(
+        "git",
+        "rev-parse",
+        "HEAD",
         capture_output=True,
     ).stdout.strip()
-    run(
-        "gh",
-        "pr",
-        "merge",
-        "--repo",
-        args.repository,
-        pr_url,
-        "--squash",
-        "--delete-branch",
-    )
-    pr = json.loads(
-        run(
-            "gh",
-            "pr",
-            "view",
-            "--repo",
-            args.repository,
-            pr_url,
-            "--json",
-            "mergeCommit",
-            capture_output=True,
-        ).stdout
-    )
-    merge_sha = (pr.get("mergeCommit") or {}).get("oid", "")
-    if not SHA_RE.fullmatch(merge_sha):
-        raise SystemExit("could not determine manifest PR merge commit")
+    if not SHA_RE.fullmatch(release_sha):
+        raise SystemExit("could not determine manifest commit")
     with Path(output_path).open("a") as output:
-        output.write(f"merge-sha={merge_sha}\n")
+        output.write(f"release-sha={release_sha}\n")
 
 
 def manifest_commit(manifest: Path) -> str:
@@ -270,11 +218,11 @@ def parser() -> argparse.ArgumentParser:
     update_parser.add_argument("--added", type=int, required=True)
     update_parser.set_defaults(handler=update)
 
-    publish_parser = commands.add_parser("publish-pr")
+    publish_parser = commands.add_parser("publish")
     publish_parser.add_argument("--manifest", type=Path, required=True)
     publish_parser.add_argument("--blobheart-refs", required=True)
     publish_parser.add_argument("--repository", required=True)
-    publish_parser.set_defaults(handler=publish_pr)
+    publish_parser.set_defaults(handler=publish)
 
     wait_parser = commands.add_parser("wait-release")
     wait_parser.add_argument("--repository", required=True)

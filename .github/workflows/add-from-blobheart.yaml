@@ -22,7 +22,6 @@ on:
 permissions:
   actions: read
   contents: write
-  pull-requests: write
 
 concurrency:
   group: add-from-blobheart
@@ -51,7 +50,6 @@ jobs:
           repositories: blobheart,integritee
           permission-actions: read
           permission-contents: write
-          permission-pull-requests: write
 
       - name: Validate Blobheart refs
         run: >-
@@ -96,13 +94,13 @@ jobs:
           name: merged-policy-manifest
           path: attestation-policy/policy-manifest.yaml
 
-      - name: Create and merge manifest PR
-        id: manifest-pr
+      - name: Commit and push manifest
+        id: publish
         if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: >-
-          python3 .github/workflows/add-from-blobheart/manage.py publish-pr
+          python3 .github/workflows/add-from-blobheart/manage.py publish
           --manifest attestation-policy/policy-manifest.yaml
           --blobheart-refs "$BLOBHEART_REFS"
           --repository "$GITHUB_REPOSITORY"
@@ -111,9 +109,9 @@ jobs:
         if: env.DRY_RUN == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          PR_MERGE_SHA: ${{ steps.manifest-pr.outputs.merge-sha }}
+          RELEASE_SHA: ${{ steps.publish.outputs.release-sha }}
         run: >-
           python3 .github/workflows/add-from-blobheart/manage.py wait-release
           --repository "$GITHUB_REPOSITORY"
           --manifest attestation-policy/policy-manifest.yaml
-          --release-sha "$PR_MERGE_SHA"
+          --release-sha "$RELEASE_SHA"
