@@ -48,7 +48,6 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: blobheart,integritee
-          permission-actions: read
           permission-contents: write
 
       - name: Validate Blobheart refs
@@ -108,7 +107,7 @@ jobs:
       - name: Wait for production policy release
         if: env.DRY_RUN == 'false'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.publish.outputs.release-sha }}
         run: >-
           python3 .github/workflows/add-from-blobheart/manage.py wait-release
