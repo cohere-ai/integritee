@@ -14,7 +14,12 @@ import sys
 import uuid
 from pathlib import Path
 
-from .fetch import fetch_baseline, fetch_firmware, fetch_oci_digest, fetch_uki
+from .fetch import (
+    fetch_baseline_variants,
+    fetch_firmware,
+    fetch_oci_digest,
+    fetch_uki,
+)
 from .measure import compute_measurements
 
 PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
@@ -124,13 +129,19 @@ def generate_matches_tdx_block(
     index: int,
     model: str,
     measurements: dict,
+    baseline_label: str | None = None,
     temporary_firmware_label: str | None = None,
 ) -> str:
     comment = f"# Target {index}: {model}"
+    labels: list[str] = []
+    if baseline_label:
+        labels.append(f"baseline: {baseline_label}")
     if temporary_firmware_label:
-        comment += (
-            f" (TEMPORARY GCP firmware allowlist: {temporary_firmware_label})"
+        labels.append(
+            f"TEMPORARY GCP firmware allowlist: {temporary_firmware_label}"
         )
+    if labels:
+        comment += f" ({'; '.join(labels)})"
 
     lines = [
         comment,
@@ -164,19 +175,34 @@ def render_policy(
 
     allowlist = temporary_firmware_allowlist or []
     blocks: list[str] = []
+    seen_measurements: set[tuple] = set()
     for i, target in enumerate(targets):
-        measurements = target["measurements"]
-        for label, variant in expand_measurements_for_temporary_gcp_firmware_allowlist(
-            measurements, allowlist
-        ):
-            blocks.append(
-                generate_matches_tdx_block(
-                    i,
-                    target["model"],
-                    variant,
-                    temporary_firmware_label=label,
+        baseline_variants = target.get("baseline_variants") or [{
+            "version": None,
+            "firmware_sha384": None,
+            "measurements": target["measurements"],
+        }]
+        for baseline_variant in baseline_variants:
+            baseline_label = None
+            if baseline_variant["version"]:
+                firmware = baseline_variant["firmware_sha384"]
+                baseline_label = f"{firmware[:12]}.../{baseline_variant['version']}"
+            for label, variant in expand_measurements_for_temporary_gcp_firmware_allowlist(
+                baseline_variant["measurements"], allowlist
+            ):
+                measurement_key = tuple(variant.get(field) for field in DYNAMIC_FIELDS)
+                if measurement_key in seen_measurements:
+                    continue
+                seen_measurements.add(measurement_key)
+                blocks.append(
+                    generate_matches_tdx_block(
+                        i,
+                        target["model"],
+                        variant,
+                        baseline_label=baseline_label,
+                        temporary_firmware_label=label,
+                    )
                 )
-            )
 
     if not blocks:
         print("ERROR: No targets to generate policy from", file=sys.stderr)
@@ -268,37 +294,66 @@ def generate_policy(
         print(f"Target {i}: {model}")
         print(f"{'=' * 60}")
 
-        baseline_path = artifacts_dir / "baselines" / f"{machine_type}.json"
-        if baseline_path.exists():
-            baseline = json.loads(baseline_path.read_text())
-        else:
-            baseline = fetch_baseline(baselines_repo, machine_type)
-            baseline_path.parent.mkdir(parents=True, exist_ok=True)
-            baseline_path.write_text(json.dumps(baseline, indent=2))
-
-        fw_sha384 = baseline["firmware_sha384"]
-        firmware_path = artifacts_dir / "firmware" / f"{fw_sha384}.fd"
-        fetch_firmware(fw_sha384, firmware_path)
+        baseline_variants = fetch_baseline_variants(
+            baselines_repo,
+            machine_type,
+        )
 
         podvm_ref = f"{podvm_image}:{podvm_tag}"
         uki_dest = artifacts_dir / "uki" / podvm_tag
         print(f"  UKI: {podvm_tag}")
         fetch_uki(podvm_ref, uki_dest)
 
-        print(f"  Computing measurements...")
-        measurements = compute_measurements(
-            ram_gib=target["ram_gib"],
-            initdata_b64=target["initdata_b64"],
-            firmware_path=firmware_path,
-            baseline_path=baseline_path,
-            uki_path=uki_dest / "BOOTX64.EFI",
-            disk_path=uki_dest / "disk.tar.gz",
-            output_dir=target_dir,
+        measured_variants: list[dict] = []
+        for baseline_variant in baseline_variants:
+            version = baseline_variant["version"]
+            fw_sha384 = baseline_variant["firmware_sha384"]
+            baseline_path = (
+                artifacts_dir
+                / "baselines"
+                / machine_type
+                / fw_sha384
+                / f"{version}.json"
+            )
+            baseline_path.parent.mkdir(parents=True, exist_ok=True)
+            baseline_path.write_text(
+                json.dumps(baseline_variant["baseline"], indent=2) + "\n"
+            )
+
+            firmware_path = artifacts_dir / "firmware" / f"{fw_sha384}.fd"
+            fetch_firmware(fw_sha384, firmware_path)
+
+            variant_output_dir = target_dir / fw_sha384 / version
+            print(f"  Computing measurements for {fw_sha384[:12]}.../{version}...")
+            measurements = compute_measurements(
+                ram_gib=target["ram_gib"],
+                initdata_b64=target["initdata_b64"],
+                firmware_path=firmware_path,
+                baseline_path=baseline_path,
+                uki_path=uki_dest / "BOOTX64.EFI",
+                disk_path=uki_dest / "disk.tar.gz",
+                output_dir=variant_output_dir,
+            )
+            measured_variants.append({
+                "version": version,
+                "firmware_sha384": fw_sha384,
+                "baseline_ref": baseline_variant["baseline_ref"],
+                "baseline_sha256": hashlib.sha256(
+                    baseline_path.read_bytes()
+                ).hexdigest(),
+                "measurements": measurements,
+            })
+
+        primary_variant = measured_variants[0]
+        target["measurements"] = primary_variant["measurements"]
+        target["baseline_variants"] = measured_variants
+
+        initdata_toml = (
+            target_dir
+            / primary_variant["firmware_sha384"]
+            / primary_variant["version"]
+            / "initdata.toml"
         )
-
-        target["measurements"] = measurements
-
-        initdata_toml = target_dir / "initdata.toml"
         initdata_hash = ""
         if initdata_toml.exists():
             initdata_hash = hashlib.sha384(initdata_toml.read_bytes()).hexdigest()
@@ -307,9 +362,9 @@ def generate_policy(
             **target,
             "podvm_image": podvm_ref,
             "podvm_digest": fetch_oci_digest(podvm_ref),
-            "firmware_sha384": fw_sha384,
-            "baseline_ref": f"{baselines_repo}/baselines/gcp/tdx/{machine_type}.json",
-            "baseline_sha256": hashlib.sha256(baseline_path.read_bytes()).hexdigest(),
+            "firmware_sha384": primary_variant["firmware_sha384"],
+            "baseline_ref": primary_variant["baseline_ref"],
+            "baseline_sha256": primary_variant["baseline_sha256"],
             "initdata_hash": initdata_hash,
         })
 

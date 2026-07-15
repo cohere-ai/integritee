@@ -4,22 +4,136 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+BASELINE_ROOT = "baselines/gcp/tdx"
+FIRMWARE_RE = re.compile(r"^[0-9a-f]{96}$")
+MACHINE_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+VERSION_RE = re.compile(r"^v([1-9][0-9]*)$")
 
-def fetch_baseline(repo: str, machine_type: str) -> dict:
-    """Fetch a TDX baseline JSON from cohere-cc-baselines and return it."""
-    api_path = f"/repos/{repo}/contents/baselines/gcp/tdx/{machine_type}.json"
+
+def _gh_api(api_path: str, *, allow_not_found: bool = False) -> object | None:
     result = subprocess.run(
-        ["gh", "api", api_path, "--jq", ".content"],
-        capture_output=True, text=True, check=True,
+        ["gh", "api", api_path],
+        capture_output=True,
+        text=True,
+        timeout=30,
     )
-    baseline = json.loads(base64.b64decode(result.stdout.strip()))
+    if result.returncode != 0:
+        if allow_not_found and "HTTP 404" in result.stderr:
+            return None
+        result.check_returncode()
+    return json.loads(result.stdout)
+
+
+def _fetch_baseline_path(repo: str, path: str) -> dict:
+    response = _gh_api(f"/repos/{repo}/contents/{path}")
+    if not isinstance(response, dict) or not isinstance(response.get("content"), str):
+        raise ValueError(f"invalid GitHub contents response for {path}")
+    baseline = json.loads(base64.b64decode(response["content"], validate=True))
+    if not isinstance(baseline, dict):
+        raise ValueError(f"baseline {path} is not a JSON object")
     print(f"  Baseline: firmware={baseline['firmware_sha384'][:24]}..., events={len(baseline['events'])}")
     return baseline
+
+
+def fetch_baseline(repo: str, machine_type: str) -> dict:
+    """Fetch the canonical TDX baseline JSON and return it."""
+    if not REPO_RE.fullmatch(repo):
+        raise ValueError(f"invalid GitHub repository: {repo}")
+    if not MACHINE_TYPE_RE.fullmatch(machine_type):
+        raise ValueError(f"invalid machine type: {machine_type}")
+    return _fetch_baseline_path(repo, f"{BASELINE_ROOT}/{machine_type}.json")
+
+
+def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
+    """Fetch every versioned baseline, falling back to the canonical baseline."""
+    canonical_path = f"{BASELINE_ROOT}/{machine_type}.json"
+    canonical = fetch_baseline(repo, machine_type)
+    versions_path = f"{BASELINE_ROOT}/versions"
+    firmware_entries = _gh_api(
+        f"/repos/{repo}/contents/{versions_path}",
+        allow_not_found=True,
+    )
+    if firmware_entries is None:
+        return [{
+            "version": "current",
+            "firmware_sha384": canonical["firmware_sha384"],
+            "baseline": canonical,
+            "baseline_ref": f"{repo}/{canonical_path}",
+        }]
+    if not isinstance(firmware_entries, list):
+        raise ValueError(f"{versions_path} is not a directory")
+
+    variants: list[dict] = []
+    firmware_names = sorted(
+        entry["name"]
+        for entry in firmware_entries
+        if (
+            isinstance(entry, dict)
+            and entry.get("type") == "dir"
+            and isinstance(entry.get("name"), str)
+            and FIRMWARE_RE.fullmatch(entry["name"])
+        )
+    )
+    for firmware in firmware_names:
+        firmware_path = f"{versions_path}/{firmware}"
+        version_entries = _gh_api(f"/repos/{repo}/contents/{firmware_path}")
+        if not isinstance(version_entries, list):
+            raise ValueError(f"{firmware_path} is not a directory")
+
+        version_names = sorted(
+            (
+                entry["name"]
+                for entry in version_entries
+                if (
+                    isinstance(entry, dict)
+                    and entry.get("type") == "dir"
+                    and isinstance(entry.get("name"), str)
+                    and VERSION_RE.fullmatch(entry["name"])
+                )
+            ),
+            key=lambda version: int(VERSION_RE.fullmatch(version).group(1)),
+        )
+        for version in version_names:
+            path = f"{firmware_path}/{version}/{machine_type}.json"
+            response = _gh_api(
+                f"/repos/{repo}/contents/{path}",
+                allow_not_found=True,
+            )
+            if response is None:
+                continue
+            if not isinstance(response, dict) or not isinstance(response.get("content"), str):
+                raise ValueError(f"invalid GitHub contents response for {path}")
+            baseline = json.loads(
+                base64.b64decode(response["content"], validate=True)
+            )
+            if baseline.get("firmware_sha384") != firmware:
+                raise ValueError(
+                    f"baseline firmware does not match directory for {path}"
+                )
+            variants.append({
+                "version": version,
+                "firmware_sha384": firmware,
+                "baseline": baseline,
+                "baseline_ref": f"{repo}/{path}",
+            })
+
+    if variants:
+        print(f"  Found {len(variants)} versioned baseline(s)")
+        return variants
+
+    return [{
+        "version": "current",
+        "firmware_sha384": canonical["firmware_sha384"],
+        "baseline": canonical,
+        "baseline_ref": f"{repo}/{canonical_path}",
+    }]
 
 
 def fetch_firmware(fw_sha384: str, dest: Path) -> None:

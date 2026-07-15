@@ -75,8 +75,14 @@ jobs:
           assert 'targets' in pred, 'predicate missing targets'
           assert 'cvm_measure_version' in pred, 'predicate missing cvm_measure_version'
           for t in pred['targets']:
-              for field, val in t['measurements'].items():
-                  assert val in rego, f'{t[\"model\"]}: {field}={val} not found in rego'
+              variants = t.get('baseline_variants', [])
+              assert variants, f'{t[\"model\"]}: predicate missing baseline variants'
+              for variant in variants:
+                  for field, val in variant['measurements'].items():
+                      assert val in rego, (
+                          f'{t[\"model\"]}/{variant[\"version\"]}: '
+                          f'{field}={val} not found in rego'
+                      )
           print(f'Predicate OK: {len(pred[\"targets\"])} target(s) consistent with rego')
           "
 
