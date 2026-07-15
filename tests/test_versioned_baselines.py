@@ -15,6 +15,14 @@ sys.path.insert(0, str(ACTION_ROOT))
 
 from generate_policy import fetch  # noqa: E402
 from generate_policy import generate  # noqa: E402
+from generate_policy import measure  # noqa: E402
+
+
+def test_computes_rtmr3_directly_from_initdata():
+    assert measure.compute_initdata_rtmr3(b"test") == (
+        "e6c7526759cbdca9a11ba0bf7efe6d2193308532a85ba7e969889200de"
+        "19583f4d3746983b22bf4638d571ec8aeabb85"
+    )
 
 
 def test_policy_template_uses_nras_v3_gpu_claims():
@@ -229,10 +237,13 @@ def test_generate_policy_measures_and_records_each_baseline(
         lambda targets, artifacts: "580.159.04",
     )
 
+    measurement_calls = []
+
     def fake_measurements(*, baseline_path, output_dir, **kwargs):
         output_dir.mkdir(parents=True)
         (output_dir / "initdata.toml").write_text("test")
         version = baseline_path.stem
+        measurement_calls.append(version)
         return {
             "mrtd": "1" * 96,
             "rtmr0": ("2" if version == "v1" else "3") * 96,
@@ -247,6 +258,9 @@ def test_generate_policy_measures_and_records_each_baseline(
     initdata_dir = tmp_path / "initdata"
     initdata_dir.mkdir()
     (initdata_dir / f"{initdata_sha384}.toml").write_bytes(initdata)
+    second_initdata = b"other"
+    second_sha384 = hashlib.sha384(second_initdata).hexdigest()
+    (initdata_dir / f"{second_sha384}.toml").write_bytes(second_initdata)
     manifest.write_text(
         "targets:\n"
         "  - model: cmp-l\n"
@@ -255,6 +269,12 @@ def test_generate_policy_measures_and_records_each_baseline(
         "    ram_gib: 234\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
+        "  - model: cmp-l-old\n"
+        "    machine_type: a3-highgpu-1g\n"
+        "    podvm_image_tag: image-tag\n"
+        "    ram_gib: 234\n"
+        f"    initdata_file: initdata/{second_sha384}.toml\n"
+        f"    initdata_sha384: {second_sha384}\n"
     )
     predicate = tmp_path / "predicate.json"
     predicate.write_text("{}")
@@ -275,6 +295,8 @@ def test_generate_policy_measures_and_records_each_baseline(
         "v1",
         "v2",
     ]
+    assert measurement_calls == ["v1", "v2"]
     policy_text = policy.read_text()
-    assert policy_text.count("matches_tdx if {") == 2
+    assert policy_text.count("matches_tdx if {") == 4
     assert policy_text.count("# Model: cmp-l (Baseline:") == 2
+    assert policy_text.count("# Model: cmp-l-old (Baseline:") == 2

@@ -20,7 +20,11 @@ from .fetch import (
     fetch_oci_digest,
     fetch_uki,
 )
-from .measure import compute_measurements, resolve_initdata
+from .measure import (
+    compute_initdata_rtmr3,
+    compute_measurements,
+    resolve_initdata,
+)
 
 PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
@@ -199,6 +203,7 @@ def generate_policy(
 
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     predicate_targets: list[dict] = []
+    platform_measurements_cache: dict[tuple, dict] = {}
 
     for i, target in enumerate(targets):
         model = target["model"]
@@ -241,28 +246,62 @@ def generate_policy(
             baseline_path.write_text(
                 json.dumps(baseline_variant["baseline"], indent=2) + "\n"
             )
+            baseline_sha256 = hashlib.sha256(
+                baseline_path.read_bytes()
+            ).hexdigest()
 
             firmware_path = artifacts_dir / "firmware" / f"{fw_sha384}.fd"
             fetch_firmware(fw_sha384, firmware_path)
 
             variant_output_dir = target_dir / fw_sha384 / version
-            print(f"  Computing measurements for {fw_sha384[:12]}.../{version}...")
-            measurements = compute_measurements(
-                ram_gib=target["ram_gib"],
-                initdata=initdata,
-                firmware_path=firmware_path,
-                baseline_path=baseline_path,
-                uki_path=uki_dest / "BOOTX64.EFI",
-                disk_path=uki_dest / "disk.tar.gz",
-                output_dir=variant_output_dir,
+            cache_key = (
+                machine_type,
+                target["ram_gib"],
+                podvm_tag,
+                fw_sha384,
+                baseline_sha256,
+            )
+            platform_measurements = platform_measurements_cache.get(cache_key)
+            if platform_measurements is None:
+                print(
+                    f"  Computing platform measurements for "
+                    f"{fw_sha384[:12]}/{version}..."
+                )
+                computed = compute_measurements(
+                    ram_gib=target["ram_gib"],
+                    initdata=initdata,
+                    firmware_path=firmware_path,
+                    baseline_path=baseline_path,
+                    uki_path=uki_dest / "BOOTX64.EFI",
+                    disk_path=uki_dest / "disk.tar.gz",
+                    output_dir=variant_output_dir,
+                )
+                platform_measurements = {
+                    field: value
+                    for field, value in computed.items()
+                    if field != "rtmr3"
+                }
+                platform_measurements_cache[cache_key] = platform_measurements
+            else:
+                print(
+                    f"  Reusing platform measurements for "
+                    f"{fw_sha384[:12]}/{version}"
+                )
+
+            measurements = {
+                **platform_measurements,
+                "rtmr3": compute_initdata_rtmr3(initdata),
+            }
+            variant_output_dir.mkdir(parents=True, exist_ok=True)
+            (variant_output_dir / "initdata.toml").write_bytes(initdata)
+            (variant_output_dir / "measurements.json").write_text(
+                json.dumps(measurements, indent=2) + "\n"
             )
             measured_variants.append({
                 "version": version,
                 "firmware_sha384": fw_sha384,
                 "baseline_ref": baseline_variant["baseline_ref"],
-                "baseline_sha256": hashlib.sha256(
-                    baseline_path.read_bytes()
-                ).hexdigest(),
+                "baseline_sha256": baseline_sha256,
                 "measurements": measurements,
             })
 

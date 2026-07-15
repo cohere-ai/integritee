@@ -9,6 +9,12 @@ import sys
 from pathlib import Path
 
 
+def compute_initdata_rtmr3(initdata: bytes) -> str:
+    """Compute the single RTMR3 extend performed for CoCo initdata."""
+    initdata_digest = hashlib.sha384(initdata).digest()
+    return hashlib.sha384(bytes(48) + initdata_digest).hexdigest()
+
+
 def resolve_initdata(target: dict, manifest_file: Path) -> bytes:
     """Load and verify file-backed target initdata."""
     if "initdata_b64" in target:
