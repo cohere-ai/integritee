@@ -51,41 +51,74 @@ tdx_base_checks if {
 
 ${TDX_MATCH_BLOCKS}
 
+# NRAS V3 token format: GPU claims are nested under input.nvgpu.claim_details
+# with per-device keys (e.g. "GPU-0"). The top-level x-nvidia-overall-att-result
+# summarises the result across all GPUs.
+# See: https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-gpu-attestation.html
+
+nvgpu_device_base_checks(gpu) if {
+    gpu.hwmodel == "GH100"
+    gpu["x-nvidia-gpu-driver-version"] == "${NVIDIA_DRIVER_VERSION}"
+
+    gpu["x-nvidia-gpu-attestation-report-nonce-match"] == true
+    gpu["x-nvidia-gpu-arch-check"] == true
+    gpu["x-nvidia-gpu-attestation-report-parsed"] == true
+    gpu["x-nvidia-gpu-attestation-report-signature-verified"] == true
+    gpu["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-status"] == "valid"
+    gpu["x-nvidia-gpu-attestation-report-cert-chain-fwid-match"] == true
+
+    gpu["x-nvidia-gpu-driver-rim-cert-chain"]["x-nvidia-cert-status"] == "valid"
+    gpu["x-nvidia-gpu-driver-rim-fetched"] == true
+    gpu["x-nvidia-gpu-driver-rim-measurements-available"] == true
+    gpu["x-nvidia-gpu-driver-rim-schema-validated"] == true
+    gpu["x-nvidia-gpu-driver-rim-signature-verified"] == true
+    gpu["x-nvidia-gpu-driver-rim-version-match"] == true
+
+    gpu["x-nvidia-gpu-vbios-rim-cert-chain"]["x-nvidia-cert-status"] == "valid"
+    gpu["x-nvidia-gpu-vbios-rim-fetched"] == true
+    gpu["x-nvidia-gpu-vbios-rim-measurements-available"] == true
+    gpu["x-nvidia-gpu-vbios-rim-schema-validated"] == true
+    gpu["x-nvidia-gpu-vbios-rim-signature-verified"] == true
+    gpu["x-nvidia-gpu-vbios-rim-version-match"] == true
+}
+
 nvgpu_base_checks if {
-    nvgpu := input.nvgpu
+    input.nvgpu["x-nvidia-overall-att-result"] == true
+    count(input.nvgpu.claim_details) > 0
 
-    nvgpu.secboot == true
-    nvgpu.hwmodel == "GH100"
-    nvgpu["x-nvidia-gpu-manufacturer"] == "NVIDIA Corporation"
-    nvgpu["x-nvidia-gpu-driver-version"] == "${NVIDIA_DRIVER_VERSION}"
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-nonce-match"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-arch-check"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-attestation-report-cert-chain-validated"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-attestation-report-parsed"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-attestation-report-signature-verified"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-driver-rim-cert-validated"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-driver-rim-driver-measurements-available"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-driver-rim-schema-fetched"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-driver-rim-schema-validated"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-driver-rim-signature-verified"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-vbios-rim-cert-validated"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-vbios-rim-measurements-available"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-vbios-rim-schema-fetched"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-vbios-rim-schema-validated"] == true
-    nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-vbios-rim-signature-verified"] == true
+    every gpu_key in object.keys(input.nvgpu.claim_details) {
+        gpu := input.nvgpu.claim_details[gpu_key]
+        gpu.secboot == true
+        nvgpu_device_base_checks(gpu)
+    }
 }
 
 matches_nvgpu if {
     nvgpu_base_checks
-    input.nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-measurements-match"] == true
+    every gpu_key in object.keys(input.nvgpu.claim_details) {
+        input.nvgpu.claim_details[gpu_key].measres == "success"
+    }
 }
 
-# Workaround for issue on GCP machines: https://github.com/NVIDIA/nvtrust/issues/132
+# Narrow workaround for the deterministic GCP firmware mismatch:
+# https://github.com/NVIDIA/nvtrust/issues/132
 matches_nvgpu if {
-    nvgpu_base_checks
-    input.nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-gpu-measurements-match"] == false
-    input.nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-mismatch-indexes"] == [9]
-    record := input.nvgpu["x-nvidia-attestation-detailed-result"]["x-nvidia-mismatch-measurement-records"][0]
+    input.nvgpu["x-nvidia-overall-att-result"] == false
+    count(input.nvgpu.claim_details) == 1
+
+    some gpu_key in object.keys(input.nvgpu.claim_details)
+    gpu := input.nvgpu.claim_details[gpu_key]
+    nvgpu_device_base_checks(gpu)
+    gpu.secboot == true
+    {"fail", "comparison-fail"}[gpu.measres]
+
+    records := gpu["x-nvidia-mismatch-measurement-records"]
+    count(records) == 1
+    record := records[0]
     record.index == 9
+    record.measurementSource == "Firmware"
+    record.goldenSize == 48
+    record.goldenValue == "4b3ed0f834d10fef95e61615edc5b4e98ec78cff39323993b3218f0cd62507978cf64e4487520bc7e560fde71ea0fc75"
+    record.runtimeSize == 48
     record.runtimeValue == "c80a9b62ce0d41184bb1ad0f6334d9400a2d2514ef92003b1c043410f91b7309144325a3e01c58b8bd6e198f5dda3b9b"
 }

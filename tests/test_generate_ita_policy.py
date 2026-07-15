@@ -106,6 +106,26 @@ class TestPolicyStructure:
         assert policy.count("matches_nvgpu if {") == 2
         assert "x-nvidia-gpu-driver-version" in policy
 
+    def test_nvgpu_gcp_mismatch_workaround_is_narrow(
+        self, artifacts_dir, template_path, tmp_path
+    ):
+        output = tmp_path / "policy.rego"
+        run_generate_script(artifacts_dir, template_path, output)
+        policy = output.read_text()
+
+        assert 'input.nvgpu["x-nvidia-overall-att-result"] == false' in policy
+        assert "count(input.nvgpu.claim_details) == 1" in policy
+        assert 'count(records) == 1' in policy
+        assert 'record.index == 9' in policy
+        assert 'record.measurementSource == "Firmware"' in policy
+        assert 'record.goldenSize == 48' in policy
+        assert 'record.runtimeSize == 48' in policy
+        assert 'record.goldenValue == "4b3ed0f834d10fef' in policy
+        assert 'record.runtimeValue == "c80a9b62ce0d4118' in policy
+        assert "x-nvidia-mismatch-indexes" not in policy
+        assert policy.count("gpu.secboot == true") == 2
+        assert "{true, null}[gpu.secboot]" not in policy
+
     def test_tdx_base_checks_in_template(
         self, artifacts_dir, template_path, tmp_path
     ):
