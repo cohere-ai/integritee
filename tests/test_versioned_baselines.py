@@ -49,7 +49,11 @@ def test_nras_v3_gcp_mismatch_workaround_is_narrow():
 
 def _contents(value: dict) -> dict:
     encoded = base64.b64encode(json.dumps(value).encode()).decode()
-    return {"content": encoded}
+    wrapped = "\n".join(
+        encoded[index:index + 60]
+        for index in range(0, len(encoded), 60)
+    )
+    return {"content": wrapped}
 
 
 def test_fetches_all_firmware_and_event_versions(monkeypatch):

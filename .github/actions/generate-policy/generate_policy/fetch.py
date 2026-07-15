@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 import json
 import re
 import shutil
@@ -35,11 +36,19 @@ def _fetch_baseline_path(repo: str, path: str) -> dict:
     response = _gh_api(f"/repos/{repo}/contents/{path}")
     if not isinstance(response, dict) or not isinstance(response.get("content"), str):
         raise ValueError(f"invalid GitHub contents response for {path}")
-    baseline = json.loads(base64.b64decode(response["content"], validate=True))
+    baseline = _decode_baseline_content(response["content"], path)
     if not isinstance(baseline, dict):
         raise ValueError(f"baseline {path} is not a JSON object")
     print(f"  Baseline: firmware={baseline['firmware_sha384'][:24]}..., events={len(baseline['events'])}")
     return baseline
+
+
+def _decode_baseline_content(content: str, path: str) -> dict:
+    encoded = "".join(content.split())
+    try:
+        return json.loads(base64.b64decode(encoded, validate=True))
+    except (binascii.Error, json.JSONDecodeError) as exc:
+        raise ValueError(f"invalid baseline content for {path}") from exc
 
 
 def fetch_baseline(repo: str, machine_type: str) -> dict:
@@ -110,9 +119,7 @@ def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
                 continue
             if not isinstance(response, dict) or not isinstance(response.get("content"), str):
                 raise ValueError(f"invalid GitHub contents response for {path}")
-            baseline = json.loads(
-                base64.b64decode(response["content"], validate=True)
-            )
+            baseline = _decode_baseline_content(response["content"], path)
             if baseline.get("firmware_sha384") != firmware:
                 raise ValueError(
                     f"baseline firmware does not match directory for {path}"
