@@ -16,6 +16,37 @@ from generate_policy import fetch  # noqa: E402
 from generate_policy import generate  # noqa: E402
 
 
+def test_policy_template_uses_nras_v3_gpu_claims():
+    policy = (
+        ACTION_ROOT / "generate_policy" / "policy-template.rego"
+    ).read_text()
+
+    assert 'input.nvgpu["x-nvidia-overall-att-result"] == true' in policy
+    assert "count(input.nvgpu.claim_details) > 0" in policy
+    assert "every gpu_key in object.keys(input.nvgpu.claim_details)" in policy
+    assert 'gpu["x-nvidia-gpu-attestation-report-cert-chain"]' in policy
+    assert 'gpu["x-nvidia-gpu-driver-rim-cert-chain"]' in policy
+    assert 'gpu["x-nvidia-gpu-vbios-rim-cert-chain"]' in policy
+
+
+def test_nras_v3_gcp_mismatch_workaround_is_narrow():
+    policy = (
+        ACTION_ROOT / "generate_policy" / "policy-template.rego"
+    ).read_text()
+
+    assert 'input.nvgpu["x-nvidia-overall-att-result"] == false' in policy
+    assert "count(input.nvgpu.claim_details) == 1" in policy
+    assert "count(records) == 1" in policy
+    assert "record.index == 9" in policy
+    assert 'record.measurementSource == "Firmware"' in policy
+    assert "record.goldenSize == 48" in policy
+    assert "record.runtimeSize == 48" in policy
+    assert 'record.goldenValue == "4b3ed0f834d10fef' in policy
+    assert 'record.runtimeValue == "c80a9b62ce0d4118' in policy
+    assert "x-nvidia-mismatch-indexes" not in policy
+    assert policy.count("gpu.secboot == true") == 2
+
+
 def _contents(value: dict) -> dict:
     encoded = base64.b64encode(json.dumps(value).encode()).decode()
     return {"content": encoded}
