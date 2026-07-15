@@ -22,7 +22,7 @@ from .fetch import (
 )
 from .measure import compute_measurements
 
-PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
+PLACEHOLDER = "${TDX_MEASUREMENTS_BY_MODEL}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 
@@ -125,41 +125,6 @@ def generate_nonce_rule() -> str:
     return f'integritee_nonce := "{nonce}"'
 
 
-def generate_matches_tdx_block(
-    index: int,
-    model: str,
-    measurements: dict,
-    baseline_label: str | None = None,
-    temporary_firmware_label: str | None = None,
-) -> str:
-    comment = f"# Target {index}: {model}"
-    labels: list[str] = []
-    if baseline_label:
-        labels.append(f"baseline: {baseline_label}")
-    if temporary_firmware_label:
-        labels.append(
-            f"TEMPORARY GCP firmware allowlist: {temporary_firmware_label}"
-        )
-    if labels:
-        comment += f" ({'; '.join(labels)})"
-
-    lines = [
-        comment,
-        "matches_tdx if {",
-        "    tdx_base_checks",
-        "    tdx := input.tdx",
-        "",
-    ]
-
-    for field in DYNAMIC_FIELDS:
-        val = measurements.get(field)
-        if val is not None:
-            lines.append(f'    tdx.tdx_{field} == "{val}"')
-
-    lines.append("}")
-    return "\n".join(lines)
-
-
 def render_policy(
     targets: list[dict],
     nv_driver_version: str,
@@ -174,41 +139,60 @@ def render_policy(
         sys.exit(1)
 
     allowlist = temporary_firmware_allowlist or []
-    blocks: list[str] = []
-    seen_measurements: set[tuple] = set()
-    for i, target in enumerate(targets):
-        baseline_variants = target.get("baseline_variants") or [{
-            "version": None,
-            "firmware_sha384": None,
-            "measurements": target["measurements"],
-        }]
+    measurements_by_model: dict[str, list[dict]] = {}
+    variant_count = 0
+    for target in targets:
+        model = target["model"]
+        model_measurements = measurements_by_model.setdefault(model, [])
+        seen_measurements = {
+            tuple(entry.get(field) for field in DYNAMIC_FIELDS)
+            for entry in model_measurements
+        }
+        baseline_variants = target.get("baseline_variants") or [
+            {
+                "version": None,
+                "firmware_sha384": None,
+                "measurements": target["measurements"],
+            }
+        ]
         for baseline_variant in baseline_variants:
-            baseline_label = None
+            baseline_label = "current"
             if baseline_variant["version"]:
                 firmware = baseline_variant["firmware_sha384"]
                 baseline_label = f"{firmware[:12]}.../{baseline_variant['version']}"
-            for label, variant in expand_measurements_for_temporary_gcp_firmware_allowlist(
-                baseline_variant["measurements"], allowlist
+            for temporary_label, variant in (
+                expand_measurements_for_temporary_gcp_firmware_allowlist(
+                    baseline_variant["measurements"],
+                    allowlist,
+                )
             ):
-                measurement_key = tuple(variant.get(field) for field in DYNAMIC_FIELDS)
+                measurement_key = tuple(
+                    variant.get(field) for field in DYNAMIC_FIELDS
+                )
                 if measurement_key in seen_measurements:
                     continue
                 seen_measurements.add(measurement_key)
-                blocks.append(
-                    generate_matches_tdx_block(
-                        i,
-                        target["model"],
-                        variant,
-                        baseline_label=baseline_label,
-                        temporary_firmware_label=label,
-                    )
-                )
+                version_label = baseline_label
+                if temporary_label:
+                    version_label += f" + temporary:{temporary_label}"
+                model_measurements.append({
+                    "version": version_label,
+                    **{
+                        field: variant[field]
+                        for field in DYNAMIC_FIELDS
+                        if variant.get(field) is not None
+                    },
+                })
+                variant_count += 1
 
-    if not blocks:
+    if not variant_count:
         print("ERROR: No targets to generate policy from", file=sys.stderr)
         sys.exit(1)
 
-    policy = template.replace(PLACEHOLDER, "\n\n".join(blocks))
+    policy = template.replace(
+        PLACEHOLDER,
+        json.dumps(measurements_by_model, indent=4),
+    )
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
     policy = policy.replace(DRIVER_VERSION_PLACEHOLDER, nv_driver_version)
 
@@ -221,7 +205,7 @@ def render_policy(
 
     model_names = [t["model"] for t in targets]
     print(
-        f"Generated ITA policy with {len(blocks)} matches_tdx block(s) "
+        f"Generated ITA policy with {variant_count} TDX measurement variant(s) "
         f"from {len(targets)} target(s): "
         f"{', '.join(model_names)} (driver={nv_driver_version}"
         f"{f', firmware_allowlist={len(allowlist)}' if allowlist else ''}"

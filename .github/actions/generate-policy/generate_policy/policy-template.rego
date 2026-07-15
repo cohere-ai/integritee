@@ -1,7 +1,7 @@
 # ITA TDX+NVGPU appraisal policy.
 #
-# Each matches_tdx block checks a specific (MRTD, RTMR0-3) combination.
-# The policy matches if ANY block matches (logical OR across models).
+# TDX measurements are grouped by model and baseline version for readability.
+# The policy matches if ANY complete measurement combination matches.
 
 import rego.v1
 
@@ -49,7 +49,29 @@ tdx_base_checks if {
     tdx.tdx_seamsvn >= 271
 }
 
-${TDX_MATCH_BLOCKS}
+tdx_measurements_by_model := ${TDX_MEASUREMENTS_BY_MODEL}
+
+measurement_field_matches(expected, field, actual) if {
+    object.get(expected, field, null) == null
+}
+
+measurement_field_matches(expected, field, actual) if {
+    object.get(expected, field, null) == actual
+}
+
+matches_tdx if {
+    tdx_base_checks
+    tdx := input.tdx
+
+    some model
+    some expected in tdx_measurements_by_model[model]
+
+    measurement_field_matches(expected, "mrtd", tdx.tdx_mrtd)
+    measurement_field_matches(expected, "rtmr0", tdx.tdx_rtmr0)
+    measurement_field_matches(expected, "rtmr1", tdx.tdx_rtmr1)
+    measurement_field_matches(expected, "rtmr2", tdx.tdx_rtmr2)
+    measurement_field_matches(expected, "rtmr3", tdx.tdx_rtmr3)
+}
 
 # NRAS V3 token format: GPU claims are nested under input.nvgpu.claim_details
 # with per-device keys (e.g. "GPU-0"). The top-level x-nvidia-overall-att-result

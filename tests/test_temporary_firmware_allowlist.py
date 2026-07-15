@@ -71,9 +71,7 @@ def test_load_allowlist_validates_hex_length(tmp_path: Path):
         gen.load_temporary_gcp_tdx_firmware_allowlist(bad)
 
 
-def test_render_policy_emits_allowlist_comment(tmp_path: Path):
-    template = tmp_path / "template.rego"
-    template.write_text("${TDX_MATCH_BLOCKS}\n${POLICY_NONCE}\n${NVIDIA_DRIVER_VERSION}\n")
+def test_render_policy_labels_allowlist_variant(tmp_path: Path):
     output = tmp_path / "out.rego"
 
     targets = [
@@ -99,14 +97,12 @@ def test_render_policy_emits_allowlist_comment(tmp_path: Path):
     gen.render_policy(
         targets,
         "580.159.04",
-        template,
+        ACTION_ROOT / "generate_policy" / "policy-template.rego",
         output,
         temporary_firmware_allowlist=allowlist,
     )
     policy = output.read_text()
-    assert policy.count("matches_tdx if {") == 2
-    assert (
-        "# Target 0: cmp-l (TEMPORARY GCP firmware allowlist: "
-        "gcp-a3-new-firmware)" in policy
-    )
+    assert policy.count("matches_tdx if {") == 1
+    assert '"version": "current"' in policy
+    assert '"version": "current + temporary:gcp-a3-new-firmware"' in policy
     assert policy.count("c" * 96) == 2
