@@ -109,7 +109,7 @@ matches_nvgpu if {
     some gpu_key in object.keys(input.nvgpu.claim_details)
     gpu := input.nvgpu.claim_details[gpu_key]
     nvgpu_device_base_checks(gpu)
-    {true, null}[gpu.secboot]
+    gpu.secboot == true
     {"fail", "comparison-fail"}[gpu.measres]
 
     records := gpu["x-nvidia-mismatch-measurement-records"]

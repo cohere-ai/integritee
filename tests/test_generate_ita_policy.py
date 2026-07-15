@@ -123,6 +123,8 @@ class TestPolicyStructure:
         assert 'record.goldenValue == "4b3ed0f834d10fef' in policy
         assert 'record.runtimeValue == "c80a9b62ce0d4118' in policy
         assert "x-nvidia-mismatch-indexes" not in policy
+        assert policy.count("gpu.secboot == true") == 2
+        assert "{true, null}[gpu.secboot]" not in policy
 
     def test_tdx_base_checks_in_template(
         self, artifacts_dir, template_path, tmp_path
