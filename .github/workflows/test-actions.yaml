@@ -60,10 +60,8 @@ jobs:
               "default match := false",
               "match if {",
               "tdx_base_checks if {",
-              'tdx_measurements_by_model := {',
-              '"cmp-l": [',
-              '"version":',
               "matches_tdx if {",
+              "# Model: cmp-l (Baseline:",
               "nvgpu_base_checks if {",
               "matches_nvgpu if {",
           ]

@@ -22,7 +22,7 @@ from .fetch import (
 )
 from .measure import compute_measurements, resolve_initdata
 
-PLACEHOLDER = "${TDX_MEASUREMENTS_BY_MODEL}"
+PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 
@@ -70,6 +70,26 @@ def generate_nonce_rule() -> str:
     return f'integritee_nonce := "{nonce}"'
 
 
+def generate_matches_tdx_block(
+    model: str,
+    baseline_label: str,
+    measurements: dict,
+) -> str:
+    lines = [
+        f"# Model: {model} (Baseline: {baseline_label})",
+        "matches_tdx if {",
+        "    tdx_base_checks",
+        "    tdx := input.tdx",
+        "",
+    ]
+    for field in DYNAMIC_FIELDS:
+        value = measurements.get(field)
+        if value is not None:
+            lines.append(f'    tdx.tdx_{field} == "{value}"')
+    lines.append("}")
+    return "\n".join(lines)
+
+
 def render_policy(
     targets: list[dict],
     nv_driver_version: str,
@@ -82,15 +102,12 @@ def render_policy(
         print(f"ERROR: Template does not contain {PLACEHOLDER}", file=sys.stderr)
         sys.exit(1)
 
-    measurements_by_model: dict[str, list[dict]] = {}
+    blocks: list[str] = []
+    seen_by_model: dict[str, set[tuple]] = {}
     variant_count = 0
     for target in targets:
         model = target["model"]
-        model_measurements = measurements_by_model.setdefault(model, [])
-        seen_measurements = {
-            tuple(entry.get(field) for field in DYNAMIC_FIELDS)
-            for entry in model_measurements
-        }
+        seen_measurements = seen_by_model.setdefault(model, set())
         baseline_variants = target.get("baseline_variants") or [
             {
                 "version": None,
@@ -110,24 +127,16 @@ def render_policy(
             if measurement_key in seen_measurements:
                 continue
             seen_measurements.add(measurement_key)
-            model_measurements.append({
-                "version": baseline_label,
-                **{
-                    field: variant[field]
-                    for field in DYNAMIC_FIELDS
-                    if variant.get(field) is not None
-                },
-            })
+            blocks.append(
+                generate_matches_tdx_block(model, baseline_label, variant)
+            )
             variant_count += 1
 
     if not variant_count:
         print("ERROR: No targets to generate policy from", file=sys.stderr)
         sys.exit(1)
 
-    policy = template.replace(
-        PLACEHOLDER,
-        json.dumps(measurements_by_model, indent=4),
-    )
+    policy = template.replace(PLACEHOLDER, "\n\n".join(blocks))
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
     policy = policy.replace(DRIVER_VERSION_PLACEHOLDER, nv_driver_version)
 

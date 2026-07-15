@@ -151,7 +151,7 @@ def test_falls_back_to_canonical_when_versions_are_absent(monkeypatch):
     }]
 
 
-def test_render_policy_groups_unique_baselines_by_model(tmp_path):
+def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     measurements_v1 = {
         "mrtd": "a" * 96,
         "rtmr0": "b" * 96,
@@ -192,11 +192,10 @@ def test_render_policy_groups_unique_baselines_by_model(tmp_path):
     )
 
     policy = output.read_text()
-    assert policy.count("matches_tdx if {") == 1
-    assert '"cmp-l": [' in policy
-    assert '"version": "111111111111.../v1"' in policy
-    assert '"version": "111111111111.../v2"' in policy
-    assert '"version": "111111111111.../v3"' not in policy
+    assert policy.count("matches_tdx if {") == 2
+    assert "# Model: cmp-l (Baseline: 111111111111.../v1)" in policy
+    assert "# Model: cmp-l (Baseline: 111111111111.../v2)" in policy
+    assert "# Model: cmp-l (Baseline: 111111111111.../v3)" not in policy
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -277,5 +276,5 @@ def test_generate_policy_measures_and_records_each_baseline(
         "v2",
     ]
     policy_text = policy.read_text()
-    assert policy_text.count("matches_tdx if {") == 1
-    assert policy_text.count('"version":') == 2
+    assert policy_text.count("matches_tdx if {") == 2
+    assert policy_text.count("# Model: cmp-l (Baseline:") == 2
