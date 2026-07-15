@@ -119,7 +119,7 @@ def render_policy(
             baseline_label = "current"
             if baseline_variant["version"]:
                 firmware = baseline_variant["firmware_sha384"]
-                baseline_label = f"{firmware[:12]}.../{baseline_variant['version']}"
+                baseline_label = f"{firmware[:12]}/{baseline_variant['version']}"
             variant = baseline_variant["measurements"]
             measurement_key = tuple(
                 variant.get(field) for field in DYNAMIC_FIELDS

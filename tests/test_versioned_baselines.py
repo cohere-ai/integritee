@@ -193,9 +193,9 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
 
     policy = output.read_text()
     assert policy.count("matches_tdx if {") == 2
-    assert "# Model: cmp-l (Baseline: 111111111111.../v1)" in policy
-    assert "# Model: cmp-l (Baseline: 111111111111.../v2)" in policy
-    assert "# Model: cmp-l (Baseline: 111111111111.../v3)" not in policy
+    assert "# Model: cmp-l (Baseline: 111111111111/v1)" in policy
+    assert "# Model: cmp-l (Baseline: 111111111111/v2)" in policy
+    assert "# Model: cmp-l (Baseline: 111111111111/v3)" not in policy
 
 
 def test_generate_policy_measures_and_records_each_baseline(
