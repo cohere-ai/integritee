@@ -47,7 +47,7 @@ jobs:
           client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
           private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
           owner: cohere-ai
-          repositories: integritee
+          repositories: integritee,blobheart
           permission-contents: write
 
       - name: Validate Blobheart refs
