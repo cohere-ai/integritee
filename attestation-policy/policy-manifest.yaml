@@ -62,3 +62,66 @@ targets:
   added: '2026-07-13'
   sources:
   - 21bc3aad241a5299aa8586e6bc9dad690104e790
+- model: cat2508rws-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/52ee3df837deb422e3ee513dd68fd06a62a42c23a8999958990c3c3e93b7c6b51d02f602f26f4d0124a4488b510782a3.toml
+  initdata_sha384: 52ee3df837deb422e3ee513dd68fd06a62a42c23a8999958990c3c3e93b7c6b51d02f602f26f4d0124a4488b510782a3
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
+- model: cmp-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/194b6e24a1fa07f07cc336669046ea750f8cbecec3585da7ad89e809319883889aa1fc7ae959907d8a58a53a6a2de6d7.toml
+  initdata_sha384: 194b6e24a1fa07f07cc336669046ea750f8cbecec3585da7ad89e809319883889aa1fc7ae959907d8a58a53a6a2de6d7
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
+- model: e4-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/735134d2300ecac784dd5a0b9750533d129dcdaa215ce19990f28affea9f3f5b0183dc88ee69ee54e4c36fc16f04ddc9.toml
+  initdata_sha384: 735134d2300ecac784dd5a0b9750533d129dcdaa215ce19990f28affea9f3f5b0183dc88ee69ee54e4c36fc16f04ddc9
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
+- model: nmc2606-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/8e3ef0dfbb62f783df3c2ee76adcec3d8e93e2cc0ed973d47e7d063d7de6062ec94bbf260e179ba7b6917326761fe79d.toml
+  initdata_sha384: 8e3ef0dfbb62f783df3c2ee76adcec3d8e93e2cc0ed973d47e7d063d7de6062ec94bbf260e179ba7b6917326761fe79d
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
+- model: qw3-4b-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/0a8a40447a4c089a29002eb883deec95340bd81710f361840ae28b554b33f613d54edb2aea11d2afc607d360d2823759.toml
+  initdata_sha384: 0a8a40447a4c089a29002eb883deec95340bd81710f361840ae28b554b33f613d54edb2aea11d2afc607d360d2823759
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
+- model: r4f-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/b7982c5d525bf6e7b7ae9fb3b960b7c98c57bc41a80689f1ddd7a953b61b9c6f90c098c0d1e2049fb48fbbabae57d448.toml
+  initdata_sha384: b7982c5d525bf6e7b7ae9fb3b960b7c98c57bc41a80689f1ddd7a953b61b9c6f90c098c0d1e2049fb48fbbabae57d448
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
+- model: r4p-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/18f3081d4b403d7007ea9491fdae221e343bffc79fdf313e4dc786891f12b49049a564762716f931da5c63ef104bd54c.toml
+  initdata_sha384: 18f3081d4b403d7007ea9491fdae221e343bffc79fdf313e4dc786891f12b49049a564762716f931da5c63ef104bd54c
+  added: '2026-07-15'
+  sources:
+  - 0569d74a9c500308f02625d9c903fe8129be5a16
