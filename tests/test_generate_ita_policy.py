@@ -23,7 +23,6 @@ def run_generate_script(
     output_path: Path,
     nonce: str = "test-nonce-001",
     cvm_artifacts_dir: Path | None = None,
-    temporary_gcp_tdx_firmware_allowlist: Path | None = None,
 ) -> subprocess.CompletedProcess:
     if cvm_artifacts_dir is None:
         cvm_artifacts_dir = measurements_dir.parent / "cvm-artifacts"
@@ -44,12 +43,6 @@ def run_generate_script(
                 json.dumps({"podvm_image_tag": "test-podvm"})
             )
 
-    if temporary_gcp_tdx_firmware_allowlist is None:
-        temporary_gcp_tdx_firmware_allowlist = (
-            measurements_dir.parent / "empty-temporary-firmware-allowlist.json"
-        )
-        temporary_gcp_tdx_firmware_allowlist.write_text("[]")
-
     cmd = [
         sys.executable,
         str(REPO_ROOT / "scripts" / "generate-ita-policy.py"),
@@ -58,8 +51,6 @@ def run_generate_script(
         "--template", str(template_path),
         "--nonce", nonce,
         "--output", str(output_path),
-        "--temporary-gcp-tdx-firmware-allowlist",
-        str(temporary_gcp_tdx_firmware_allowlist),
     ]
 
     return subprocess.run(
@@ -164,44 +155,6 @@ class TestTdxBlockContent:
 
         assert real_measurements["mrtd"] in policy
         assert "1" * 96 in policy  # aya-expanse mrtd
-
-    def test_temporary_gcp_firmware_allowlist_preserves_model_rtmrs(
-        self, tmp_path, template_path, real_measurements
-    ):
-        meas_dir = tmp_path / "meas"
-        model_dir = meas_dir / "cmp-l"
-        model_dir.mkdir(parents=True)
-        (model_dir / "measurements.json").write_text(json.dumps(real_measurements))
-
-        firmware_allowlist = tmp_path / "temporary-firmware-allowlist.json"
-        firmware_allowlist.write_text(json.dumps([
-            {
-                "name": "gcp-a3-new-firmware",
-                "mrtd": "9bf86e6280ec4282b8b5822d8166410a456cdb720109aa799f0011fa63df1de3ee5e35e293fc410c061433163acb03a6",
-                "rtmr0": "cacdba001f7732b60c1a60cac95e361717574cc4e1b13056cec49059d3229b3ea41381d00566b320318577ef74f91c4e",
-            }
-        ]))
-
-        output = tmp_path / "policy.rego"
-        result = run_generate_script(
-            meas_dir,
-            template_path,
-            output,
-            temporary_gcp_tdx_firmware_allowlist=firmware_allowlist,
-        )
-
-        assert result.returncode == 0, result.stderr
-        policy = output.read_text()
-        assert policy.count("matches_tdx if {") == 2
-        assert (
-            "# Model: cmp-l (TEMPORARY GCP firmware allowlist: "
-            "gcp-a3-new-firmware)" in policy
-        )
-        assert "9bf86e6280ec4282b8b5822d8166410a456cdb720109aa799f0011fa63df1de3ee5e35e293fc410c061433163acb03a6" in policy
-        assert "cacdba001f7732b60c1a60cac95e361717574cc4e1b13056cec49059d3229b3ea41381d00566b320318577ef74f91c4e" in policy
-        assert policy.count(real_measurements["rtmr1"]) == 2
-        assert policy.count(real_measurements["rtmr2"]) == 2
-        assert policy.count(real_measurements["rtmr3"]) == 2
 
     def test_static_ref_vals_in_base_checks(
         self, artifacts_dir, template_path, tmp_path
