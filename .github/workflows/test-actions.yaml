@@ -1,3 +1,5 @@
+# Exercises the repository's composite actions, policy generation, manifest
+# handling, ITA round trips, and released-policy verification.
 name: Test Actions
 
 on:

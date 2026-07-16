@@ -1,3 +1,5 @@
+# Generates and validates the composite attestation policy, uploads it to ITA,
+# and publishes signed release assets and provenance.
 name: Release Policy
 
 on:

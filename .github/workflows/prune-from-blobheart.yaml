@@ -1,3 +1,5 @@
+# Removes policy targets whose Blobheart source revisions are retired and
+# opens the resulting manifest change as a pull request.
 name: Prune from Blobheart
 
 on:

@@ -1,3 +1,5 @@
+# Imports confidential-compute targets from Blobheart, merges them into the
+# policy manifest, and publishes the change so the release workflow can run.
 name: Add from Blobheart
 run-name: Blobheart policy ${{ github.event.client_payload.correlation_id || github.run_id }}
 
