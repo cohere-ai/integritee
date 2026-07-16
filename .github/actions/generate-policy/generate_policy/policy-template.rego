@@ -66,7 +66,7 @@ matches_tdx if {
 
 nvgpu_device_base_checks(gpu) if {
     gpu.hwmodel == "GH100"
-    gpu["x-nvidia-gpu-driver-version"] == "${NVIDIA_DRIVER_VERSION}"
+    gpu["x-nvidia-gpu-driver-version"] == ${NVIDIA_DRIVER_VERSION}
 
     gpu["x-nvidia-gpu-attestation-report-nonce-match"] == true
     gpu["x-nvidia-gpu-arch-check"] == true

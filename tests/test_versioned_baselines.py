@@ -208,6 +208,21 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     assert "# Platform baseline: 111111111111/v2" in policy
     assert "# Platform baseline: 111111111111/v3" not in policy
     assert "# Model: cmp-l (Initdata: unknown)" in policy
+    assert 'gpu["x-nvidia-gpu-driver-version"] == "580.159.04"' in policy
+
+    injected_version = '580.159.04"\n}\ndefault match := true\n#'
+    generate.render_policy(
+        [target],
+        injected_version,
+        ACTION_ROOT / "generate_policy" / "policy-template.rego",
+        output,
+    )
+    policy = output.read_text()
+    assert (
+        'gpu["x-nvidia-gpu-driver-version"] == '
+        f"{json.dumps(injected_version)}"
+    ) in policy
+    assert "\ndefault match := true\n" not in policy
 
 
 def test_generate_policy_measures_and_records_each_baseline(

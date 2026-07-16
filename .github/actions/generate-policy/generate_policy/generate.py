@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 import sys
 import uuid
@@ -36,7 +37,10 @@ PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
 
 
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
-    return apt_pkg_version.split("-", 1)[0]
+    version = apt_pkg_version.split("-", 1)[0]
+    if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", version):
+        raise ValueError(f"invalid NVIDIA driver version: {apt_pkg_version!r}")
+    return version
 
 
 def resolve_nvidia_driver_version(
@@ -56,7 +60,11 @@ def resolve_nvidia_driver_version(
         if not pkg_version:
             print(f"ERROR: {meas_file} has no nvidia_driver_version", file=sys.stderr)
             sys.exit(1)
-        versions[podvm_tag] = to_nvat_driver_version(pkg_version)
+        try:
+            versions[podvm_tag] = to_nvat_driver_version(pkg_version)
+        except ValueError as error:
+            print(f"ERROR: {meas_file}: {error}", file=sys.stderr)
+            sys.exit(1)
 
     if not versions:
         print("ERROR: no podvm_image_tag in any target", file=sys.stderr)
@@ -176,7 +184,10 @@ def render_policy(
         "\n\n".join(workload_blocks),
     )
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
-    policy = policy.replace(DRIVER_VERSION_PLACEHOLDER, nv_driver_version)
+    policy = policy.replace(
+        DRIVER_VERSION_PLACEHOLDER,
+        json.dumps(nv_driver_version),
+    )
 
     if DRIVER_VERSION_PLACEHOLDER in policy:
         print(f"ERROR: {DRIVER_VERSION_PLACEHOLDER} not substituted", file=sys.stderr)
