@@ -299,6 +299,13 @@ def main() -> None:
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "
               f"ram_gib={ram_gib}, initdata_sha384={initdata_sha384}")
 
+    if not targets:
+        print(
+            "ERROR: CC models were discovered but none produced a policy target",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         yaml.dump({"targets": targets}, default_flow_style=False, sort_keys=False)

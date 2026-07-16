@@ -22,6 +22,7 @@ from urllib3.util.retry import Retry
 
 # "TEE Attestation" service offer on api.trustauthority.intel.com
 TEE_SERVICE_OFFER_ID = "d47f9540-5bd6-47ff-b984-5fcf0d74c6e2"
+REQUEST_TIMEOUT_SECONDS = 30
 
 
 def ita_session() -> requests.Session:
@@ -61,7 +62,12 @@ def main() -> None:
             "policy": policy_content,
         }
         url = f"{api_url}/management/v1/policies/{policy_id}"
-        resp = session.put(url, json=payload, headers=headers)
+        resp = session.put(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
     else:
         print(f"Creating new policy: {policy_name}", file=sys.stderr)
         payload = {
@@ -71,7 +77,12 @@ def main() -> None:
             "policy": policy_content,
         }
         url = f"{api_url}/management/v1/policies"
-        resp = session.post(url, json=payload, headers=headers)
+        resp = session.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
 
     if not resp.ok:
         print(f"ERROR: ITA API returned HTTP {resp.status_code}", file=sys.stderr)

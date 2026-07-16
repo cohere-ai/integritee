@@ -16,6 +16,8 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+REQUEST_TIMEOUT_SECONDS = 30
+
 
 def ita_session() -> requests.Session:
     session = requests.Session()
@@ -36,7 +38,7 @@ def main() -> None:
     resp = ita_session().delete(url, headers={
         "Accept": "application/json",
         "x-api-key": api_key,
-    })
+    }, timeout=REQUEST_TIMEOUT_SECONDS)
 
     if resp.ok:
         print(f"Policy deleted: {policy_id} (HTTP {resp.status_code})", file=sys.stderr)
