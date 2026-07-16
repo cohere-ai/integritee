@@ -1,0 +1,3 @@
+attestation-policy/initdata/** linguist-generated=true
+.github/workflows/test-actions/derive-manifest/initdata/** linguist-generated=true
+.github/workflows/test-actions/generate-policy/initdata/** linguist-generated=true

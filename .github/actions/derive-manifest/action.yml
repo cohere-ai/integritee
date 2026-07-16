@@ -1,0 +1,68 @@
+name: "Derive Manifest"
+description: "Derive policy manifests from one or more blobheart refs with fully resolved targets"
+
+inputs:
+  blobheart-refs:
+    description: "Space-separated blobheart commit SHAs to derive manifests from (mutually exclusive with blobheart-dir)"
+    required: false
+  blobheart-dir:
+    description: "Path to a local blobheart checkout (mutually exclusive with blobheart-refs)"
+    required: false
+  github-token:
+    description: "GitHub token with read access to blobheart (required when using blobheart-refs)"
+    required: false
+
+outputs:
+  manifest-files:
+    description: "Space-separated paths to the derived policy-manifest YAML files"
+    value: ${{ steps.derive.outputs.manifest-files }}
+  initdata-dir:
+    description: "Directory containing content-addressed decoded initdata files"
+    value: ${{ steps.derive.outputs.initdata-dir }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install pyyaml >/dev/null 2>&1
+
+    - name: Derive manifests
+      id: derive
+      shell: bash
+      env:
+        BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
+        BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        MANIFEST_FILES=""
+        INITDATA_DIR="${RUNNER_TEMP}/initdata"
+        if [[ -n "$BLOBHEART_DIR" ]]; then
+          MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-local.yaml"
+          python3 "${{ github.action_path }}/derive.py" \
+            --blobheart-dir "$BLOBHEART_DIR" \
+            --initdata-dir "$INITDATA_DIR" \
+            --output "$MANIFEST_FILE"
+          MANIFEST_FILES="$MANIFEST_FILE"
+        else
+          read -r -a REFS <<< "$BLOBHEART_REFS"
+          if [[ ${#REFS[@]} -eq 0 ]]; then
+            echo "At least one Blobheart ref is required"
+            exit 1
+          fi
+          for REF in "${REFS[@]}"; do
+            echo "========================================"
+            echo "Deriving manifest from blobheart ref: $REF"
+            echo "========================================"
+
+            MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-${REF}.yaml"
+            python3 "${{ github.action_path }}/derive.py" \
+              --blobheart-ref "$REF" \
+              --initdata-dir "$INITDATA_DIR" \
+              --output "$MANIFEST_FILE"
+
+            MANIFEST_FILES="$MANIFEST_FILES $MANIFEST_FILE"
+          done
+        fi
+        echo "manifest-files=${MANIFEST_FILES# }" >> "$GITHUB_OUTPUT"
+        echo "initdata-dir=$INITDATA_DIR" >> "$GITHUB_OUTPUT"

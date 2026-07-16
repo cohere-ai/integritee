@@ -1,0 +1,108 @@
+# Removes policy targets whose Blobheart source revisions are retired and
+# opens the resulting manifest change as a pull request.
+name: Prune from Blobheart
+
+on:
+  workflow_dispatch:
+    inputs:
+      retire_sources:
+        description: "Space-separated blobheart SHAs to decommission"
+        required: true
+        type: string
+      dry_run:
+        description: "If true, show what would change without creating a PR"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  prune:
+    runs-on: ubuntu-latest
+    env:
+      RETIRE_SOURCES: ${{ inputs.retire_sources }}
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
+          permission-pull-requests: write
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Prune retired sources
+        id: prune
+        run: |
+          RESULT=$(python3 .github/workflows/prune-from-blobheart/prune.py \
+            --manifest attestation-policy/policy-manifest.yaml \
+            --retire ${{ env.RETIRE_SOURCES }})
+          echo "$RESULT" >> "$GITHUB_OUTPUT"
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet attestation-policy/policy-manifest.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to manifest"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "Manifest updated: ${{ steps.prune.outputs.removed }} targets removed, ${{ steps.prune.outputs.trimmed }} trimmed"
+            git diff attestation-policy/policy-manifest.yaml
+          fi
+
+      - name: Show warnings
+        if: steps.prune.outputs.warnings != ''
+        run: |
+          echo "::warning::${{ steps.prune.outputs.warnings }}"
+
+      - name: Upload pruned manifest
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: pruned-policy-manifest
+          path: attestation-policy/policy-manifest.yaml
+
+      - name: Create PR
+        if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          REMOVED: ${{ steps.prune.outputs.removed }}
+          TRIMMED: ${{ steps.prune.outputs.trimmed }}
+          REMAINING: ${{ steps.prune.outputs.remaining }}
+        run: |
+          SHORT_SOURCES=$(echo "$RETIRE_SOURCES" | tr ' ' '\n' | cut -c1-8 | tr '\n' ' ')
+          BRANCH="prune/retire-$(echo "$SHORT_SOURCES" | tr ' ' '-' | sed 's/-$//')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add attestation-policy/policy-manifest.yaml
+          git commit -m "feat(policy): Retire blobheart sources (${SHORT_SOURCES})"
+          git push -u origin "$BRANCH"
+
+          gh pr create \
+            --title "Retire blobheart sources (${SHORT_SOURCES})" \
+            --body "$(cat <<EOF
+          ## Summary
+
+          Retired blobheart sources: \`$RETIRE_SOURCES\`
+
+          - **$REMOVED** targets removed (sources list became empty)
+          - **$TRIMMED** targets trimmed (still active via other sources)
+          - **$REMAINING** targets remaining
+
+          Please review the removed targets and merge when ready.
+          EOF
+          )"

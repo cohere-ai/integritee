@@ -1,0 +1,56 @@
+name: "Verify Against Policy"
+description: >
+  Verifies that the latest integritee release covers all targets derived from
+  the given blobheart ref. Retries automatically to allow time for a newly
+  triggered release to propagate.
+
+inputs:
+  blobheart-refs:
+    description: "Space-separated blobheart commit SHAs (mutually exclusive with blobheart-dir)"
+    required: false
+  blobheart-dir:
+    description: "Path to a local blobheart checkout (mutually exclusive with blobheart-refs)"
+    required: false
+  blobheart-token:
+    description: "GitHub token with read access to blobheart (required when using blobheart-refs)"
+    required: false
+  integritee-token:
+    description: "GitHub token with read access to integritee releases (not required when using local policy-manifest)"
+    required: false
+  policy-manifest:
+    description: "Path to a local policy-manifest.yaml to verify against (skips fetching from latest release)"
+    required: false
+  retries:
+    description: "Number of retries after the initial attempt (0 = no retry)"
+    required: false
+    default: "0"
+  retry-delay:
+    description: "Seconds to wait between retry attempts"
+    required: false
+    default: "30"
+
+outputs:
+  release-tag:
+    description: "The release tag that was checked against"
+    value: ${{ steps.verify.outputs.release-tag }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install pyyaml >/dev/null 2>&1
+
+    - name: Verify policy coverage
+      id: verify
+      shell: bash
+      env:
+        BLOBHEART_TOKEN: ${{ inputs.blobheart-token }}
+        INTEGRITEE_TOKEN: ${{ inputs.integritee-token }}
+        BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
+        BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
+        POLICY_MANIFEST: ${{ inputs.policy-manifest }}
+        RETRIES: ${{ inputs.retries }}
+        RETRY_DELAY: ${{ inputs.retry-delay }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: python3 "${{ github.action_path }}/verify.py" >> "$GITHUB_OUTPUT"

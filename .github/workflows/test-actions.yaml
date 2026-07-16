@@ -1,0 +1,366 @@
+# Exercises the repository's composite actions, policy generation, manifest
+# handling, ITA round trips, and released-policy verification.
+name: Test Actions
+
+on:
+  pull_request:
+    paths:
+      - ".github/actions/**"
+      - ".github/workflows/test-actions.yaml"
+      - ".github/workflows/test-actions/**"
+      - "attestation-policy/policy-manifest.yaml"
+      - "attestation-policy/initdata/**"
+
+permissions:
+  contents: read
+  packages: read
+
+jobs:
+  test-generate-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: cohere-cc-baselines
+
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      - name: Initialize predicate
+        run: echo '{}' > predicate.json
+
+      - name: Validate file-backed manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: .github/workflows/test-actions/generate-policy/policy-manifest.yaml
+
+      - name: Generate policy
+        uses: ./.github/actions/generate-policy
+        with:
+          manifest-file: .github/workflows/test-actions/generate-policy/policy-manifest.yaml
+          github-token: ${{ steps.app-token.outputs.token }}
+          output-artifacts-dir: artifacts
+          output-policy-file: generated-policy.rego
+          predicate-file: predicate.json
+
+      - name: Verify generated rego structure
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          rego = Path("generated-policy.rego").read_text()
+          required = [
+              "import rego.v1",
+              "default match := false",
+              "match if {",
+              "tdx_base_checks if {",
+              "matches_tdx if {",
+              "matches_tdx_platform if {",
+              "matches_tdx_workload if {",
+              "# Model: cmp-l (Initdata:",
+              "nvgpu_base_checks if {",
+              "matches_nvgpu if {",
+          ]
+          missing = [snippet for snippet in required if snippet not in rego]
+          assert not missing, f"generated policy missing required sections: {missing}"
+          assert "${" not in rego, "generated policy contains unresolved template placeholders"
+          print("Generated Rego structure OK")
+          PY
+
+      - name: Verify predicate is consistent with rego
+        run: |
+          python3 -c "
+          import json, sys
+          pred = json.loads(open('predicate.json').read())
+          rego = open('generated-policy.rego').read()
+          assert 'targets' in pred, 'predicate missing targets'
+          assert 'cvm_measure_version' in pred, 'predicate missing cvm_measure_version'
+          for t in pred['targets']:
+              variants = t.get('baseline_variants', [])
+              assert variants, f'{t[\"model\"]}: predicate missing baseline variants'
+              for variant in variants:
+                  for field, val in variant['measurements'].items():
+                      assert val in rego, (
+                          f'{t[\"model\"]}/{variant[\"version\"]}: '
+                          f'{field}={val} not found in rego'
+                      )
+          print(f'Predicate OK: {len(pred[\"targets\"])} target(s) consistent with rego')
+          "
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: test-generate-policy-output
+          path: |
+            generated-policy.rego
+            predicate.json
+
+  test-ita-roundtrip:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Create policy with unique nonce
+        id: create-policy
+        run: |
+          NONCE=$(python3 -c "import uuid; print(uuid.uuid4())")
+          cp .github/workflows/test-actions/ita-roundtrip/minimal-policy.rego test-policy.rego
+          echo "integritee_nonce := \"$NONCE\"" >> test-policy.rego
+          echo "nonce=$NONCE" >> "$GITHUB_OUTPUT"
+
+      - name: Upload policy to ITA (create)
+        id: create
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: test-policy.rego
+          policy-name: ci-test-${{ github.run_id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Fetch created policy
+        id: fetch-created
+        uses: ./.github/actions/fetch-ita-policy
+        with:
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Assert created policy matches
+        run: diff test-policy.rego "${{ steps.fetch-created.outputs.policy-file }}"
+
+      - name: Update policy with new nonce
+        run: |
+          NEW_NONCE=$(python3 -c "import uuid; print(uuid.uuid4())")
+          cp .github/workflows/test-actions/ita-roundtrip/minimal-policy.rego test-policy.rego
+          echo "integritee_nonce := \"$NEW_NONCE\"" >> test-policy.rego
+
+      - name: Upload policy to ITA (update)
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: test-policy.rego
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          policy-name: ci-test-${{ github.run_id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Fetch updated policy
+        id: fetch-updated
+        uses: ./.github/actions/fetch-ita-policy
+        with:
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Assert updated policy matches
+        run: diff test-policy.rego "${{ steps.fetch-updated.outputs.policy-file }}"
+
+      - name: Delete test policy from ITA
+        id: delete-first
+        if: always()
+        uses: ./.github/actions/delete-ita-policy
+        with:
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Delete again (idempotent, should report not found)
+        id: delete-second
+        if: always()
+        uses: ./.github/actions/delete-ita-policy
+        with:
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Assert delete outputs
+        if: always()
+        run: |
+          if [ "${{ steps.delete-first.outputs.existed }}" != "true" ]; then
+            echo "ERROR: first delete should report existed=true"
+            exit 1
+          fi
+          if [ "${{ steps.delete-second.outputs.existed }}" != "false" ]; then
+            echo "ERROR: second delete should report existed=false"
+            exit 1
+          fi
+          echo "DELETE verified: first=existed, second=not found (idempotent)"
+
+  test-verify-against-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart
+
+      - name: Verify known ref against policy (should pass)
+        id: verify
+        uses: ./.github/actions/verify-against-policy
+        with:
+          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
+          blobheart-token: ${{ steps.app-token.outputs.token }}
+          policy-manifest: .github/workflows/test-actions/derive-manifest/expected-manifest.yaml
+
+      - name: Assert release tag is set
+        run: |
+          if [ -z "${{ steps.verify.outputs.release-tag }}" ]; then
+            echo "ERROR: release-tag output is empty"
+            exit 1
+          fi
+          echo "Verified against release: ${{ steps.verify.outputs.release-tag }}"
+
+      - name: Verify uncovered ref against policy (should fail)
+        id: verify-fail
+        continue-on-error: true
+        uses: ./.github/actions/verify-against-policy
+        with:
+          blobheart-refs: "8abd02c84e4764cb0e721a810588054f37bb6ca4"
+          blobheart-token: ${{ steps.app-token.outputs.token }}
+          integritee-token: ${{ github.token }}
+
+      - name: Assert verification failed
+        run: |
+          if [ "${{ steps.verify-fail.outcome }}" != "failure" ]; then
+            echo "ERROR: expected verification to fail for uncovered ref, got ${{ steps.verify-fail.outcome }}"
+            exit 1
+          fi
+          echo "Correctly rejected uncovered ref"
+
+  test-merge-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Merge with new and duplicate targets
+        id: merge
+        uses: ./.github/actions/merge-manifest
+        with:
+          base: .github/workflows/test-actions/merge-manifest/base-manifest.yaml
+          new: .github/workflows/test-actions/merge-manifest/new-manifest.yaml
+
+      - name: Assert counts
+        run: |
+          if [ "${{ steps.merge.outputs.added }}" != "1" ]; then
+            echo "ERROR: expected added=1, got ${{ steps.merge.outputs.added }}"
+            exit 1
+          fi
+          if [ "${{ steps.merge.outputs.skipped }}" != "1" ]; then
+            echo "ERROR: expected skipped=1, got ${{ steps.merge.outputs.skipped }}"
+            exit 1
+          fi
+          if [ "${{ steps.merge.outputs.total }}" != "2" ]; then
+            echo "ERROR: expected total=2, got ${{ steps.merge.outputs.total }}"
+            exit 1
+          fi
+          echo "Merge counts OK: added=1, skipped=1, total=2"
+
+      - name: Assert merged manifest contains both models
+        run: |
+          python3 -c "
+          import yaml
+          doc = yaml.safe_load(open('${{ steps.merge.outputs.manifest-file }}'))
+          models = [t['model'] for t in doc['targets']]
+          assert 'existing-model' in models, 'missing existing-model'
+          assert 'new-model' in models, 'missing new-model'
+          assert len(models) == 2, f'expected 2 targets, got {len(models)}'
+          # Verify sources union on deduped target
+          existing = next(t for t in doc['targets'] if t['model'] == 'existing-model')
+          assert 'aabbccddaabbccddaabbccddaabbccddaabbccdd' in existing['sources'], 'missing original source on existing-model'
+          assert '112233aa112233aa112233aa112233aa112233aa' in existing['sources'], 'missing new source on existing-model (union failed)'
+          print(f'Merged manifest OK: {models}, existing-model sources={existing[\"sources\"]}')
+          "
+
+      - name: Merge again (all duplicates)
+        id: merge-dedup
+        uses: ./.github/actions/merge-manifest
+        with:
+          base: ${{ steps.merge.outputs.manifest-file }}
+          new: .github/workflows/test-actions/merge-manifest/new-manifest.yaml
+
+      - name: Assert no additions on re-merge
+        run: |
+          if [ "${{ steps.merge-dedup.outputs.added }}" != "0" ]; then
+            echo "ERROR: expected added=0 on re-merge, got ${{ steps.merge-dedup.outputs.added }}"
+            exit 1
+          fi
+          echo "Re-merge dedup OK: added=0, skipped=${{ steps.merge-dedup.outputs.skipped }}"
+
+  test-derive-manifest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart
+
+      - name: Derive manifest (single ref)
+        id: derive-single
+        uses: ./.github/actions/derive-manifest
+        with:
+          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Verify single-ref manifest
+        run: |
+          grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-single.outputs.manifest-files }} > /tmp/actual-content.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
+
+      - name: Derive manifest (multiple refs, same ref twice)
+        id: derive-multi
+        uses: ./.github/actions/derive-manifest
+        with:
+          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58 47ded742780246155c119caa1b3f90fd8b598c58"
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Verify multi-ref produces two manifest files
+        run: |
+          FILE_COUNT=$(echo "${{ steps.derive-multi.outputs.manifest-files }}" | wc -w)
+          if [ "$FILE_COUNT" -ne 2 ]; then
+            echo "ERROR: expected 2 manifest files, got $FILE_COUNT"
+            exit 1
+          fi
+          for f in ${{ steps.derive-multi.outputs.manifest-files }}; do
+            grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' "$f" > /tmp/actual-content.yaml
+            diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
+          done
+
+      - name: Clone blobheart at pinned ref
+        run: |
+          git clone --depth 1 https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/cohere-ai/blobheart.git /tmp/blobheart
+          cd /tmp/blobheart && git fetch --depth 1 origin 47ded742780246155c119caa1b3f90fd8b598c58 && git checkout FETCH_HEAD
+
+      - name: Derive manifest (local dir)
+        id: derive-local
+        uses: ./.github/actions/derive-manifest
+        with:
+          blobheart-dir: /tmp/blobheart
+
+      - name: Verify local-dir manifest (ignoring dynamic fields)
+        run: |
+          grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-content.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml

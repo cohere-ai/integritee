@@ -1,0 +1,44 @@
+name: "Merge Manifest"
+description: "Merge new policy manifests into a base manifest with content-addressed deduplication"
+
+inputs:
+  base:
+    description: "Path to the base manifest file"
+    required: true
+  new:
+    description: "Space-separated paths to new manifest file(s)"
+    required: true
+
+outputs:
+  manifest-file:
+    description: "Path to the merged manifest"
+    value: ${{ steps.merge.outputs.manifest-file }}
+  added:
+    description: "Number of new targets added"
+    value: ${{ steps.merge.outputs.added }}
+  skipped:
+    description: "Number of duplicate targets skipped"
+    value: ${{ steps.merge.outputs.skipped }}
+  total:
+    description: "Total targets in the output manifest"
+    value: ${{ steps.merge.outputs.total }}
+  added-models:
+    description: "Comma-separated model names for newly added targets"
+    value: ${{ steps.merge.outputs.added-models }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install pyyaml >/dev/null 2>&1
+
+    - name: Merge manifests
+      id: merge
+      shell: bash
+      run: |
+        python3 "${{ github.action_path }}/merge-manifest.py" \
+          --base "${{ inputs.base }}" \
+          --new ${{ inputs.new }} \
+          --output "$RUNNER_TEMP/merged-policy-manifest.yaml" \
+          >> "$GITHUB_OUTPUT"

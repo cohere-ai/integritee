@@ -50,7 +50,11 @@ DEFAULT_CVM_META = {
     "podvm_image_tag": "cohere-latest-ubuntu-debug",
     "ram_gib": 234,
     "baseline_path": "cvm-artifacts/baselines/a3-highgpu-1g.json",
-    "baseline_ref": "cohere-ai/cohere-cc-baselines/baselines/gcp/tdx/a3-highgpu-1g.json",
+    "baseline_ref": (
+        "cohere-ai/cohere-cc-baselines/baselines/gcp/tdx/versions/"
+        "a5b06b530c7942f76f8fe395f903e460672b637c2056994c26abb931683cf4dea"
+        "abffb32bf17e534b85f7912e6cb85c1/v2/a3-highgpu-1g.json"
+    ),
     "firmware_path": "cvm-artifacts/firmware/abc.fd",
     "firmware_ref": "ovmf-2024-08",
     "uki_path": "cvm-artifacts/uki/cohere-latest-ubuntu-debug/BOOTX64.EFI",
