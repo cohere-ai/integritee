@@ -76,6 +76,8 @@ jobs:
         run: |
           SHORT_SOURCES=$(echo "$RETIRE_SOURCES" | tr ' ' '\n' | cut -c1-8 | tr '\n' ' ')
           BRANCH="prune/retire-$(echo "$SHORT_SOURCES" | tr ' ' '-' | sed 's/-$//')"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add attestation-policy/policy-manifest.yaml
           git commit -m "feat(policy): Retire blobheart sources (${SHORT_SOURCES})"
