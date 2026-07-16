@@ -60,8 +60,7 @@ def read_file(root: Path | None, ref: str | None, path: str) -> str:
         capture_output=True, text=True,
     )
     if result.returncode != 0:
-        print(f"ERROR: gh api {api_path}: {result.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"gh api {api_path}: {result.stderr.strip()}")
     return base64.b64decode(result.stdout.strip()).decode()
 
 
@@ -189,6 +188,20 @@ def load_machine_types() -> dict[str, dict]:
     return yaml.safe_load(mt_path.read_text())
 
 
+def resolve_local_ref(root: Path) -> str:
+    """Return the immutable commit SHA for a local Blobheart checkout."""
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+    )
+    ref = result.stdout.strip()
+    if result.returncode != 0 or not re.fullmatch(r"[0-9a-f]{40}", ref):
+        detail = result.stderr.strip() or "HEAD did not resolve to a commit SHA"
+        raise ValueError(f"cannot resolve Blobheart checkout commit: {detail}")
+    return ref
+
+
 def main() -> None:
     """Derive a policy manifest from local or remote Blobheart."""
     parser = argparse.ArgumentParser(description="Derive manifest from blobheart ref or local checkout")
@@ -211,7 +224,12 @@ def main() -> None:
         parser.error("--blobheart-ref must be a 40-character lowercase SHA")
     if root and not root.is_dir():
         parser.error(f"--blobheart-dir is not a directory: {root}")
-    source_label = f"local://{root}" if root else f"blobheart://{ref}"
+    if root:
+        try:
+            ref = resolve_local_ref(root)
+        except ValueError as error:
+            parser.error(str(error))
+    source_label = f"local://{root}@{ref}" if root else f"blobheart://{ref}"
 
     machine_types = load_machine_types()
     print(f"Deriving manifest from {source_label}")
@@ -239,12 +257,8 @@ def main() -> None:
         print(f"\n--- {model} ({cc_name}) ---")
 
         model_path = f"{GENERATED_DIR}/{cc_name}/model.yaml"
-        try:
-            model_raw = read_file(root, ref, model_path)
-            gpu_label = extract_gpu_label(model_raw)
-        except SystemExit:
-            print(f"  WARNING: could not read model.yaml, skipping")
-            continue
+        model_raw = read_file(root, ref, model_path)
+        gpu_label = extract_gpu_label(model_raw)
 
         if not gpu_label:
             print(f"  WARNING: no {GPU_LABEL_KEY} label on StatefulSet, skipping")
@@ -267,12 +281,8 @@ def main() -> None:
         ram_gib = mt_info["ram_gib"]
 
         kata_path = f"{GENERATED_DIR}/{cc_name}/kata-policy-patch.yaml"
-        try:
-            kata_raw = read_file(root, ref, kata_path)
-            initdata = extract_initdata(kata_raw)
-        except SystemExit:
-            print(f"  WARNING: could not read kata-policy-patch.yaml, skipping")
-            continue
+        kata_raw = read_file(root, ref, kata_path)
+        initdata = extract_initdata(kata_raw)
 
         if not initdata:
             print(f"  WARNING: no cc_init_data annotation, skipping")
@@ -293,7 +303,7 @@ def main() -> None:
             "initdata_file": initdata_file,
             "initdata_sha384": initdata_sha384,
             "added": today,
-            "sources": [ref] if ref else ["local"],
+            "sources": [ref],
         }
         targets.append(target)
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "

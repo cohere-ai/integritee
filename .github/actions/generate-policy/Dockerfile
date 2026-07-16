@@ -11,9 +11,13 @@ RUN apt-get update && \
 RUN pip install --no-cache-dir pyyaml
 
 ARG CVM_MEASURE_REPO=https://github.com/cohere-ai/cvm-measure.git
-ARG CVM_MEASURE_REF=alhassankhedr/cc-167-tdx-measurement-toolkit
+ARG CVM_MEASURE_REF=11c99206c1f73242102787314b154f3a28a221b6
 
-RUN git clone --depth 1 --branch "${CVM_MEASURE_REF}" "${CVM_MEASURE_REPO}" /tmp/cvm-measure && \
+RUN git init /tmp/cvm-measure && \
+    git -C /tmp/cvm-measure remote add origin "${CVM_MEASURE_REPO}" && \
+    git -C /tmp/cvm-measure fetch --depth 1 origin "${CVM_MEASURE_REF}" && \
+    git -C /tmp/cvm-measure checkout --detach FETCH_HEAD && \
+    test "$(git -C /tmp/cvm-measure rev-parse HEAD)" = "${CVM_MEASURE_REF}" && \
     pip install --no-cache-dir /tmp/cvm-measure && \
     rm -rf /tmp/cvm-measure
 

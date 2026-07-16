@@ -10,6 +10,7 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
+TEST_SHA = "a" * 40
 
 
 def load_action(name: str, relative_path: str):
@@ -45,6 +46,7 @@ def test_derive_fails_when_all_discovered_models_are_skipped(
         ".github/actions/derive-manifest/derive.py",
     )
     output = tmp_path / "manifest.yaml"
+    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
     monkeypatch.setattr(derive, "list_dir", lambda *_args: ["cmp-l-cc"])
     monkeypatch.setattr(
         derive,
@@ -83,6 +85,7 @@ def test_derive_preserves_empty_manifest_for_source_without_cc_models(
         ".github/actions/derive-manifest/derive.py",
     )
     output = tmp_path / "manifest.yaml"
+    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
     monkeypatch.setattr(derive, "list_dir", lambda *_args: [])
     monkeypatch.setattr(
         sys,
@@ -99,6 +102,77 @@ def test_derive_preserves_empty_manifest_for_source_without_cc_models(
     derive.main()
 
     assert yaml.safe_load(output.read_text()) == {"targets": []}
+
+
+def test_derive_propagates_source_read_failures(tmp_path, monkeypatch):
+    derive = load_action(
+        "derive_manifest_read_failure",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    output = tmp_path / "manifest.yaml"
+    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
+    monkeypatch.setattr(derive, "list_dir", lambda *_args: ["cmp-l-cc"])
+
+    def read_file(_root, _ref, path):
+        if path == derive.KUSTOMIZATION_PATH:
+            return "resources: []\n"
+        raise RuntimeError("source API unavailable")
+
+    monkeypatch.setattr(derive, "read_file", read_file)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "derive.py",
+            "--blobheart-dir",
+            str(tmp_path),
+            "--output",
+            str(output),
+        ],
+    )
+
+    with pytest.raises(RuntimeError, match="source API unavailable"):
+        derive.main()
+
+    assert not output.exists()
+
+
+def test_local_derivation_uses_checkout_commit(monkeypatch, tmp_path):
+    derive = load_action(
+        "derive_manifest_local_ref",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    run = Mock(returncode=0, stdout=f"{TEST_SHA}\n", stderr="")
+    monkeypatch.setattr(derive.subprocess, "run", Mock(return_value=run))
+
+    assert derive.resolve_local_ref(tmp_path) == TEST_SHA
+
+
+def test_release_manifest_downloads_into_directory(tmp_path, monkeypatch):
+    verify = load_action(
+        "verify_against_policy",
+        ".github/actions/verify-against-policy/verify.py",
+    )
+    calls = []
+
+    def fake_gh(*args, token=None):
+        calls.append(args)
+        if args[:2] == ("release", "view"):
+            return "v1.2.3"
+        download_dir = Path(args[args.index("--dir") + 1])
+        (download_dir / "policy-manifest.yaml").write_text("targets: []\n")
+        return ""
+
+    monkeypatch.setattr(verify, "gh", fake_gh)
+
+    manifest, tag = verify.fetch_release_manifest(tmp_path, "token")
+
+    assert tag == "v1.2.3"
+    assert manifest == tmp_path / "integritee-release" / "policy-manifest.yaml"
+    download_call = calls[1]
+    assert "--dir" in download_call
+    assert "--clobber" in download_call
+    assert "--output" not in download_call
 
 
 @pytest.mark.parametrize(

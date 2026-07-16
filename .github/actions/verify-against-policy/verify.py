@@ -89,14 +89,19 @@ def fetch_release_manifest(runner_temp: Path, token: str) -> tuple[Path, str]:
 
     print(f"Latest release: {release_tag}", file=sys.stderr)
 
-    manifest_path = runner_temp / "release-manifest.yaml"
+    download_dir = runner_temp / "integritee-release"
+    download_dir.mkdir(parents=True, exist_ok=True)
     gh(
         "release", "download", release_tag,
         "--repo", "cohere-ai/integritee",
         "--pattern", "policy-manifest.yaml",
-        "--output", str(manifest_path),
+        "--dir", str(download_dir),
+        "--clobber",
         token=token,
     )
+    manifest_path = download_dir / "policy-manifest.yaml"
+    if not manifest_path.is_file():
+        raise RuntimeError(f"Release {release_tag} does not contain policy-manifest.yaml")
 
     return manifest_path, release_tag
 

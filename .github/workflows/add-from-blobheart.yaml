@@ -109,7 +109,7 @@ jobs:
           --repository "$GITHUB_REPOSITORY"
 
       - name: Wait for production policy release
-        if: env.DRY_RUN == 'false'
+        if: steps.publish.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_SHA: ${{ steps.publish.outputs.release-sha }}
