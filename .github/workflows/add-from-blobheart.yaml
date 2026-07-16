@@ -4,9 +4,6 @@ name: Add from Blobheart
 run-name: Blobheart policy ${{ github.event.client_payload.correlation_id || github.run_id }}
 
 on:
-  # Temporary dry-run trigger; remove before merging to main.
-  push:
-    branches: [shariq/policy-automation]
   repository_dispatch:
     types: [blobheart-deploy]
   workflow_dispatch:
@@ -34,8 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      BLOBHEART_REFS: ${{ github.event_name == 'push' && '47ded742780246155c119caa1b3f90fd8b598c58' || inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
-      DRY_RUN: ${{ github.event_name == 'push' && 'true' || (github.event_name == 'workflow_dispatch' && inputs.dry_run || github.event.client_payload.dry_run) }}
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
+      DRY_RUN: ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'repository_dispatch' && github.event.client_payload.dry_run) }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3

@@ -3,8 +3,6 @@
 name: Prune from Blobheart
 
 on:
-  push:
-    branches: [shariq/policy-automation] # temporary: remove before merging
   workflow_dispatch:
     inputs:
       retire_sources:
@@ -25,8 +23,8 @@ jobs:
   prune:
     runs-on: ubuntu-latest
     env:
-      RETIRE_SOURCES: ${{ inputs.retire_sources || '47ded742780246155c119caa1b3f90fd8b598c58' }}
-      DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+      RETIRE_SOURCES: ${{ inputs.retire_sources }}
+      DRY_RUN: ${{ inputs.dry_run }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
