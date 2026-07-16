@@ -90,17 +90,13 @@ def fetch_release_manifest(runner_temp: Path, token: str) -> tuple[Path, str]:
     print(f"Latest release: {release_tag}", file=sys.stderr)
 
     manifest_path = runner_temp / "release-manifest.yaml"
-    try:
-        content = gh(
-            "api",
-            f"repos/cohere-ai/integritee/contents/attestation-policy/policy-manifest.yaml?ref={release_tag}",
-            "-H", "Accept: application/vnd.github.v3.raw",
-            token=token,
-        )
-        manifest_path.write_text(content)
-    except RuntimeError:
-        print(f"policy-manifest.yaml not found at release {release_tag}, treating as empty", file=sys.stderr)
-        manifest_path.write_text("targets: []\n")
+    gh(
+        "release", "download", release_tag,
+        "--repo", "cohere-ai/integritee",
+        "--pattern", "policy-manifest.yaml",
+        "--output", str(manifest_path),
+        token=token,
+    )
 
     return manifest_path, release_tag
 
