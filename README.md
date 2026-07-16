@@ -4,9 +4,10 @@ Public integrity ledger for Cohere's confidential computing models.
 
 This repository contains:
 
-- **Model manifests** (`models/`) -- Kubernetes podspecs for each confidential model
-- **Kata policy rules** (`rules/`) -- shared OPA Rego rules and genpolicy settings
-- **Attestation policy templates** (`attestation-policy/`) -- base ITA policy templates
+- **Policy manifest and initdata** (`attestation-policy/`) -- content-addressed
+  workload inputs imported from Blobheart
+- **Policy automation actions** (`.github/actions/`) -- derive, validate,
+  measure, upload, and verify policies
 - **CI workflow** (`.github/workflows/release-policy.yaml`) -- automated pipeline that generates policies, computes measurements, uploads to Intel Trust Authority, and publishes Sigstore-signed releases
 
 ## How It Works
@@ -59,22 +60,13 @@ chains entries together, forming a per-model linked list in the public Rekor tra
 ## Repository Structure
 
 ```
-models/
-  command-r-plus/
-    podspec.yaml                  # K8s manifest with kata-remote runtime
-    genpolicy-settings.json       # Optional: model-specific genpolicy overrides
-    rules.rego                    # Optional: model-specific rules overrides
-rules/
-  rules.rego                      # Shared Kata OPA rules (~2000 lines)
-  genpolicy-settings.json         # Base genpolicy settings
 attestation-policy/
-  template.rego                   # Base ITA attestation policy template
-scripts/
-  generate-ita-policy.py          # Generates ITA policy from template + measurements
-  build-predicate.py              # Builds the in-toto predicate JSON
+  policy-manifest.yaml            # Workloads included in the policy
+  initdata/                       # Content-addressed workload initdata
 .github/
+  actions/                        # Policy automation actions
   workflows/
-    release-policy.yaml             # Main attestation workflow
+    release-policy.yaml           # Main attestation workflow
 ```
 
 ## Triggering a Release

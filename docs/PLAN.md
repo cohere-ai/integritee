@@ -71,11 +71,7 @@ gateway can require it at attestation time.
 5. **Pull PodVM artifact** from GHCR via `oras`, then run
    `cvm-measure extract-uki` to produce `BOOTX64.EFI`.
 6. **For each model:**
-   - merge `rules/rules.rego` + per-model `rules.rego`
-   - merge `rules/genpolicy-settings.json` + per-model override
-   - run `genpolicy -r` → `kata-policy.rego`
-   - run `genpolicy -b` → base64 initdata
-   - decode initdata → `initdata.toml`
+   - load and verify its content-addressed initdata from the policy manifest
    - `cvm-measure tdx --firmware OVMF.fd --uki BOOTX64.EFI --baseline …
       --initdata initdata.toml` → `measurements.json` (MRTD + RTMR0–3)
 7. **Generate ITA policy** — `scripts/generate-ita-policy.py` reads the
