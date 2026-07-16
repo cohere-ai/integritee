@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 import uuid
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from .fetch import (
@@ -32,7 +33,6 @@ WORKLOAD_PLACEHOLDER = "${TDX_WORKLOAD_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 
-DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
 PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
 MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
 
@@ -231,6 +231,224 @@ def get_cvm_measure_version() -> str:
         return "unknown"
 
 
+@dataclass(frozen=True)
+class PreparedBaseline:
+    version: str
+    firmware_sha384: str
+    ref: str
+    path: Path
+    sha256: str
+    firmware_path: Path
+
+
+@dataclass(frozen=True)
+class PodVMArtifact:
+    uki_path: Path
+    digest: str
+
+
+@dataclass
+class GenerationContext:
+    """Configuration and memoized artifacts for one generation run."""
+
+    # Run configuration.
+    baselines_repo: str
+    podvm_image: str
+    artifacts_dir: Path
+
+    # Per-run caches. Callers use the methods below, not these dictionaries.
+    _baselines: dict[str, list[PreparedBaseline]] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _firmware: dict[str, Path] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _podvms: dict[str, PodVMArtifact] = field(
+        default_factory=dict, init=False, repr=False
+    )
+    _platform_measurements: dict[tuple, dict] = field(
+        default_factory=dict, init=False, repr=False
+    )
+
+    def _get_firmware(self, firmware_sha384: str) -> Path:
+        path = self._firmware.get(firmware_sha384)
+        if path is None:
+            path = (
+                self.artifacts_dir
+                / "firmware"
+                / f"{firmware_sha384}.fd"
+            )
+            fetch_firmware(firmware_sha384, path)
+            self._firmware[firmware_sha384] = path
+        return path
+
+    def get_baselines(self, machine_type: str) -> list[PreparedBaseline]:
+        baselines = self._baselines.get(machine_type)
+        if baselines is not None:
+            print(f"  Reusing baseline variants for {machine_type}")
+            return baselines
+
+        baselines = []
+        for variant in fetch_baseline_variants(
+            self.baselines_repo,
+            machine_type,
+        ):
+            version = variant["version"]
+            firmware_sha384 = variant["firmware_sha384"]
+            path = (
+                self.artifacts_dir
+                / "baselines"
+                / machine_type
+                / firmware_sha384
+                / f"{version}.json"
+            )
+            path.parent.mkdir(parents=True, exist_ok=True)
+            data = (
+                json.dumps(variant["baseline"], indent=2) + "\n"
+            ).encode()
+            path.write_bytes(data)
+            baselines.append(PreparedBaseline(
+                version=version,
+                firmware_sha384=firmware_sha384,
+                ref=variant["baseline_ref"],
+                path=path,
+                sha256=hashlib.sha256(data).hexdigest(),
+                firmware_path=self._get_firmware(firmware_sha384),
+            ))
+        self._baselines[machine_type] = baselines
+        return baselines
+
+    def get_podvm(self, podvm_ref: str, podvm_tag: str) -> PodVMArtifact:
+        artifact = self._podvms.get(podvm_ref)
+        if artifact is not None:
+            print(f"  Reusing UKI: {podvm_tag}")
+            return artifact
+
+        uki_path = self.artifacts_dir / "uki" / podvm_tag
+        print(f"  UKI: {podvm_tag}")
+        fetch_uki(podvm_ref, uki_path)
+        artifact = PodVMArtifact(
+            uki_path=uki_path,
+            digest=fetch_oci_digest(podvm_ref),
+        )
+        self._podvms[podvm_ref] = artifact
+        return artifact
+
+    def get_platform_measurements(
+        self,
+        *,
+        target: dict,
+        initdata: bytes,
+        podvm_tag: str,
+        uki_path: Path,
+        baseline: PreparedBaseline,
+        output_dir: Path,
+    ) -> dict:
+        key = (
+            target["machine_type"],
+            target["ram_gib"],
+            podvm_tag,
+            baseline.firmware_sha384,
+            baseline.sha256,
+        )
+        measurements = self._platform_measurements.get(key)
+        if measurements is not None:
+            print(
+                f"  Reusing platform measurements for "
+                f"{baseline.firmware_sha384[:12]}/{baseline.version}"
+            )
+            return measurements
+
+        print(
+            f"  Computing platform measurements for "
+            f"{baseline.firmware_sha384[:12]}/{baseline.version}..."
+        )
+        computed = compute_measurements(
+            ram_gib=target["ram_gib"],
+            initdata=initdata,
+            firmware_path=baseline.firmware_path,
+            baseline_path=baseline.path,
+            uki_path=uki_path / "BOOTX64.EFI",
+            disk_path=uki_path / "disk.tar.gz",
+            output_dir=output_dir,
+        )
+        measurements = {
+            field: value
+            for field, value in computed.items()
+            if field != "rtmr3"
+        }
+        self._platform_measurements[key] = measurements
+        return measurements
+
+
+def process_target(
+    index: int,
+    target: dict,
+    manifest_file: Path,
+    context: GenerationContext,
+) -> dict:
+    model = target["model"]
+    machine_type = target["machine_type"]
+    podvm_tag = target["podvm_image_tag"]
+    target_dir = context.artifacts_dir / f"target-{index}"
+
+    print(f"\n{'=' * 60}")
+    print(f"Target {index}: {model}")
+    print(f"{'=' * 60}")
+
+    baselines = context.get_baselines(machine_type)
+    podvm_ref = f"{context.podvm_image}:{podvm_tag}"
+    podvm = context.get_podvm(podvm_ref, podvm_tag)
+    try:
+        initdata = resolve_initdata(target, manifest_file)
+    except ValueError as error:
+        raise ValueError(f"{model}: {error}") from error
+
+    rtmr3 = compute_initdata_rtmr3(initdata)
+    measured_variants: list[dict] = []
+    for baseline in baselines:
+        output_dir = (
+            target_dir / baseline.firmware_sha384 / baseline.version
+        )
+        platform_measurements = context.get_platform_measurements(
+            target=target,
+            initdata=initdata,
+            podvm_tag=podvm_tag,
+            uki_path=podvm.uki_path,
+            baseline=baseline,
+            output_dir=output_dir,
+        )
+        measurements = {
+            **platform_measurements,
+            "rtmr3": rtmr3,
+        }
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "initdata.toml").write_bytes(initdata)
+        (output_dir / "measurements.json").write_text(
+            json.dumps(measurements, indent=2) + "\n"
+        )
+        measured_variants.append({
+            "version": baseline.version,
+            "firmware_sha384": baseline.firmware_sha384,
+            "baseline_ref": baseline.ref,
+            "baseline_sha256": baseline.sha256,
+            "measurements": measurements,
+        })
+
+    primary_variant = measured_variants[0]
+    target["measurements"] = primary_variant["measurements"]
+    target["baseline_variants"] = measured_variants
+    return {
+        **target,
+        "podvm_image": podvm_ref,
+        "podvm_digest": podvm.digest,
+        "firmware_sha384": primary_variant["firmware_sha384"],
+        "baseline_ref": primary_variant["baseline_ref"],
+        "baseline_sha256": primary_variant["baseline_sha256"],
+        "initdata_hash": target["initdata_sha384"],
+    }
+
+
 def generate_policy(
     manifest_file: Path,
     baselines_repo: str,
@@ -259,130 +477,20 @@ def generate_policy(
     print(f"Loaded {len(targets)} targets from {manifest_file}")
 
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    context = GenerationContext(
+        baselines_repo=baselines_repo,
+        podvm_image=podvm_image,
+        artifacts_dir=artifacts_dir,
+    )
     predicate_targets: list[dict] = []
-    platform_measurements_cache: dict[tuple, dict] = {}
-    baseline_variants_cache: dict[tuple[str, str], list[dict]] = {}
-
-    for i, target in enumerate(targets):
-        model = target["model"]
-        machine_type = target["machine_type"]
-        podvm_tag = target["podvm_image_tag"]
-        target_dir = artifacts_dir / f"target-{i}"
-
-        print(f"\n{'=' * 60}")
-        print(f"Target {i}: {model}")
-        print(f"{'=' * 60}")
-
-        baseline_cache_key = (baselines_repo, machine_type)
-        baseline_variants = baseline_variants_cache.get(baseline_cache_key)
-        if baseline_variants is None:
-            baseline_variants = fetch_baseline_variants(
-                baselines_repo,
-                machine_type,
-            )
-            baseline_variants_cache[baseline_cache_key] = baseline_variants
-        else:
-            print(f"  Reusing baseline variants for {machine_type}")
-
-        podvm_ref = f"{podvm_image}:{podvm_tag}"
-        uki_dest = artifacts_dir / "uki" / podvm_tag
-        print(f"  UKI: {podvm_tag}")
-        fetch_uki(podvm_ref, uki_dest)
-
+    for index, target in enumerate(targets):
         try:
-            initdata = resolve_initdata(target, manifest_file)
+            predicate_targets.append(
+                process_target(index, target, manifest_file, context)
+            )
         except ValueError as error:
-            print(f"ERROR: {model}: {error}", file=sys.stderr)
+            print(f"ERROR: {error}", file=sys.stderr)
             sys.exit(1)
-
-        measured_variants: list[dict] = []
-        for baseline_variant in baseline_variants:
-            version = baseline_variant["version"]
-            fw_sha384 = baseline_variant["firmware_sha384"]
-            baseline_path = (
-                artifacts_dir
-                / "baselines"
-                / machine_type
-                / fw_sha384
-                / f"{version}.json"
-            )
-            baseline_path.parent.mkdir(parents=True, exist_ok=True)
-            baseline_path.write_text(
-                json.dumps(baseline_variant["baseline"], indent=2) + "\n"
-            )
-            baseline_sha256 = hashlib.sha256(
-                baseline_path.read_bytes()
-            ).hexdigest()
-
-            firmware_path = artifacts_dir / "firmware" / f"{fw_sha384}.fd"
-            fetch_firmware(fw_sha384, firmware_path)
-
-            variant_output_dir = target_dir / fw_sha384 / version
-            cache_key = (
-                machine_type,
-                target["ram_gib"],
-                podvm_tag,
-                fw_sha384,
-                baseline_sha256,
-            )
-            platform_measurements = platform_measurements_cache.get(cache_key)
-            if platform_measurements is None:
-                print(
-                    f"  Computing platform measurements for "
-                    f"{fw_sha384[:12]}/{version}..."
-                )
-                computed = compute_measurements(
-                    ram_gib=target["ram_gib"],
-                    initdata=initdata,
-                    firmware_path=firmware_path,
-                    baseline_path=baseline_path,
-                    uki_path=uki_dest / "BOOTX64.EFI",
-                    disk_path=uki_dest / "disk.tar.gz",
-                    output_dir=variant_output_dir,
-                )
-                platform_measurements = {
-                    field: value
-                    for field, value in computed.items()
-                    if field != "rtmr3"
-                }
-                platform_measurements_cache[cache_key] = platform_measurements
-            else:
-                print(
-                    f"  Reusing platform measurements for "
-                    f"{fw_sha384[:12]}/{version}"
-                )
-
-            measurements = {
-                **platform_measurements,
-                "rtmr3": compute_initdata_rtmr3(initdata),
-            }
-            variant_output_dir.mkdir(parents=True, exist_ok=True)
-            (variant_output_dir / "initdata.toml").write_bytes(initdata)
-            (variant_output_dir / "measurements.json").write_text(
-                json.dumps(measurements, indent=2) + "\n"
-            )
-            measured_variants.append({
-                "version": version,
-                "firmware_sha384": fw_sha384,
-                "baseline_ref": baseline_variant["baseline_ref"],
-                "baseline_sha256": baseline_sha256,
-                "measurements": measurements,
-            })
-
-        primary_variant = measured_variants[0]
-        target["measurements"] = primary_variant["measurements"]
-        target["baseline_variants"] = measured_variants
-        initdata_hash = hashlib.sha384(initdata).hexdigest()
-
-        predicate_targets.append({
-            **target,
-            "podvm_image": podvm_ref,
-            "podvm_digest": fetch_oci_digest(podvm_ref),
-            "firmware_sha384": primary_variant["firmware_sha384"],
-            "baseline_ref": primary_variant["baseline_ref"],
-            "baseline_sha256": primary_variant["baseline_sha256"],
-            "initdata_hash": initdata_hash,
-        })
 
     print(f"\n{'=' * 60}")
     print("Generating ITA policy")

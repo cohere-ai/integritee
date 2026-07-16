@@ -352,9 +352,25 @@ def test_generate_policy_measures_and_records_each_baseline(
     monkeypatch.setattr(
         generate, "fetch_baseline_variants", fake_baseline_variants
     )
-    monkeypatch.setattr(generate, "fetch_firmware", lambda *args: None)
-    monkeypatch.setattr(generate, "fetch_uki", lambda *args: None)
-    monkeypatch.setattr(generate, "fetch_oci_digest", lambda ref: "sha256:123")
+    firmware_calls = []
+    monkeypatch.setattr(
+        generate,
+        "fetch_firmware",
+        lambda *args: firmware_calls.append(args),
+    )
+    uki_calls = []
+    monkeypatch.setattr(
+        generate,
+        "fetch_uki",
+        lambda *args: uki_calls.append(args),
+    )
+    digest_calls = []
+
+    def fake_oci_digest(ref):
+        digest_calls.append(ref)
+        return "sha256:123"
+
+    monkeypatch.setattr(generate, "fetch_oci_digest", fake_oci_digest)
     monkeypatch.setattr(
         generate,
         "resolve_nvidia_driver_version",
@@ -362,6 +378,20 @@ def test_generate_policy_measures_and_records_each_baseline(
     )
 
     measurement_calls = []
+    rtmr3_calls = []
+    monkeypatch.setattr(
+        generate,
+        "compute_initdata_rtmr3",
+        lambda initdata: rtmr3_calls.append(initdata) or "6" * 96,
+    )
+    baseline_hash_calls = []
+    real_sha256 = hashlib.sha256
+
+    def tracked_sha256(data):
+        baseline_hash_calls.append(data)
+        return real_sha256(data)
+
+    monkeypatch.setattr(generate.hashlib, "sha256", tracked_sha256)
 
     def fake_measurements(*, baseline_path, output_dir, **kwargs):
         output_dir.mkdir(parents=True)
@@ -423,6 +453,11 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert baseline_calls == [
         ("owner/baselines", "a3-highgpu-1g"),
     ]
+    assert len(baseline_hash_calls) == 2
+    assert len(firmware_calls) == 1
+    assert len(uki_calls) == 1
+    assert digest_calls == ["ghcr.io/owner/podvm:image-tag"]
+    assert rtmr3_calls == [initdata, second_initdata]
     assert measurement_calls == ["v1", "v2"]
     policy_text = policy.read_text()
     assert policy_text.count("matches_tdx if {") == 1
