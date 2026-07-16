@@ -47,7 +47,6 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
       VERSION: ${{ inputs.version || '' }}
       ITA_SLOT: ${{ inputs.ita_slot || 'slot-a' }}
       REASON: ${{ inputs.reason || '' }}
@@ -129,14 +128,14 @@ jobs:
           --override "$ITA_SLOT_OVERRIDE" >> "$GITHUB_OUTPUT"
 
       - name: Verify manifest targets use selected ITA slot
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         uses: ./.github/actions/validate-manifest
         with:
           manifest-file: attestation-policy/policy-manifest.yaml
           policy-id: ${{ steps.slot.outputs.policy_id }}
 
       - name: Upload policy to ITA
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         id: upload
         uses: ./.github/actions/upload-ita-policy
         with:
@@ -148,7 +147,7 @@ jobs:
           predicate-file: predicate.json
 
       - name: Fetch uploaded policy from ITA
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         id: fetch
         uses: ./.github/actions/fetch-ita-policy
         with:
@@ -157,14 +156,14 @@ jobs:
           ita-api-url: ${{ secrets.ITA_API_URL }}
 
       - name: Verify uploaded policy
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         run: diff attestation-policy.rego "${{ steps.fetch.outputs.policy-file }}"
 
       # ----------------------------------------------------------------
       # Attest policy with Sigstore
       # ----------------------------------------------------------------
       - name: Attest policy with Sigstore
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         id: attest
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
         with:
@@ -187,7 +186,7 @@ jobs:
       # Create GitHub Release
       # ----------------------------------------------------------------
       - name: Prepare release assets
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
           POLICY_ID: ${{ steps.slot.outputs.policy_id }}
@@ -205,7 +204,7 @@ jobs:
           --reason "$REASON"
 
       - name: Create release
-        if: ${{ env.DRY_RUN == 'false' }}
+        if: github.event_name == 'push' || inputs.dry_run == false
         env:
           GH_TOKEN: ${{ github.token }}
         run: >-

@@ -24,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RETIRE_SOURCES: ${{ inputs.retire_sources }}
-      DRY_RUN: ${{ inputs.dry_run }}
+      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3

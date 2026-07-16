@@ -175,6 +175,25 @@ def test_release_manifest_downloads_into_directory(tmp_path, monkeypatch):
     assert "--output" not in download_call
 
 
+def test_workflows_use_explicit_dry_run_gates():
+    add_workflow = (
+        REPO_ROOT / ".github/workflows/add-from-blobheart.yaml"
+    ).read_text()
+    prune_workflow = (
+        REPO_ROOT / ".github/workflows/prune-from-blobheart.yaml"
+    ).read_text()
+    release_workflow = (
+        REPO_ROOT / ".github/workflows/release-policy.yaml"
+    ).read_text()
+
+    assert "&& 'true' || 'false'" in add_workflow
+    assert "inputs.dry_run && 'true' || 'false'" in prune_workflow
+    assert "DRY_RUN:" not in release_workflow
+    assert release_workflow.count(
+        "if: github.event_name == 'push' || inputs.dry_run == false"
+    ) == 7
+
+
 @pytest.mark.parametrize(
     ("relative_path", "request_method"),
     [
