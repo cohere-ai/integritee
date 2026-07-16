@@ -104,8 +104,9 @@ gateway can require it at attestation time.
   CVM_MEASURE_REF: "alhassankhedr/cc-167-tdx-measurement-toolkit"
   ```
 - **`cohere-ai/cohere-cc-baselines`** — TDX CCEL event-log baselines per
-  GCP machine type, e.g. `baselines/gcp/tdx/a3-highgpu-1g.json`. Read via
-  GitHub API using `GH_PAT` (must be SAML-authorized for `cohere-ai`).
+  GCP machine type. Defaults in `baselines/gcp/tdx/defaults.json` resolve
+  to immutable files under `baselines/gcp/tdx/versions/`. Read via GitHub
+  API using `GH_PAT` (must be SAML-authorized for `cohere-ai`).
 - **`cohere-ai/cloud-api-adaptor` (`cohere` branch)** — builds the PodVM
   OCI artifact (`podvm:cohere-latest-ubuntu-{release,debug}`) and (today)
   also creates a GCP Compute Engine image in `cohere-artifacts`. This

@@ -70,10 +70,14 @@ def test_fetches_all_firmware_and_event_versions(monkeypatch):
     machine = "a3-highgpu-1g"
     firmware_a = "a" * 96
     firmware_f = "f" * 96
-    canonical = {"firmware_sha384": firmware_a, "events": []}
     responses = {
-        f"/repos/{repo}/contents/baselines/gcp/tdx/{machine}.json":
-            _contents(canonical),
+        f"/repos/{repo}/contents/baselines/gcp/tdx/defaults.json":
+            _contents({
+                machine: {
+                    "firmware_sha384": firmware_a,
+                    "version": "v2",
+                },
+            }),
         f"/repos/{repo}/contents/baselines/gcp/tdx/versions": [
             {"type": "dir", "name": firmware_f},
             {"type": "dir", "name": firmware_a},
@@ -96,6 +100,7 @@ def test_fetches_all_firmware_and_event_versions(monkeypatch):
             f"{firmware}/{version}/{machine}.json"
         )
         responses[path] = _contents({
+            "machine_type": machine,
             "firmware_sha384": firmware,
             "events": [{"rtmr": 0, "label": version}],
         })
@@ -117,20 +122,20 @@ def test_fetches_all_firmware_and_event_versions(monkeypatch):
         (variant["firmware_sha384"], variant["version"])
         for variant in variants
     ] == [
-        (firmware_a, "v1"),
         (firmware_a, "v2"),
+        (firmware_a, "v1"),
         (firmware_f, "v1"),
     ]
     assert all("/versions/" in variant["baseline_ref"] for variant in variants)
 
 
-def test_falls_back_to_canonical_when_versions_are_absent(monkeypatch):
+def test_falls_back_to_legacy_canonical_when_defaults_are_absent(monkeypatch):
     repo = "cohere-ai/cohere-cc-baselines"
     machine = "a3-highgpu-1g"
     firmware = "a" * 96
 
     def fake_run(cmd, **kwargs):
-        if cmd[2].endswith("/versions"):
+        if cmd[2].endswith(("/defaults.json", "/versions")):
             return subprocess.CompletedProcess(
                 cmd,
                 1,

@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 
 BASELINE_ROOT = "baselines/gcp/tdx"
+BASELINE_DEFAULTS = f"{BASELINE_ROOT}/defaults.json"
 FIRMWARE_RE = re.compile(r"^[0-9a-f]{96}$")
 MACHINE_TYPE_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -51,19 +52,58 @@ def _decode_baseline_content(content: str, path: str) -> dict:
         raise ValueError(f"invalid baseline content for {path}") from exc
 
 
-def fetch_baseline(repo: str, machine_type: str) -> dict:
-    """Fetch the canonical TDX baseline JSON and return it."""
+def _resolve_default_baseline(
+    repo: str,
+    machine_type: str,
+) -> tuple[dict, str, str]:
+    """Resolve a machine's default to an immutable baseline version."""
     if not REPO_RE.fullmatch(repo):
         raise ValueError(f"invalid GitHub repository: {repo}")
     if not MACHINE_TYPE_RE.fullmatch(machine_type):
         raise ValueError(f"invalid machine type: {machine_type}")
-    return _fetch_baseline_path(repo, f"{BASELINE_ROOT}/{machine_type}.json")
+
+    response = _gh_api(
+        f"/repos/{repo}/contents/{BASELINE_DEFAULTS}",
+        allow_not_found=True,
+    )
+    if response is None:
+        legacy_path = f"{BASELINE_ROOT}/{machine_type}.json"
+        return _fetch_baseline_path(repo, legacy_path), legacy_path, "current"
+    if not isinstance(response, dict) or not isinstance(response.get("content"), str):
+        raise ValueError(f"invalid GitHub contents response for {BASELINE_DEFAULTS}")
+
+    defaults = _decode_baseline_content(response["content"], BASELINE_DEFAULTS)
+    default = defaults.get(machine_type)
+    if not isinstance(default, dict):
+        raise ValueError(f"no default baseline for machine type {machine_type}")
+    firmware = default.get("firmware_sha384")
+    version = default.get("version")
+    if not isinstance(firmware, str) or not FIRMWARE_RE.fullmatch(firmware):
+        raise ValueError(f"invalid default firmware for machine type {machine_type}")
+    if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
+        raise ValueError(f"invalid default version for machine type {machine_type}")
+
+    path = f"{BASELINE_ROOT}/versions/{firmware}/{version}/{machine_type}.json"
+    baseline = _fetch_baseline_path(repo, path)
+    if baseline.get("machine_type") != machine_type:
+        raise ValueError(f"baseline machine type does not match default for {path}")
+    if baseline.get("firmware_sha384") != firmware:
+        raise ValueError(f"baseline firmware does not match default for {path}")
+    return baseline, path, version
+
+
+def fetch_baseline(repo: str, machine_type: str) -> dict:
+    """Fetch the resolved default TDX baseline JSON."""
+    baseline, _, _ = _resolve_default_baseline(repo, machine_type)
+    return baseline
 
 
 def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
-    """Fetch every versioned baseline, falling back to the canonical baseline."""
-    canonical_path = f"{BASELINE_ROOT}/{machine_type}.json"
-    canonical = fetch_baseline(repo, machine_type)
+    """Fetch every versioned baseline with the configured default first."""
+    default, default_path, default_version = _resolve_default_baseline(
+        repo,
+        machine_type,
+    )
     versions_path = f"{BASELINE_ROOT}/versions"
     firmware_entries = _gh_api(
         f"/repos/{repo}/contents/{versions_path}",
@@ -71,10 +111,10 @@ def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
     )
     if firmware_entries is None:
         return [{
-            "version": "current",
-            "firmware_sha384": canonical["firmware_sha384"],
-            "baseline": canonical,
-            "baseline_ref": f"{repo}/{canonical_path}",
+            "version": default_version,
+            "firmware_sha384": default["firmware_sha384"],
+            "baseline": default,
+            "baseline_ref": f"{repo}/{default_path}",
         }]
     if not isinstance(firmware_entries, list):
         raise ValueError(f"{versions_path} is not a directory")
@@ -132,14 +172,21 @@ def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
             })
 
     if variants:
+        default_ref = f"{repo}/{default_path}"
+        if not any(variant["baseline_ref"] == default_ref for variant in variants):
+            raise ValueError(
+                f"default baseline was not discovered under {versions_path}: "
+                f"{default_path}"
+            )
+        variants.sort(key=lambda variant: variant["baseline_ref"] != default_ref)
         print(f"  Found {len(variants)} versioned baseline(s)")
         return variants
 
     return [{
-        "version": "current",
-        "firmware_sha384": canonical["firmware_sha384"],
-        "baseline": canonical,
-        "baseline_ref": f"{repo}/{canonical_path}",
+        "version": default_version,
+        "firmware_sha384": default["firmware_sha384"],
+        "baseline": default,
+        "baseline_ref": f"{repo}/{default_path}",
     }]
 
 
