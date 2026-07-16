@@ -67,6 +67,22 @@ def _contents(value: dict) -> dict:
     return {"content": wrapped}
 
 
+def test_github_api_errors_include_response_details(monkeypatch):
+    monkeypatch.setattr(
+        fetch.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            1,
+            stdout="",
+            stderr="gh: API rate limit exceeded (HTTP 403)",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="API rate limit exceeded"):
+        fetch._gh_api("/repos/owner/repo/contents/file")
+
+
 def test_fetches_all_firmware_and_event_versions(monkeypatch):
     repo = "cohere-ai/cohere-cc-baselines"
     machine = "a3-highgpu-1g"
@@ -327,14 +343,34 @@ def test_generate_policy_measures_and_records_each_baseline(
         }
         for version in ("v1", "v2")
     ]
+    baseline_calls = []
+
+    def fake_baseline_variants(repo, machine):
+        baseline_calls.append((repo, machine))
+        return variants
+
+    monkeypatch.setattr(
+        generate, "fetch_baseline_variants", fake_baseline_variants
+    )
+    firmware_calls = []
     monkeypatch.setattr(
         generate,
-        "fetch_baseline_variants",
-        lambda repo, machine: variants,
+        "fetch_firmware",
+        lambda *args: firmware_calls.append(args),
     )
-    monkeypatch.setattr(generate, "fetch_firmware", lambda *args: None)
-    monkeypatch.setattr(generate, "fetch_uki", lambda *args: None)
-    monkeypatch.setattr(generate, "fetch_oci_digest", lambda ref: "sha256:123")
+    uki_calls = []
+    monkeypatch.setattr(
+        generate,
+        "fetch_uki",
+        lambda *args: uki_calls.append(args),
+    )
+    digest_calls = []
+
+    def fake_oci_digest(ref):
+        digest_calls.append(ref)
+        return "sha256:123"
+
+    monkeypatch.setattr(generate, "fetch_oci_digest", fake_oci_digest)
     monkeypatch.setattr(
         generate,
         "resolve_nvidia_driver_version",
@@ -342,6 +378,20 @@ def test_generate_policy_measures_and_records_each_baseline(
     )
 
     measurement_calls = []
+    rtmr3_calls = []
+    monkeypatch.setattr(
+        generate,
+        "compute_initdata_rtmr3",
+        lambda initdata: rtmr3_calls.append(initdata) or "6" * 96,
+    )
+    baseline_hash_calls = []
+    real_sha256 = hashlib.sha256
+
+    def tracked_sha256(data):
+        baseline_hash_calls.append(data)
+        return real_sha256(data)
+
+    monkeypatch.setattr(generate.hashlib, "sha256", tracked_sha256)
 
     def fake_measurements(*, baseline_path, output_dir, **kwargs):
         output_dir.mkdir(parents=True)
@@ -352,7 +402,7 @@ def test_generate_policy_measures_and_records_each_baseline(
             "mrtd": "1" * 96,
             "rtmr0": ("2" if version == "v1" else "3") * 96,
             "rtmr1": "4" * 96,
-                "rtmr2": "5" * 96,
+            "rtmr2": "5" * 96,
         }
 
     monkeypatch.setattr(generate, "compute_measurements", fake_measurements)
@@ -400,6 +450,14 @@ def test_generate_policy_measures_and_records_each_baseline(
         "v1",
         "v2",
     ]
+    assert baseline_calls == [
+        ("owner/baselines", "a3-highgpu-1g"),
+    ]
+    assert len(baseline_hash_calls) == 2
+    assert len(firmware_calls) == 1
+    assert len(uki_calls) == 1
+    assert digest_calls == ["ghcr.io/owner/podvm:image-tag"]
+    assert rtmr3_calls == [initdata, second_initdata]
     assert measurement_calls == ["v1", "v2"]
     policy_text = policy.read_text()
     assert policy_text.count("matches_tdx if {") == 1

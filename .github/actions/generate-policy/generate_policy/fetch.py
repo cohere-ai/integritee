@@ -30,7 +30,8 @@ def _gh_api(api_path: str, *, allow_not_found: bool = False) -> object | None:
     if result.returncode != 0:
         if allow_not_found and "HTTP 404" in result.stderr:
             return None
-        result.check_returncode()
+        detail = result.stderr.strip() or result.stdout.strip()
+        raise RuntimeError(f"gh api {api_path}: {detail}")
     return json.loads(result.stdout)
 
 
