@@ -164,6 +164,7 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
         "mrtd": "a" * 96,
         "rtmr0": "b" * 96,
         "rtmr1": "c" * 96,
+        "rtmr3": "e" * 96,
     }
     measurements_v2 = {
         **measurements_v1,
@@ -200,10 +201,13 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     )
 
     policy = output.read_text()
-    assert policy.count("matches_tdx if {") == 2
-    assert "# Model: cmp-l (Baseline: 111111111111/v1)" in policy
-    assert "# Model: cmp-l (Baseline: 111111111111/v2)" in policy
-    assert "# Model: cmp-l (Baseline: 111111111111/v3)" not in policy
+    assert policy.count("matches_tdx if {") == 1
+    assert policy.count("matches_tdx_platform if {") == 2
+    assert policy.count("matches_tdx_workload if {") == 1
+    assert "# Platform baseline: 111111111111/v1" in policy
+    assert "# Platform baseline: 111111111111/v2" in policy
+    assert "# Platform baseline: 111111111111/v3" not in policy
+    assert "# Model: cmp-l (Initdata: unknown)" in policy
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -297,6 +301,8 @@ def test_generate_policy_measures_and_records_each_baseline(
     ]
     assert measurement_calls == ["v1", "v2"]
     policy_text = policy.read_text()
-    assert policy_text.count("matches_tdx if {") == 4
-    assert policy_text.count("# Model: cmp-l (Baseline:") == 2
-    assert policy_text.count("# Model: cmp-l-old (Baseline:") == 2
+    assert policy_text.count("matches_tdx if {") == 1
+    assert policy_text.count("matches_tdx_platform if {") == 2
+    assert policy_text.count("matches_tdx_workload if {") == 2
+    assert "# Model: cmp-l (Initdata:" in policy_text
+    assert "# Model: cmp-l-old (Initdata:" in policy_text

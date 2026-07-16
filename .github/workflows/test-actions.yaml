@@ -61,7 +61,9 @@ jobs:
               "match if {",
               "tdx_base_checks if {",
               "matches_tdx if {",
-              "# Model: cmp-l (Baseline:",
+              "matches_tdx_platform if {",
+              "matches_tdx_workload if {",
+              "# Model: cmp-l (Initdata:",
               "nvgpu_base_checks if {",
               "matches_nvgpu if {",
           ]

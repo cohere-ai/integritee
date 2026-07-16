@@ -26,11 +26,13 @@ from .measure import (
     resolve_initdata,
 )
 
-PLACEHOLDER = "${TDX_MATCH_BLOCKS}"
+PLATFORM_PLACEHOLDER = "${TDX_PLATFORM_MATCH_BLOCKS}"
+WORKLOAD_PLACEHOLDER = "${TDX_WORKLOAD_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 
 DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
+PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
 
 
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
@@ -74,24 +76,35 @@ def generate_nonce_rule() -> str:
     return f'integritee_nonce := "{nonce}"'
 
 
-def generate_matches_tdx_block(
-    model: str,
+def generate_platform_match_block(
     baseline_label: str,
     measurements: dict,
 ) -> str:
     lines = [
-        f"# Model: {model} (Baseline: {baseline_label})",
-        "matches_tdx if {",
-        "    tdx_base_checks",
+        f"# Platform baseline: {baseline_label}",
+        "matches_tdx_platform if {",
         "    tdx := input.tdx",
         "",
     ]
-    for field in DYNAMIC_FIELDS:
+    for field in PLATFORM_FIELDS:
         value = measurements.get(field)
         if value is not None:
             lines.append(f'    tdx.tdx_{field} == "{value}"')
     lines.append("}")
     return "\n".join(lines)
+
+
+def generate_workload_match_block(
+    model: str,
+    initdata_label: str,
+    rtmr3: str,
+) -> str:
+    return "\n".join([
+        f"# Model: {model} (Initdata: {initdata_label})",
+        "matches_tdx_workload if {",
+        f'    input.tdx.tdx_rtmr3 == "{rtmr3}"',
+        "}",
+    ])
 
 
 def render_policy(
@@ -102,16 +115,22 @@ def render_policy(
 ) -> None:
     """Render the Rego policy file from targets with pre-computed measurements."""
     template = template_path.read_text()
-    if PLACEHOLDER not in template:
-        print(f"ERROR: Template does not contain {PLACEHOLDER}", file=sys.stderr)
-        sys.exit(1)
+    for placeholder in (PLATFORM_PLACEHOLDER, WORKLOAD_PLACEHOLDER):
+        if placeholder not in template:
+            print(
+                f"ERROR: Template does not contain {placeholder}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
-    blocks: list[str] = []
-    seen_by_model: dict[str, set[tuple]] = {}
+    platform_blocks: list[str] = []
+    workload_blocks: list[str] = []
+    seen_platforms: set[tuple] = set()
+    seen_workloads: set[tuple] = set()
     variant_count = 0
     for target in targets:
         model = target["model"]
-        seen_measurements = seen_by_model.setdefault(model, set())
+        initdata_label = target.get("initdata_sha384", "unknown")[:12]
         baseline_variants = target.get("baseline_variants") or [
             {
                 "version": None,
@@ -125,22 +144,37 @@ def render_policy(
                 firmware = baseline_variant["firmware_sha384"]
                 baseline_label = f"{firmware[:12]}/{baseline_variant['version']}"
             variant = baseline_variant["measurements"]
-            measurement_key = tuple(
-                variant.get(field) for field in DYNAMIC_FIELDS
+            platform_key = tuple(
+                variant.get(field) for field in PLATFORM_FIELDS
             )
-            if measurement_key in seen_measurements:
-                continue
-            seen_measurements.add(measurement_key)
-            blocks.append(
-                generate_matches_tdx_block(model, baseline_label, variant)
-            )
+            if platform_key not in seen_platforms:
+                seen_platforms.add(platform_key)
+                platform_blocks.append(
+                    generate_platform_match_block(baseline_label, variant)
+                )
+
+            workload_key = (model, variant.get("rtmr3"))
+            if workload_key not in seen_workloads:
+                seen_workloads.add(workload_key)
+                workload_blocks.append(generate_workload_match_block(
+                    model,
+                    initdata_label,
+                    variant["rtmr3"],
+                ))
             variant_count += 1
 
     if not variant_count:
         print("ERROR: No targets to generate policy from", file=sys.stderr)
         sys.exit(1)
 
-    policy = template.replace(PLACEHOLDER, "\n\n".join(blocks))
+    policy = template.replace(
+        PLATFORM_PLACEHOLDER,
+        "\n\n".join(platform_blocks),
+    )
+    policy = policy.replace(
+        WORKLOAD_PLACEHOLDER,
+        "\n\n".join(workload_blocks),
+    )
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
     policy = policy.replace(DRIVER_VERSION_PLACEHOLDER, nv_driver_version)
 

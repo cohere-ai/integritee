@@ -1,7 +1,7 @@
 # ITA TDX+NVGPU appraisal policy.
 #
-# Each matches_tdx block checks a specific baseline measurement combination.
-# The policy matches if ANY block matches.
+# Platform baselines and model initdata measurements are listed separately.
+# The policy accepts any approved platform/workload combination.
 
 import rego.v1
 
@@ -49,7 +49,15 @@ tdx_base_checks if {
     tdx.tdx_seamsvn >= 271
 }
 
-${TDX_MATCH_BLOCKS}
+${TDX_PLATFORM_MATCH_BLOCKS}
+
+${TDX_WORKLOAD_MATCH_BLOCKS}
+
+matches_tdx if {
+    tdx_base_checks
+    matches_tdx_platform
+    matches_tdx_workload
+}
 
 # NRAS V3 token format: GPU claims are nested under input.nvgpu.claim_details
 # with per-device keys (e.g. "GPU-0"). The top-level x-nvidia-overall-att-result
