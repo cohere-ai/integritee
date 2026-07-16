@@ -67,6 +67,22 @@ def _contents(value: dict) -> dict:
     return {"content": wrapped}
 
 
+def test_github_api_errors_include_response_details(monkeypatch):
+    monkeypatch.setattr(
+        fetch.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args[0],
+            1,
+            stdout="",
+            stderr="gh: API rate limit exceeded (HTTP 403)",
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="API rate limit exceeded"):
+        fetch._gh_api("/repos/owner/repo/contents/file")
+
+
 def test_fetches_all_firmware_and_event_versions(monkeypatch):
     repo = "cohere-ai/cohere-cc-baselines"
     machine = "a3-highgpu-1g"
@@ -327,10 +343,14 @@ def test_generate_policy_measures_and_records_each_baseline(
         }
         for version in ("v1", "v2")
     ]
+    baseline_calls = []
+
+    def fake_baseline_variants(repo, machine):
+        baseline_calls.append((repo, machine))
+        return variants
+
     monkeypatch.setattr(
-        generate,
-        "fetch_baseline_variants",
-        lambda repo, machine: variants,
+        generate, "fetch_baseline_variants", fake_baseline_variants
     )
     monkeypatch.setattr(generate, "fetch_firmware", lambda *args: None)
     monkeypatch.setattr(generate, "fetch_uki", lambda *args: None)
@@ -352,7 +372,7 @@ def test_generate_policy_measures_and_records_each_baseline(
             "mrtd": "1" * 96,
             "rtmr0": ("2" if version == "v1" else "3") * 96,
             "rtmr1": "4" * 96,
-                "rtmr2": "5" * 96,
+            "rtmr2": "5" * 96,
         }
 
     monkeypatch.setattr(generate, "compute_measurements", fake_measurements)
@@ -399,6 +419,9 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert [item["version"] for item in target["baseline_variants"]] == [
         "v1",
         "v2",
+    ]
+    assert baseline_calls == [
+        ("owner/baselines", "a3-highgpu-1g"),
     ]
     assert measurement_calls == ["v1", "v2"]
     policy_text = policy.read_text()

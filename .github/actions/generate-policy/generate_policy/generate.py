@@ -261,6 +261,7 @@ def generate_policy(
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     predicate_targets: list[dict] = []
     platform_measurements_cache: dict[tuple, dict] = {}
+    baseline_variants_cache: dict[tuple[str, str], list[dict]] = {}
 
     for i, target in enumerate(targets):
         model = target["model"]
@@ -272,10 +273,16 @@ def generate_policy(
         print(f"Target {i}: {model}")
         print(f"{'=' * 60}")
 
-        baseline_variants = fetch_baseline_variants(
-            baselines_repo,
-            machine_type,
-        )
+        baseline_cache_key = (baselines_repo, machine_type)
+        baseline_variants = baseline_variants_cache.get(baseline_cache_key)
+        if baseline_variants is None:
+            baseline_variants = fetch_baseline_variants(
+                baselines_repo,
+                machine_type,
+            )
+            baseline_variants_cache[baseline_cache_key] = baseline_variants
+        else:
+            print(f"  Reusing baseline variants for {machine_type}")
 
         podvm_ref = f"{podvm_image}:{podvm_tag}"
         uki_dest = artifacts_dir / "uki" / podvm_tag
