@@ -69,6 +69,12 @@ def main() -> None:
             target["sources"] = new_sources
             remaining_targets.append(target)
 
+    if not remaining_targets:
+        raise SystemExit(
+            "refusing to write an empty policy manifest: "
+            "at least one target must remain"
+        )
+
     doc["targets"] = remaining_targets
     with open(manifest_path, "w") as f:
         yaml.dump(doc, f, default_flow_style=False, sort_keys=False)

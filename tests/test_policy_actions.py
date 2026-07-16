@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import argparse
+import hashlib
 import importlib.util
 import sys
 import types
@@ -137,6 +139,75 @@ def test_derive_propagates_source_read_failures(tmp_path, monkeypatch):
     assert not output.exists()
 
 
+def test_prune_refuses_to_write_empty_manifest(tmp_path, monkeypatch):
+    prune = load_action(
+        "prune_manifest",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    manifest = tmp_path / "policy-manifest.yaml"
+    original = (
+        "targets:\n"
+        "  - model: cmp-l\n"
+        "    sources:\n"
+        "      - abc123\n"
+    )
+    manifest.write_text(original)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "prune.py",
+            "--manifest",
+            str(manifest),
+            "--retire",
+            "abc123",
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="at least one target must remain"):
+        prune.main()
+
+    assert manifest.read_text() == original
+
+
+@pytest.mark.parametrize("status", ["ahead", "identical"])
+def test_blobheart_ref_validation_accepts_main_ancestors(status, monkeypatch):
+    manage = load_action(
+        f"add_from_blobheart_{status}",
+        ".github/workflows/add-from-blobheart/manage.py",
+    )
+    run = Mock(return_value=Mock(stdout=f"{status}\n"))
+    monkeypatch.setattr(manage, "run", run)
+    ref = "a" * 40
+
+    manage.validate(
+        argparse.Namespace(blobheart_refs=ref, dry_run="false")
+    )
+
+    assert f"{ref}...main" in run.call_args.args[2]
+    assert run.call_args.kwargs["timeout"] == 30
+
+
+def test_blobheart_ref_validation_rejects_feature_commit(monkeypatch):
+    manage = load_action(
+        "add_from_blobheart_diverged",
+        ".github/workflows/add-from-blobheart/manage.py",
+    )
+    monkeypatch.setattr(
+        manage,
+        "run",
+        Mock(return_value=Mock(stdout="diverged\n")),
+    )
+
+    with pytest.raises(SystemExit, match="is not an ancestor of main"):
+        manage.validate(
+            argparse.Namespace(
+                blobheart_refs="a" * 40,
+                dry_run="false",
+            )
+        )
+
+
 def test_local_derivation_uses_checkout_commit(monkeypatch, tmp_path):
     derive = load_action(
         "derive_manifest_local_ref",
@@ -175,6 +246,51 @@ def test_release_manifest_downloads_into_directory(tmp_path, monkeypatch):
     assert "--output" not in download_call
 
 
+def test_firmware_cache_is_verified(tmp_path, monkeypatch):
+    fetch = load_action(
+        "generate_policy_fetch_cached_firmware",
+        ".github/actions/generate-policy/generate_policy/fetch.py",
+    )
+    firmware = b"expected firmware"
+    digest = hashlib.sha384(firmware).hexdigest()
+    destination = tmp_path / "firmware.fd"
+    destination.write_bytes(b"wrong firmware")
+    run = Mock()
+    monkeypatch.setattr(fetch.subprocess, "run", run)
+
+    with pytest.raises(ValueError, match="firmware hash mismatch"):
+        fetch.fetch_firmware(digest, destination)
+
+    assert not destination.exists()
+    run.assert_not_called()
+
+
+def test_firmware_download_is_timed_verified_and_atomic(tmp_path, monkeypatch):
+    fetch = load_action(
+        "generate_policy_fetch_downloaded_firmware",
+        ".github/actions/generate-policy/generate_policy/fetch.py",
+    )
+    firmware = b"expected firmware"
+    digest = hashlib.sha384(firmware).hexdigest()
+    destination = tmp_path / "firmware.fd"
+    calls = []
+
+    def fake_run(args, *, check):
+        calls.append((args, check))
+        Path(args[args.index("-o") + 1]).write_bytes(firmware)
+
+    monkeypatch.setattr(fetch.subprocess, "run", fake_run)
+
+    fetch.fetch_firmware(digest, destination)
+
+    assert destination.read_bytes() == firmware
+    args, check = calls[0]
+    assert check is True
+    assert args[args.index("--connect-timeout") + 1] == "10"
+    assert args[args.index("--max-time") + 1] == "120"
+    assert args[args.index("-o") + 1] != str(destination)
+
+
 def test_workflows_use_explicit_dry_run_gates():
     add_workflow = (
         REPO_ROOT / ".github/workflows/add-from-blobheart.yaml"
@@ -192,6 +308,28 @@ def test_workflows_use_explicit_dry_run_gates():
     assert release_workflow.count(
         "if: github.event_name == 'push' || inputs.dry_run == false"
     ) == 7
+
+
+def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):
+    manage = load_action(
+        "release_manage",
+        ".github/workflows/release-policy/manage.py",
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+
+    manage.resolve_version(argparse.Namespace(requested="v1.2.3"))
+
+    assert github_output.read_text() == "version=v1.2.3\n"
+    workflow = (
+        REPO_ROOT / ".github/workflows/release-policy.yaml"
+    ).read_text()
+    assert "id: version" in workflow
+    assert workflow.count("${{ steps.version.outputs.version }}") == 2
+    assert not any(
+        line.strip().startswith("VERSION: ${{ inputs.version")
+        for line in workflow.splitlines()
+    )
 
 
 @pytest.mark.parametrize(

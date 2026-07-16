@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTION_ROOT = REPO_ROOT / ".github" / "actions" / "generate-policy"
 sys.path.insert(0, str(ACTION_ROOT))
@@ -164,11 +166,60 @@ def test_falls_back_to_legacy_canonical_when_defaults_are_absent(monkeypatch):
     }]
 
 
+def test_matches_legacy_canonical_to_identical_version(monkeypatch):
+    repo = "cohere-ai/cohere-cc-baselines"
+    machine = "a3-highgpu-1g"
+    firmware = "a" * 96
+    baseline = {
+        "machine_type": machine,
+        "firmware_sha384": firmware,
+        "events": [{"rtmr": 0, "label": "event"}],
+    }
+    responses = {
+        f"/repos/{repo}/contents/baselines/gcp/tdx/{machine}.json":
+            _contents(baseline),
+        f"/repos/{repo}/contents/baselines/gcp/tdx/versions": [
+            {"type": "dir", "name": firmware},
+        ],
+        f"/repos/{repo}/contents/baselines/gcp/tdx/versions/{firmware}": [
+            {"type": "dir", "name": "v1"},
+        ],
+        (
+            f"/repos/{repo}/contents/baselines/gcp/tdx/versions/"
+            f"{firmware}/v1/{machine}.json"
+        ): _contents(baseline),
+    }
+
+    def fake_run(cmd, **kwargs):
+        if cmd[2].endswith("/defaults.json"):
+            return subprocess.CompletedProcess(
+                cmd,
+                1,
+                stdout="",
+                stderr="gh: Not Found (HTTP 404)",
+            )
+        return subprocess.CompletedProcess(
+            cmd,
+            0,
+            stdout=json.dumps(responses[cmd[2]]),
+            stderr="",
+        )
+
+    monkeypatch.setattr(fetch.subprocess, "run", fake_run)
+
+    variants = fetch.fetch_baseline_variants(repo, machine)
+
+    assert len(variants) == 1
+    assert variants[0]["version"] == "v1"
+    assert variants[0]["baseline"] == baseline
+
+
 def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     measurements_v1 = {
         "mrtd": "a" * 96,
         "rtmr0": "b" * 96,
         "rtmr1": "c" * 96,
+        "rtmr2": "d" * 96,
         "rtmr3": "e" * 96,
     }
     measurements_v2 = {
@@ -230,6 +281,35 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     assert "\ndefault match := true\n" not in policy
 
 
+@pytest.mark.parametrize("missing_field", generate.PLATFORM_FIELDS)
+def test_platform_match_requires_every_measurement(missing_field):
+    measurements = {
+        field: "a" * 96
+        for field in generate.PLATFORM_FIELDS
+    }
+    del measurements[missing_field]
+
+    with pytest.raises(
+        ValueError,
+        match=f"invalid or missing TDX measurement: {missing_field}",
+    ):
+        generate.generate_platform_match_block("baseline", measurements)
+
+
+def test_measurement_values_cannot_inject_rego():
+    injected = 'a' * 96 + '"\n}\ndefault match := true\n#'
+    measurements = {
+        field: "a" * 96
+        for field in generate.PLATFORM_FIELDS
+    }
+    measurements["mrtd"] = injected
+
+    with pytest.raises(ValueError, match="TDX measurement: mrtd"):
+        generate.generate_platform_match_block("baseline", measurements)
+    with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
+        generate.generate_workload_match_block("model", "initdata", injected)
+
+
 def test_generate_policy_measures_and_records_each_baseline(
     tmp_path,
     monkeypatch,
@@ -272,6 +352,7 @@ def test_generate_policy_measures_and_records_each_baseline(
             "mrtd": "1" * 96,
             "rtmr0": ("2" if version == "v1" else "3") * 96,
             "rtmr1": "4" * 96,
+                "rtmr2": "5" * 96,
         }
 
     monkeypatch.setattr(generate, "compute_measurements", fake_measurements)

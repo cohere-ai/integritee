@@ -50,6 +50,8 @@ jobs:
           permission-contents: write
 
       - name: Validate Blobheart refs
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: >-
           python3 .github/workflows/add-from-blobheart/manage.py validate
           --blobheart-refs "$BLOBHEART_REFS"

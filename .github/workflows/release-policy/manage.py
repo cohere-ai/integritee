@@ -65,16 +65,16 @@ def next_version() -> str:
 
 
 def resolve_version(args: argparse.Namespace) -> None:
-    """Validate and export the requested release version."""
+    """Validate and output the requested release version."""
     version = args.requested or next_version()
     if not VERSION_RE.fullmatch(version):
         raise SystemExit(f"invalid release version: {version}")
 
-    github_env = os.environ.get("GITHUB_ENV")
-    if not github_env:
-        raise SystemExit("GITHUB_ENV is required")
-    with Path(github_env).open("a") as output:
-        output.write(f"VERSION={version}\n")
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if not github_output:
+        raise SystemExit("GITHUB_OUTPUT is required")
+    with Path(github_output).open("a") as output:
+        output.write(f"version={version}\n")
     print(f"Release version: {version}")
 
 

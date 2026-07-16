@@ -47,7 +47,6 @@ jobs:
   release:
     runs-on: ubuntu-latest
     env:
-      VERSION: ${{ inputs.version || '' }}
       ITA_SLOT: ${{ inputs.ita_slot || 'slot-a' }}
       REASON: ${{ inputs.reason || '' }}
     steps:
@@ -55,9 +54,10 @@ jobs:
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
       - name: Resolve release version
+        id: version
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUESTED_VERSION: ${{ env.VERSION }}
+          REQUESTED_VERSION: ${{ inputs.version || '' }}
         run: >-
           python3 .github/workflows/release-policy/manage.py resolve-version
           --requested "$REQUESTED_VERSION"
@@ -98,6 +98,8 @@ jobs:
       # Initialize predicate with workflow-level context
       # ----------------------------------------------------------------
       - name: Initialize predicate
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
         run: >-
           python3 .github/workflows/release-policy/manage.py init-predicate
           --version "$VERSION"
@@ -207,6 +209,7 @@ jobs:
         if: github.event_name == 'push' || inputs.dry_run == false
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: >-
           gh release create "$VERSION"
           --title "Attestation Policy $VERSION"

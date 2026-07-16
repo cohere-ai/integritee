@@ -34,6 +34,13 @@ DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 
 DYNAMIC_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3"]
 PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
+MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
+
+
+def validate_measurement(field: str, value: object) -> str:
+    if not isinstance(value, str) or not MEASUREMENT_RE.fullmatch(value):
+        raise ValueError(f"invalid or missing TDX measurement: {field}")
+    return value
 
 
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
@@ -88,6 +95,10 @@ def generate_platform_match_block(
     baseline_label: str,
     measurements: dict,
 ) -> str:
+    values = {
+        field: validate_measurement(field, measurements.get(field))
+        for field in PLATFORM_FIELDS
+    }
     lines = [
         f"# Platform baseline: {baseline_label}",
         "matches_tdx_platform if {",
@@ -95,9 +106,9 @@ def generate_platform_match_block(
         "",
     ]
     for field in PLATFORM_FIELDS:
-        value = measurements.get(field)
-        if value is not None:
-            lines.append(f'    tdx.tdx_{field} == "{value}"')
+        lines.append(
+            f"    tdx.tdx_{field} == {json.dumps(values[field])}"
+        )
     lines.append("}")
     return "\n".join(lines)
 
@@ -107,10 +118,11 @@ def generate_workload_match_block(
     initdata_label: str,
     rtmr3: str,
 ) -> str:
+    rtmr3 = validate_measurement("rtmr3", rtmr3)
     return "\n".join([
         f"# Model: {model} (Initdata: {initdata_label})",
         "matches_tdx_workload if {",
-        f'    input.tdx.tdx_rtmr3 == "{rtmr3}"',
+        f"    input.tdx.tdx_rtmr3 == {json.dumps(rtmr3)}",
         "}",
     ])
 

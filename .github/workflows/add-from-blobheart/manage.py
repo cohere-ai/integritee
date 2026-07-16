@@ -16,12 +16,15 @@ from pathlib import Path
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA384_FILE_RE = re.compile(r"[0-9a-f]{96}\.toml")
+BLOBHEART_REPOSITORY = "cohere-ai/blobheart"
+BLOBHEART_DEFAULT_BRANCH = "main"
 
 
 def run(
     *command: str,
     check: bool = True,
     capture_output: bool = False,
+    timeout: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run a command without invoking a shell."""
     return subprocess.run(
@@ -29,6 +32,7 @@ def run(
         check=check,
         text=True,
         capture_output=capture_output,
+        timeout=timeout,
     )
 
 
@@ -46,6 +50,24 @@ def validate(args: argparse.Namespace) -> None:
     invalid = [ref for ref in refs if not SHA_RE.fullmatch(ref)]
     if invalid:
         raise SystemExit(f"invalid Blobheart commit SHA: {invalid[0]}")
+    for ref in refs:
+        comparison = run(
+            "gh",
+            "api",
+            (
+                f"/repos/{BLOBHEART_REPOSITORY}/compare/"
+                f"{ref}...{BLOBHEART_DEFAULT_BRANCH}"
+            ),
+            "--jq",
+            ".status",
+            capture_output=True,
+            timeout=30,
+        ).stdout.strip()
+        if comparison not in {"ahead", "identical"}:
+            raise SystemExit(
+                f"Blobheart commit {ref} is not an ancestor of "
+                f"{BLOBHEART_DEFAULT_BRANCH}"
+            )
 
 
 def install_initdata(source_dir: Path, destination_dir: Path) -> None:

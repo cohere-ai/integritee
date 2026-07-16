@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import re
 import shutil
@@ -174,10 +175,17 @@ def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
     if variants:
         default_ref = f"{repo}/{default_path}"
         if not any(variant["baseline_ref"] == default_ref for variant in variants):
-            raise ValueError(
-                f"default baseline was not discovered under {versions_path}: "
-                f"{default_path}"
-            )
+            matching_defaults = [
+                variant
+                for variant in variants
+                if variant["baseline"] == default
+            ]
+            if not matching_defaults:
+                raise ValueError(
+                    f"default baseline was not discovered under {versions_path}: "
+                    f"{default_path}"
+                )
+            default_ref = matching_defaults[0]["baseline_ref"]
         variants.sort(key=lambda variant: variant["baseline_ref"] != default_ref)
         print(f"  Found {len(variants)} versioned baseline(s)")
         return variants
@@ -191,12 +199,44 @@ def fetch_baseline_variants(repo: str, machine_type: str) -> list[dict]:
 
 
 def fetch_firmware(fw_sha384: str, dest: Path) -> None:
-    """Download an OVMF firmware blob by its SHA-384. Skips if dest exists."""
+    """Download and verify an OVMF firmware blob by its SHA-384."""
+    if not FIRMWARE_RE.fullmatch(fw_sha384):
+        raise ValueError(f"invalid firmware SHA-384: {fw_sha384}")
+
+    def verify(path: Path) -> None:
+        actual = hashlib.sha384(path.read_bytes()).hexdigest()
+        if actual != fw_sha384:
+            path.unlink(missing_ok=True)
+            raise ValueError(
+                f"firmware hash mismatch: expected {fw_sha384}, got {actual}"
+            )
+
     if dest.exists():
+        verify(dest)
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     url = f"https://storage.googleapis.com/gce_tcb_integrity/ovmf_x64_csm/{fw_sha384}.fd"
-    subprocess.run(["curl", "-fSL", url, "-o", str(dest)], check=True)
+    with tempfile.NamedTemporaryFile(
+        dir=dest.parent,
+        prefix=f".{dest.name}.",
+        delete=False,
+    ) as output:
+        temp_path = Path(output.name)
+    try:
+        subprocess.run(
+            [
+                "curl", "-fSL",
+                "--connect-timeout", "10",
+                "--max-time", "120",
+                url,
+                "-o", str(temp_path),
+            ],
+            check=True,
+        )
+        verify(temp_path)
+        temp_path.replace(dest)
+    finally:
+        temp_path.unlink(missing_ok=True)
     size = dest.stat().st_size / (1024 * 1024)
     print(f"  Firmware: {fw_sha384[:24]}... ({size:.1f}M)")
 
