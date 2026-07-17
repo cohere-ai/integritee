@@ -1,0 +1,45 @@
+name: Release Integritee Actions
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/actions/**"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-integritee-actions
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
+        with:
+          fetch-depth: 0
+
+      - name: Resolve action release version
+        id: version
+        env:
+          GITHUB_SHA: ${{ github.sha }}
+        run: python3 .github/workflows/release-actions/manage.py
+
+      - name: Create action release tag
+        if: steps.version.outputs.create == 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$VERSION" --message "Integritee Actions $VERSION"
+          git push origin "refs/tags/$VERSION"
+
+      - name: Report existing action release
+        if: steps.version.outputs.create != 'true'
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: echo "Commit already released as ${VERSION}"

@@ -333,6 +333,31 @@ def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("tags", "sha_tags", "expected"),
+    [
+        ([], [], ("actions-v1.0.0", True)),
+        (
+            ["actions-v1.0.9", "actions-v1.0.10", "v0.0.1a1"],
+            [],
+            ("actions-v1.0.11", True),
+        ),
+        (
+            ["actions-v1.0.9", "actions-v2.3.4"],
+            ["actions-v2.3.4"],
+            ("actions-v2.3.4", False),
+        ),
+    ],
+)
+def test_resolve_action_release_version(tags, sha_tags, expected):
+    manage = load_action(
+        "release_actions_manage",
+        ".github/workflows/release-actions/manage.py",
+    )
+
+    assert manage.resolve_version(tags, sha_tags) == expected
+
+
+@pytest.mark.parametrize(
     ("relative_path", "request_method"),
     [
         (".github/actions/fetch-ita-policy/fetch.py", "get"),
