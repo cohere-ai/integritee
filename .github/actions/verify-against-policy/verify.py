@@ -13,6 +13,10 @@ import sys
 import time
 from pathlib import Path
 
+RELEASE_WORKFLOW_URL = (
+    "https://github.com/cohere-ai/integritee/actions/workflows/release-policy.yaml"
+)
+
 
 def gh(*args: str, token: str | None = None) -> str:
     env = None
@@ -106,6 +110,27 @@ def fetch_release_manifest(runner_temp: Path, token: str) -> tuple[Path, str]:
     return manifest_path, release_tag
 
 
+def coverage_failure_message(
+    release_tag: str,
+    added: int,
+    added_models: str,
+    *,
+    local_manifest: bool,
+) -> str:
+    """Build an actionable policy coverage failure message."""
+    coverage = (
+        f"{added} target(s) are not covered by {release_tag}: {added_models}"
+    )
+    if local_manifest:
+        return f"ERROR: Local policy verification failed. {coverage}"
+    return (
+        f"ERROR: Latest Integritee policy release is not ready. {coverage}\n"
+        "A policy release may still be running for this Blobheart commit.\n"
+        f"Check {RELEASE_WORKFLOW_URL} and rerun the deployment after "
+        "the Release Policy workflow succeeds."
+    )
+
+
 def main() -> None:
     blobheart_refs = os.environ.get("BLOBHEART_REFS") or None
     blobheart_dir = os.environ.get("BLOBHEART_DIR") or None
@@ -151,13 +176,25 @@ def main() -> None:
             print(f"release-tag={release_tag}")
             sys.exit(0)
 
-        print(f"{added} target(s) not covered by {release_tag}: {added_models}", file=sys.stderr)
         if attempt < max_attempts:
+            print(
+                f"{added} target(s) not covered by "
+                f"{release_tag}: {added_models}",
+                file=sys.stderr,
+            )
             print(f"Retrying in {retry_delay}s...", file=sys.stderr)
             time.sleep(retry_delay)
 
     print(f"release-tag={release_tag}")
-    print(f"ERROR: Verification failed after {max_attempts} attempt(s)", file=sys.stderr)
+    print(
+        coverage_failure_message(
+            release_tag,
+            added,
+            added_models,
+            local_manifest=bool(local_manifest),
+        ),
+        file=sys.stderr,
+    )
     sys.exit(1)
 
 

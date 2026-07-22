@@ -246,6 +246,46 @@ def test_release_manifest_downloads_into_directory(tmp_path, monkeypatch):
     assert "--output" not in download_call
 
 
+def test_policy_coverage_failure_explains_release_race():
+    verify = load_action(
+        "verify_policy_failure_message",
+        ".github/actions/verify-against-policy/verify.py",
+    )
+
+    message = verify.coverage_failure_message(
+        "v1.2.3",
+        2,
+        "cmp-l-cc,e4-l-cc",
+        local_manifest=False,
+    )
+
+    assert "Latest Integritee policy release is not ready" in message
+    assert "2 target(s) are not covered by v1.2.3: cmp-l-cc,e4-l-cc" in message
+    assert "policy release may still be running" in message
+    assert verify.RELEASE_WORKFLOW_URL in message
+    assert "rerun the deployment" in message
+
+
+def test_local_policy_coverage_failure_does_not_suggest_waiting():
+    verify = load_action(
+        "verify_local_policy_failure_message",
+        ".github/actions/verify-against-policy/verify.py",
+    )
+
+    message = verify.coverage_failure_message(
+        "local",
+        1,
+        "cmp-l-cc",
+        local_manifest=True,
+    )
+
+    assert message == (
+        "ERROR: Local policy verification failed. "
+        "1 target(s) are not covered by local: cmp-l-cc"
+    )
+    assert verify.RELEASE_WORKFLOW_URL not in message
+
+
 def test_firmware_cache_is_verified(tmp_path, monkeypatch):
     fetch = load_action(
         "generate_policy_fetch_cached_firmware",
@@ -330,6 +370,31 @@ def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):
         line.strip().startswith("VERSION: ${{ inputs.version")
         for line in workflow.splitlines()
     )
+
+
+@pytest.mark.parametrize(
+    ("tags", "sha_tags", "expected"),
+    [
+        ([], [], ("actions-v1.0.0", True)),
+        (
+            ["actions-v1.0.9", "actions-v1.0.10", "v0.0.1a1"],
+            [],
+            ("actions-v1.0.11", True),
+        ),
+        (
+            ["actions-v1.0.9", "actions-v2.3.4"],
+            ["actions-v2.3.4"],
+            ("actions-v2.3.4", False),
+        ),
+    ],
+)
+def test_resolve_action_release_version(tags, sha_tags, expected):
+    manage = load_action(
+        "release_actions_manage",
+        ".github/workflows/release-actions/manage.py",
+    )
+
+    assert manage.resolve_version(tags, sha_tags) == expected
 
 
 @pytest.mark.parametrize(
