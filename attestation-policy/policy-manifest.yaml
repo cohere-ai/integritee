@@ -80,6 +80,7 @@ targets:
   added: '2026-07-15'
   sources:
   - 0569d74a9c500308f02625d9c903fe8129be5a16
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
 - model: e4-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -89,6 +90,7 @@ targets:
   added: '2026-07-15'
   sources:
   - 0569d74a9c500308f02625d9c903fe8129be5a16
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
 - model: nmc2606-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -98,6 +100,7 @@ targets:
   added: '2026-07-15'
   sources:
   - 0569d74a9c500308f02625d9c903fe8129be5a16
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
 - model: qw3-4b-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -107,6 +110,7 @@ targets:
   added: '2026-07-15'
   sources:
   - 0569d74a9c500308f02625d9c903fe8129be5a16
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
 - model: r4f-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -116,6 +120,7 @@ targets:
   added: '2026-07-15'
   sources:
   - 0569d74a9c500308f02625d9c903fe8129be5a16
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
 - model: r4p-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -125,3 +130,13 @@ targets:
   added: '2026-07-15'
   sources:
   - 0569d74a9c500308f02625d9c903fe8129be5a16
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
+- model: cat2508rws-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/1122aedb8421e00ebe6547c79c34fb20247b536e6be526822e61c02fcead800d6243f15a87216b1d44e268b6f0d5ece5.toml
+  initdata_sha384: 1122aedb8421e00ebe6547c79c34fb20247b536e6be526822e61c02fcead800d6243f15a87216b1d44e268b6f0d5ece5
+  added: '2026-07-24'
+  sources:
+  - 1364536b6ee56ad6b8441840b4acfb5dd6cf9e1e
