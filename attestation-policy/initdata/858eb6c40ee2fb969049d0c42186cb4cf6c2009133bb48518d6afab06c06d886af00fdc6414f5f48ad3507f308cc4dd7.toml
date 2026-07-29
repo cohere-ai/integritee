@@ -1,0 +1,3242 @@
+version = '0.1.0'
+algorithm = 'sha384'
+
+[data]
+"aa.toml" = '''
+[token_configs]
+'''
+
+"policy.rego" = '''
+# Copyright (c) 2023 Microsoft Corporation
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Upstream: kata-containers/src/tools/genpolicy/rules.rego
+# Upstream version: 3.29.0 (commit 8dccf4cf37)
+# To update: diff this file against the upstream version and re-apply
+# local modifications. All changes are tagged with "Local change:" comments.
+#
+# Local modifications:
+#   1. allow_hooks            — extracted to extension point (was: is_null check)
+#   2. allow_resource_devices — extracted to extension point (was: count==0 check)
+#   3. allow_anno_key_value   — carve out io.kubernetes.cri.image-name into
+#                               allow_image_name_annotation extension point
+#   4. allow_single_linux_device — extracted to extension point (was: inline Path check)
+#   5. allow_all_mounts       — extracted from allow_by_bundle_or_sandbox_id to
+#                               extension point for CDI mount partitioning
+#   6. image_guest_pull       — replaced upstream TODO with actual source, mount_point,
+#                               and directory traversal checks; added allow_guest_pull_source
+#                               extension point for image pinning
+#   7. allow_storage_options  — added blk and overlayfs driver regex rules
+#   8. allow_var (secret placeholder) — split env vars on first "=" only so values
+#                                       containing "=" (e.g. base64-padded secrets like
+#                                       ITA_API_KEY) match the placeholder rule
+#   9. allow_oci_version      — accept OCI 1.1.x when policy says 1.2.x
+#  10. allow_namespace        — not enforced (reuse initdata across namespaces)
+#  11. pid namespace          — excluded from Linux namespace comparison
+#  12. sandbox_storage_mount_point — handles mountpoint vs mount_point field name
+#
+# Extension files (concatenated at build time):
+#   rules-gpu-extensions.rego  — GPU/CDI hooks, devices, mounts, annotations
+#   rules-image-pinning.rego   — image reference enforcement via attestation
+#
+package agent_policy
+
+# Not required for rego v1. regorus still defaults to v0, so keep it for now.
+import future.keywords.in
+import future.keywords.every
+import future.keywords.if
+
+# GetDiagnosticDataRequest is not supported yet when using the CoCo policy unless enabled in policy_data.request_defaults.
+default GetDiagnosticDataRequest := false
+
+# Default values, returned by OPA when rules cannot be evaluated to true.
+default AddARPNeighborsRequest := false
+default AddSwapRequest := false
+default CloseStdinRequest := false
+default CopyFileRequest := false
+default CreateContainerRequest := false
+default CreateSandboxRequest := false
+default DestroySandboxRequest := true
+default ExecProcessRequest := false
+default GetOOMEventRequest := true
+default GuestDetailsRequest := true
+default ListInterfacesRequest := false
+default ListRoutesRequest := false
+default MemHotplugByProbeRequest := false
+default OnlineCPUMemRequest := true
+default PauseContainerRequest := false
+default ReadStreamRequest := false
+default RemoveContainerRequest := true
+default RemoveStaleVirtiofsShareMountsRequest := true
+default ReseedRandomDevRequest := false
+default ResumeContainerRequest := false
+default SetGuestDateTimeRequest := false
+default SetPolicyRequest := false
+default SignalProcessRequest := true
+default StartContainerRequest := true
+default StartTracingRequest := false
+default StatsContainerRequest := true
+default StopTracingRequest := false
+default TtyWinResizeRequest := true
+default UpdateContainerRequest := false
+default UpdateEphemeralMountsRequest := false
+default UpdateInterfaceRequest := false
+default UpdateRoutesRequest := false
+default WaitProcessRequest := true
+default WriteStreamRequest := false
+
+# AllowRequestsFailingPolicy := true configures the Agent to *allow any
+# requests causing a policy failure*. This is an unsecure configuration
+# but is useful for allowing unsecure pods to start, then connect to
+# them and inspect OPA logs for the root cause of a failure.
+default AllowRequestsFailingPolicy := false
+
+# Constants
+S_NAME_KEY = "io.kubernetes.cri.sandbox-name"
+S_NAMESPACE_KEY = "io.kubernetes.cri.sandbox-namespace"
+CDI_VFIO_ANNOTATION_PREFIX = "cdi.k8s.io/vfio"
+VFIO_PCI_ADDRESS_REGEX = "^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[01][0-9a-fA-F]\\.[0-7]=[0-9a-fA-F]{2}/[0-9a-fA-F]{2}$"
+
+CreateContainerRequest := {"ops": ops, "allowed": true} if {
+    # Check if the input request should be rejected even before checking the
+    # policy_data.containers information.
+    allow_create_container_input
+
+    i_oci := input.OCI
+    i_storages := input.storages
+    i_devices := input.devices
+
+    # array of possible state operations
+    ops_builder := []
+
+    # check sandbox name
+    sandbox_name = i_oci.Annotations[S_NAME_KEY]
+    add_sandbox_name_to_state := state_allows("sandbox_name", sandbox_name)
+    ops_builder1 := concat_op_if_not_null(ops_builder, add_sandbox_name_to_state)
+
+    # Check if any element from the policy_data.containers array allows the input request.
+    some idx, p_container in policy_data.containers
+
+    p_pidns := p_container.sandbox_pidns
+    i_pidns := input.sandbox_pidns
+    p_pidns == i_pidns
+
+    p_oci := p_container.OCI
+
+    # check namespace
+    p_namespace := p_oci.Annotations[S_NAMESPACE_KEY]
+    i_namespace := i_oci.Annotations[S_NAMESPACE_KEY]
+    add_namespace_to_state := allow_namespace(p_namespace, i_namespace)
+    ops_builder2 := concat_op_if_not_null(ops_builder1, add_namespace_to_state)
+
+    allow_oci_version(p_oci.Version, i_oci.Version)
+
+    p_oci.Root.Readonly == i_oci.Root.Readonly
+
+    allow_anno(p_container, i_oci)
+
+    p_storages := p_container.storages
+    allow_by_anno(p_oci, i_oci, p_storages, i_storages)
+
+    p_devices := p_container.devices
+    allow_devices(p_devices, i_devices, i_oci)
+
+    ret := allow_linux(ops_builder2, p_oci, i_oci)
+    ret.allowed
+
+    # save to policy state
+    # key: input.container_id
+    # val: index of p_container in the policy_data.containers array
+    add_p_container_to_state := state_allows(input.container_id, idx)
+
+    ops := concat_op_if_not_null(ret.ops, add_p_container_to_state)
+
+}
+
+allow_oci_version(p_version, i_version) if {
+    p_version == i_version
+}
+
+allow_oci_version(p_version, i_version) if {
+    regex.match("^1\\.2\\.", p_version)
+    regex.match("^1\\.[12]\\.", i_version)
+}
+
+allow_create_container_input if {
+
+    count(input.shared_mounts) == 0
+    is_null(input.string_user)
+
+    i_oci := input.OCI
+    allow_hooks(i_oci.Hooks) # Local change: was is_null(i_oci.Hooks) — extracted to extension point
+    is_null(i_oci.Solaris)
+    is_null(i_oci.Windows)
+
+    i_linux := i_oci.Linux
+    count(i_linux.GIDMappings) == 0
+    count(i_linux.MountLabel) == 0
+    allow_resource_devices(i_linux.Resources.Devices) # Local change: was count(…)==0 — extracted to extension point
+    count(i_linux.RootfsPropagation) == 0
+    count(i_linux.UIDMappings) == 0
+    is_null(i_linux.IntelRdt)
+    is_null(i_linux.Resources.BlockIO)
+    is_null(i_linux.Resources.Network)
+    is_null(i_linux.Resources.Pids)
+    is_null(i_linux.Seccomp)
+
+    i_process := i_oci.Process
+    count(i_process.SelinuxLabel) == 0
+    count(i_process.User.Username) == 0
+
+}
+
+# Local change: extension point — OCI lifecycle hooks.
+# Upstream: is_null(i_oci.Hooks) was inline in allow_create_container_input.
+# Default: only null hooks allowed. Override to accept device-injected hooks.
+allow_hooks(hooks) if {
+    is_null(hooks)
+}
+
+# Local change: extension point — Linux cgroup device rules.
+# Upstream: count(i_linux.Resources.Devices) == 0 was inline.
+# Default: no device entries allowed. Override to accept device-injected entries.
+allow_resource_devices(devices) if {
+    count(devices) == 0
+}
+
+# Local change: namespace is not enforced — it is an orchestrator-level concern
+# and does not affect the TEE security boundary. This allows the same
+# initdata/policy to be reused across namespaces.
+allow_namespace(p_namespace, i_namespace) = add_namespace if {
+    add_namespace := state_allows("namespace", i_namespace)
+}
+
+# key hasn't been seen before, save key, value pair to state
+state_allows(key, value) = action if {
+  state := get_state()
+  not state[key]
+  path := get_state_path(key)
+  action := {
+    "op": "add",
+    "path": path,
+    "value": value,
+  }
+}
+
+# value matches what's in state, allow it
+state_allows(key, value) = action if {
+  state := get_state()
+  value == state[key]
+  action := null
+}
+
+# delete key=value from state
+state_del_key(key) = action if {
+  state := get_state()
+  path := get_state_path(key)
+  action := {
+    "op": "remove",
+    "path": path,
+  }
+}
+
+# helper functions to interact with the state
+get_state() = state if {
+  state := data["pstate"]
+}
+
+get_state_val(key) = value if {
+    state := get_state()
+    value := state[key]
+}
+
+get_state_path(key) = path if {
+    # prepend "/pstate/" to key
+    path := concat("/", ["/pstate", key])
+}
+
+# Helper functions to conditionally concatenate op is not null
+concat_op_if_not_null(ops, op) = result if {
+    op == null
+    result := ops
+}
+
+concat_op_if_not_null(ops, op) = result if {
+    op != null
+    result := array.concat(ops, [op])
+}
+
+# Reject unexpected annotations.
+allow_anno(p_container, i_oci) if {
+
+    not i_oci.Annotations
+
+}
+allow_anno(p_container, i_oci) if {
+    p_oci := p_container.OCI
+
+
+    every i_key, i_value in i_oci.Annotations {
+        allow_anno_key_value(i_key, i_value, p_container)
+    }
+
+}
+
+# Local change: upstream blanket-allows all io.kubernetes.cri.* annotations.
+# We carve out image-name into its own extension point so image pinning
+# can enforce it. The guard `i_key != "io.kubernetes.cri.image-name"` is
+# added to rules 1, 2, and 3 to prevent them from short-circuiting.
+allow_anno_key_value(i_key, i_value, p_container) if {
+
+    startswith(i_key, "io.kubernetes.cri.")
+    i_key != "io.kubernetes.cri.image-name" # Local change: guard — image-name handled separately
+
+}
+allow_anno_key_value(i_key, i_value, p_container) if {
+    startswith(i_key, "io.katacontainers.config.")
+}
+allow_anno_key_value(i_key, i_value, p_container) if {
+    i_key == "nerdctl/network-namespace"
+}
+# Local change: image-name annotation routed to extension point.
+allow_anno_key_value(i_key, i_value, p_container) if {
+    i_key == "io.kubernetes.cri.image-name"
+    allow_image_name_annotation(i_value, p_container)
+}
+
+# Local change: extension point — image-name annotation validation.
+# Default: allow any image-name when image pinning is not active.
+# Override by concatenating rules-image-pinning.rego which sets
+# image_pinning_active := true and provides a restrictive alternative.
+default image_pinning_active := false
+
+allow_image_name_annotation(i_value, p_container) if {
+    not image_pinning_active
+}
+allow_anno_key_value(i_key, i_value, p_container) if {
+
+    i_key != "io.kubernetes.cri.image-name" # Local change: guard
+    some p_key, _ in p_container.OCI.Annotations
+    p_key == i_key
+
+}
+allow_anno_key_value(i_key, i_value, p_container) if {
+
+    i_key != "io.kubernetes.cri.image-name" # Local change: guard — consistent with rules 1 and 2
+
+    some p_key_regex, p_value_regex in p_container.runtime_anno_patterns
+
+    regex.match(p_key_regex, i_key)
+    regex.match(p_value_regex, i_value)
+
+}
+
+# Get the value of the S_NAME_KEY annotation and
+# correlate it with other annotations and process fields.
+allow_by_anno(p_oci, i_oci, p_storages, i_storages) if {
+
+    not p_oci.Annotations[S_NAME_KEY]
+
+    i_s_name := i_oci.Annotations[S_NAME_KEY]
+
+    i_s_namespace := i_oci.Annotations[S_NAMESPACE_KEY]
+
+    allow_by_sandbox_name(p_oci, i_oci, p_storages, i_storages, i_s_name, i_s_namespace)
+
+}
+allow_by_anno(p_oci, i_oci, p_storages, i_storages) if {
+
+    p_s_name := p_oci.Annotations[S_NAME_KEY]
+    i_s_name := i_oci.Annotations[S_NAME_KEY]
+
+    allow_sandbox_name(p_s_name, i_s_name)
+
+    i_s_namespace := i_oci.Annotations[S_NAMESPACE_KEY]
+
+    allow_by_sandbox_name(p_oci, i_oci, p_storages, i_storages, i_s_name, i_s_namespace)
+
+}
+
+allow_by_sandbox_name(p_oci, i_oci, p_storages, i_storages, s_name, s_namespace) if {
+
+    i_namespace := i_oci.Annotations[S_NAMESPACE_KEY]
+
+    allow_by_container_types(p_oci, i_oci, s_name, i_namespace)
+    allow_by_bundle_or_sandbox_id(p_oci, i_oci, p_storages, i_storages)
+    allow_process(p_oci.Process, i_oci.Process, s_name, s_namespace)
+
+}
+
+allow_sandbox_name(p_s_name, i_s_name) if {
+    regex.match(p_s_name, i_s_name)
+
+}
+
+# Check that the "io.kubernetes.cri.container-type" and
+# "io.katacontainers.pkg.oci.container_type" annotations designate the
+# expected type - either a "sandbox" or a "container". Then, validate
+# other annotations based on the actual "sandbox" or "container" value
+# from the input container.
+allow_by_container_types(p_oci, i_oci, s_name, s_namespace) if {
+
+    c_type := "io.kubernetes.cri.container-type"
+
+    p_cri_type := p_oci.Annotations[c_type]
+    i_cri_type := i_oci.Annotations[c_type]
+    p_cri_type == i_cri_type
+
+    allow_by_container_type(i_cri_type, p_oci, i_oci, s_name, s_namespace)
+
+}
+
+allow_by_container_type(i_cri_type, p_oci, i_oci, s_name, s_namespace) if {
+    i_cri_type == "sandbox"
+
+    i_kata_type := i_oci.Annotations["io.katacontainers.pkg.oci.container_type"]
+    i_kata_type == "pod_sandbox"
+
+    allow_sandbox_container_name(p_oci, i_oci)
+    allow_sandbox_net_namespace(p_oci, i_oci)
+    allow_sandbox_log_directory(p_oci, i_oci, s_name, s_namespace)
+
+}
+
+allow_by_container_type(i_cri_type, p_oci, i_oci, s_name, s_namespace) if {
+    i_cri_type == "container"
+
+    i_kata_type := i_oci.Annotations["io.katacontainers.pkg.oci.container_type"]
+    i_kata_type == "pod_container"
+
+    allow_container_name(p_oci, i_oci)
+    allow_net_namespace(p_oci, i_oci)
+    allow_log_directory(p_oci, i_oci)
+
+}
+
+# "io.kubernetes.cri.container-name" annotation
+allow_sandbox_container_name(p_oci, i_oci) if {
+
+    container_annotation_missing(p_oci, i_oci, "io.kubernetes.cri.container-name")
+
+}
+
+allow_container_name(p_oci, i_oci) if {
+
+    allow_container_annotation(p_oci, i_oci, "io.kubernetes.cri.container-name")
+
+}
+
+container_annotation_missing(p_oci, i_oci, key) if {
+
+    not p_oci.Annotations[key]
+    not i_oci.Annotations[key]
+
+}
+
+allow_container_annotation(p_oci, i_oci, key) if {
+
+    p_value := p_oci.Annotations[key]
+    i_value := i_oci.Annotations[key]
+
+    p_value == i_value
+
+}
+
+# "nerdctl/network-namespace" annotation
+allow_sandbox_net_namespace(p_oci, i_oci) if {
+
+    key := "nerdctl/network-namespace"
+
+    p_namespace := p_oci.Annotations[key]
+    i_namespace := i_oci.Annotations[key]
+
+    regex.match(p_namespace, i_namespace)
+
+}
+
+allow_net_namespace(p_oci, i_oci) if {
+
+    key := "nerdctl/network-namespace"
+
+    not p_oci.Annotations[key]
+    not i_oci.Annotations[key]
+
+}
+
+# "io.kubernetes.cri.sandbox-log-directory" annotation
+allow_sandbox_log_directory(p_oci, i_oci, s_name, s_namespace) if {
+
+    key := "io.kubernetes.cri.sandbox-log-directory"
+
+    p_dir := p_oci.Annotations[key]
+    regex1 := replace(p_dir, "$(sandbox-name)", s_name)
+    regex2 := replace(regex1, "$(sandbox-namespace)", s_namespace)
+
+    i_dir := i_oci.Annotations[key]
+
+    regex.match(regex2, i_dir)
+
+}
+
+allow_log_directory(p_oci, i_oci) if {
+
+    key := "io.kubernetes.cri.sandbox-log-directory"
+
+    not p_oci.Annotations[key]
+    not i_oci.Annotations[key]
+
+}
+
+allow_devices(p_devices, i_devices, i_oci) if {
+
+    vfio_device_path := policy_data.devices.vfio.device_path
+
+    p_volume_devices := [d | d := p_devices[_]; d.container_path != vfio_device_path]
+    i_volume_devices := [d | d := i_devices[_]; not startswith(d.container_path, vfio_device_path)]
+    allow_volume_devices(p_volume_devices, i_volume_devices)
+
+    p_vfio_devices := [d | d := p_devices[_]; d.container_path == vfio_device_path]
+    i_vfio_devices := [d | d := i_devices[_]; startswith(d.container_path, vfio_device_path)]
+    allow_vfio_devices(p_vfio_devices, i_vfio_devices, i_oci)
+
+}
+
+allow_volume_devices(p_volume_devices, i_volume_devices) if {
+
+    every i_volume_device in i_volume_devices {
+        some p_device in p_volume_devices
+        p_device.container_path == i_volume_device.container_path
+    }
+
+}
+
+allow_vfio_devices(p_vfio_devices, i_vfio_devices, i_oci) if {
+
+    every i_vfio_device in i_vfio_devices {
+        allow_vfio_device(p_vfio_devices, i_vfio_device)
+    }
+
+    allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci)
+
+}
+
+allow_vfio_device(p_vfio_devices, i_vfio_device) if {
+
+    some p_device in p_vfio_devices
+
+    vfio_device_path := policy_data.devices.vfio.device_path
+    startswith(i_vfio_device.container_path, vfio_device_path)
+    suffix := trim_prefix(i_vfio_device.container_path, vfio_device_path)
+    regex.match("^[0-9]+$", suffix)
+
+    i_vfio_device.id == concat("", ["vfio", suffix])
+
+    i_vfio_device.type_ == p_device.type_
+
+    i_vfio_device.vm_path == p_device.vm_path
+
+    count(i_vfio_device.options) > 0
+    every option in i_vfio_device.options {
+        regex.match(VFIO_PCI_ADDRESS_REGEX, option)
+    }
+}
+
+get_cdi_vfio_anno_suffixes(annotations) := [suffix |
+    some key, _ in annotations
+    startswith(key, CDI_VFIO_ANNOTATION_PREFIX)
+    suffix := trim_prefix(key, CDI_VFIO_ANNOTATION_PREFIX)
+    regex.match("^[0-9]+$", suffix)
+]
+
+allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci) if {
+
+    count(i_vfio_devices) == 0
+    count(p_vfio_devices) == 0
+
+}
+
+# VFIO device hot-plug: input VFIO devices are present.
+# Input VFIO devices must match policy VFIO devices and unique set of CDI annotations.
+allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci) if {
+
+    count(i_vfio_devices) == count(p_vfio_devices)
+
+    vfio_device_path := policy_data.devices.vfio.device_path
+    vfio_numbers := [suffix |
+        d := i_vfio_devices[_];
+        suffix := trim_prefix(d.container_path, vfio_device_path);
+        regex.match("^[0-9]+$", suffix)
+    ]
+    # Convert array to set to reject possible duplicate entries in the array
+    count(vfio_numbers) == count({n | n := vfio_numbers[_]})
+
+    cdi_suffixes := get_cdi_vfio_anno_suffixes(i_oci.Annotations)
+    count(cdi_suffixes) == count({s | s := cdi_suffixes[_]})
+    {n | n := vfio_numbers[_]} == {s | s := cdi_suffixes[_]}
+
+}
+
+# VFIO device cold-plug: no input VFIO devices expected.
+# Number of VFIO policy devices must match unique set of CDI annotations.
+allow_vfio_device_cdi_correlation(p_vfio_devices, i_vfio_devices, i_oci) if {
+
+    count(i_vfio_devices) == 0
+    count(p_vfio_devices) > 0
+
+    cdi_suffixes := get_cdi_vfio_anno_suffixes(i_oci.Annotations)
+    count(cdi_suffixes) == count({s | s := cdi_suffixes[_]})
+    count(cdi_suffixes) == count(p_vfio_devices)
+
+}
+
+allow_linux(state_ops, p_oci, i_oci) := {"ops": ops, "allowed": true} if {
+    p_namespaces := p_oci.Linux.Namespaces
+
+    p_namespaces_normalized := [
+        {"Path": obj.Path, "Type": normalize_namespace_type(obj.Type)}
+        | obj := p_namespaces[_]
+    ]
+
+    i_namespaces := i_oci.Linux.Namespaces
+
+    i_namespace_without_network_normalized := [
+        {"Path": obj.Path, "Type": normalize_namespace_type(obj.Type)}
+        | obj := i_namespaces[_]; obj.Type != "network"; obj.Type != "cgroup"; obj.Type != "pid"
+    ]
+
+
+    p_namespaces_normalized == i_namespace_without_network_normalized
+
+    allow_masked_paths(p_oci, i_oci)
+    allow_readonly_paths(p_oci, i_oci)
+    allow_linux_devices(p_oci.Linux.Devices, i_oci.Linux.Devices)
+    allow_linux_sysctl(p_oci.Linux, i_oci.Linux)
+    ret := allow_network_namespace_start(state_ops, p_oci, i_oci)
+    ret.allowed
+
+    ops := ret.ops
+
+}
+
+# Retrieve the "network" namespace from the input data and pass it on for the
+# network namespace policy checks.
+allow_network_namespace_start(state_ops, p_oci, i_oci) := {"ops": ops, "allowed": true} if {
+
+    p_namespaces := p_oci.Linux.Namespaces
+
+    i_namespaces := i_oci.Linux.Namespaces
+
+    # Return path of the "network" namespace
+    network_ns := [obj | obj := i_namespaces[_]; obj.Type == "network"]
+
+
+    ret := allow_network_namespace(state_ops, network_ns)
+    ret.allowed
+
+    ops := ret.ops
+}
+
+# This rule is when there's no network namespace in the input data.
+allow_network_namespace(state_ops, network_ns) := {"ops": ops, "allowed": true} if {
+    count(network_ns) == 0
+
+    network_ns_path = ""
+
+    add_network_namespace_to_state := state_allows("network_namespace", network_ns_path)
+    ops := concat_op_if_not_null(state_ops, add_network_namespace_to_state)
+
+}
+
+# This rule is when there's exactly one network namespace in the input data.
+allow_network_namespace(state_ops, network_ns) := {"ops": ops, "allowed": true} if {
+    count(network_ns) == 1
+
+    add_network_namespace_to_state := state_allows("network_namespace", network_ns[0].Path)
+    ops := concat_op_if_not_null(state_ops, add_network_namespace_to_state)
+
+}
+
+allow_masked_paths(p_oci, i_oci) if {
+    p_paths := p_oci.Linux.MaskedPaths
+
+    i_paths := i_oci.Linux.MaskedPaths
+
+    allow_masked_paths_array(p_paths, i_paths)
+
+}
+allow_masked_paths(p_oci, i_oci) if {
+
+    not p_oci.Linux.MaskedPaths
+    not i_oci.Linux.MaskedPaths
+
+}
+
+# All the policy masked paths must be masked in the input data too.
+# Input is allowed to have more masked paths than the policy.
+allow_masked_paths_array(p_array, i_array) if {
+    every p_elem in p_array {
+        allow_masked_path(p_elem, i_array)
+    }
+}
+
+allow_masked_path(p_elem, i_array) if {
+
+    some i_elem in i_array
+    p_elem == i_elem
+
+}
+
+allow_readonly_paths(p_oci, i_oci) if {
+    p_paths := p_oci.Linux.ReadonlyPaths
+
+    i_paths := i_oci.Linux.ReadonlyPaths
+
+    allow_readonly_paths_array(p_paths, i_paths, i_oci.Linux.MaskedPaths)
+
+}
+allow_readonly_paths(p_oci, i_oci) if {
+
+    not p_oci.Linux.ReadonlyPaths
+    not i_oci.Linux.ReadonlyPaths
+
+}
+
+# All the policy readonly paths must be either:
+# - Present in the input readonly paths, or
+# - Present in the input masked paths.
+# Input is allowed to have more readonly paths than the policy.
+allow_readonly_paths_array(p_array, i_array, masked_paths) if {
+    every p_elem in p_array {
+        allow_readonly_path(p_elem, i_array, masked_paths)
+    }
+}
+
+allow_readonly_path(p_elem, i_array, masked_paths) if {
+
+    some i_elem in i_array
+    p_elem == i_elem
+
+}
+allow_readonly_path(p_elem, i_array, masked_paths) if {
+
+    some i_masked in masked_paths
+    p_elem == i_masked
+
+}
+
+allow_linux_devices(p_devices, i_devices) if {
+    every i_device in i_devices {
+        allow_single_linux_device(p_devices, i_device) # Local change: was inline Path==Path check — extracted to extension point
+    }
+}
+
+# Local change: extension point — single Linux device node validation.
+# Upstream: i_device.Path == p_device.Path was inline in allow_linux_devices.
+# Default: device must match a policy entry by path. Override to accept
+# additional device paths (e.g. GPU device nodes).
+allow_single_linux_device(p_devices, i_device) if {
+    some p_device in p_devices
+    i_device.Path == p_device.Path
+}
+
+allow_linux_sysctl(p_linux, i_linux) if {
+    not i_linux.Sysctl
+}
+
+allow_linux_sysctl(p_linux, i_linux) if {
+    p_sysctl := p_linux.Sysctl
+    i_sysctl := i_linux.Sysctl
+    count(p_sysctl) == 0
+}
+
+allow_linux_sysctl(p_linux, i_linux) if {
+    p_sysctl := p_linux.Sysctl
+    i_sysctl := i_linux.Sysctl
+    every i_name, i_val in i_sysctl {
+        p_sysctl[i_name] == i_val
+    }
+}
+
+# Policy has no Sysctl field — allow any input sysctls.
+allow_linux_sysctl(p_linux, i_linux) if {
+    not p_linux.Sysctl
+}
+
+# Check the consistency of the input "io.katacontainers.pkg.oci.bundle_path"
+# and io.kubernetes.cri.sandbox-id" values with other fields.
+allow_by_bundle_or_sandbox_id(p_oci, i_oci, p_storages, i_storages) if {
+
+    key := "io.kubernetes.cri.sandbox-id"
+
+    p_regex := p_oci.Annotations[key]
+    sandbox_id := i_oci.Annotations[key]
+
+    regex.match(p_regex, sandbox_id)
+
+    i_root := i_oci.Root.Path
+    p_root_pattern1 := p_oci.Root.Path
+    p_root_pattern2 := replace(p_root_pattern1, "$(root_path)", policy_data.common.root_path)
+    # Bundle path segment can be a 64-char hex (OCI bundle ID) or the runtime's container/bundle identifier used in paths (e.g. short ID or CRI container ID).
+    p_root_pattern3 := replace(p_root_pattern2, "$(bundle-id)", "([0-9a-f]{64}|[a-z0-9][a-z0-9.-]*)")
+
+    # Verify that the root path matches the substituted pattern and extract the bundle-id.
+    bundle_id := regex.find_all_string_submatch_n(p_root_pattern3, i_root, 1)[0][1]
+
+    allow_all_mounts(p_oci, i_oci, i_storages, bundle_id, sandbox_id) # Local change: was inline p_matches check — extracted to extension point
+
+    allow_storages(p_storages, i_storages, bundle_id, sandbox_id)
+
+}
+
+# Local change: extension point — mount validation.
+# Upstream: the p_matches/count check was inline in allow_by_bundle_or_sandbox_id.
+# Default: every input mount must match a policy mount. Override to partition
+# mounts (e.g. separate device-injected mounts from standard ones).
+allow_all_mounts(p_oci, i_oci, i_storages, bundle_id, sandbox_id) if {
+    p_matches := { p_index | some i_index; p_index = allow_mount(p_oci, i_oci.Mounts[i_index], i_storages, bundle_id, sandbox_id) }
+    count(p_matches) == count(i_oci.Mounts)
+}
+
+allow_process_common(p_process, i_process, s_name, s_namespace) if {
+
+    p_process.Cwd == i_process.Cwd
+    p_process.NoNewPrivileges == i_process.NoNewPrivileges
+
+    allow_user(p_process, i_process)
+    allow_env(p_process, i_process, s_name, s_namespace)
+
+}
+
+# Compare the OCI Process field of a policy container with the input OCI Process from a CreateContainerRequest
+allow_process(p_process, i_process, s_name, s_namespace) if {
+
+    allow_args(p_process, i_process, s_name)
+    allow_process_common(p_process, i_process, s_name, s_namespace)
+    allow_caps(p_process.Capabilities, i_process.Capabilities)
+    p_process.Terminal == i_process.Terminal
+
+}
+
+# Compare the OCI Process field of a policy container with the input process field from ExecProcessRequest
+allow_interactive_process(p_process, i_process, s_name, s_namespace) if {
+
+    allow_process_common(p_process, i_process, s_name, s_namespace)
+    allow_exec_caps(i_process.Capabilities)
+
+    # These are commands enabled using ExecProcessRequest commands and/or regex from the settings file.
+    # They can be executed interactively so allow them to use any value for i_process.Terminal.
+
+}
+
+# Compare the OCI Process field of a policy container with the input process field from ExecProcessRequest
+allow_probe_process(p_process, i_process, s_name, s_namespace) if {
+
+    allow_process_common(p_process, i_process, s_name, s_namespace)
+    allow_exec_caps(i_process.Capabilities)
+    p_process.Terminal == i_process.Terminal
+
+}
+
+allow_user(p_process, i_process) if {
+    p_user := p_process.User
+    i_user := i_process.User
+
+    p_user.UID == i_user.UID
+
+    p_user.GID == i_user.GID
+
+    {e | some e in p_user.AdditionalGids} == {e | some e in i_user.AdditionalGids}
+}
+
+allow_args(p_process, i_process, s_name) if {
+
+    not p_process.Args
+    not i_process.Args
+
+}
+allow_args(p_process, i_process, s_name) if {
+
+    count(p_process.Args) == count(i_process.Args)
+
+    every i, i_arg in i_process.Args {
+        allow_arg(i, i_arg, p_process, s_name)
+    }
+
+}
+allow_arg(i, i_arg, p_process, s_name) if {
+    p_arg := p_process.Args[i]
+
+    p_arg2 := replace(p_arg, "$$", "$")
+    p_arg2 == i_arg
+
+}
+allow_arg(i, i_arg, p_process, s_name) if {
+    p_arg := p_process.Args[i]
+
+    # TODO: can $(node-name) be handled better?
+    contains(p_arg, "$(node-name)")
+
+}
+allow_arg(i, i_arg, p_process, s_name) if {
+    p_arg := p_process.Args[i]
+
+    p_arg2 := replace(p_arg, "$$", "$")
+    p_arg3 := replace(p_arg2, "$(sandbox-name)", s_name)
+    p_arg3 == i_arg
+
+}
+
+# OCI process.Env field
+allow_env(p_process, i_process, s_name, s_namespace) if {
+
+    every i_var in i_process.Env {
+        allow_var(p_process, i_process, i_var, s_name, s_namespace)
+    }
+
+}
+
+# Allow input env variables that are present in the policy data too.
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    some p_var in p_process.Env
+    p_var == i_var
+}
+
+# Allow generated Secret/ConfigMap placeholder values. genpolicy only needs the
+# env-var key names for externally supplied secrets; runtime carries the real
+# values.
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    some p_var in p_process.Env
+
+    # Local change: split on first "=" only so values containing "=" (e.g. base64-padded secrets) parse correctly.
+    eq_p := indexof(p_var, "=")
+    eq_p >= 0
+    p_name := substring(p_var, 0, eq_p)
+    p_value := substring(p_var, eq_p + 1, -1)
+    p_value == "\u0000\u0000\u0000"
+
+    eq_i := indexof(i_var, "=")
+    eq_i >= 0
+    i_name := substring(i_var, 0, eq_i)
+    i_name == p_name
+
+}
+
+# Match input with one of the policy variables, after substituting $(sandbox-name).
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    some p_var in p_process.Env
+    p_var2 := replace(p_var, "$(sandbox-name)", s_name)
+
+
+    p_var_split := split(p_var, "=")
+    count(p_var_split) == 2
+
+    p_var_split[1] == "$(sandbox-name)"
+
+    i_var_split := split(i_var, "=")
+    count(i_var_split) == 2
+
+    i_var_split[0] == p_var_split[0]
+    regex.match(s_name, i_var_split[1])
+
+}
+
+# Allow input env variables that match with a request_defaults regex.
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    some p_regex1 in policy_data.request_defaults.CreateContainerRequest.allow_env_regex
+    p_regex2 := replace(p_regex1, "$(ipv4_a)", policy_data.common.ipv4_a)
+    p_regex3 := replace(p_regex2, "$(ip_p)", policy_data.common.ip_p)
+    p_regex4 := replace(p_regex3, "$(svc_name_downward_env)", policy_data.common.svc_name_downward_env)
+    p_regex5 := replace(p_regex4, "$(dns_label)", policy_data.common.dns_label)
+
+    regex.match(p_regex5, i_var)
+
+}
+
+# Allow fieldRef "fieldPath: status.podIP" values.
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    name_value := split(i_var, "=")
+    count(name_value) == 2
+    is_ip(name_value[1])
+
+    some p_var in p_process.Env
+    allow_pod_ip_var(name_value[0], p_var)
+
+}
+
+# Allow common fieldRef variables.
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    name_value := split(i_var, "=")
+    count(name_value) == 2
+
+    some p_var in p_process.Env
+    p_name_value := split(p_var, "=")
+    count(p_name_value) == 2
+
+    p_name_value[0] == name_value[0]
+
+    # TODO: should these be handled in a different way?
+    always_allowed := ["$(host-name)", "$(node-name)", "$(pod-uid)"]
+    some allowed in always_allowed
+    contains(p_name_value[1], allowed)
+
+}
+
+# Allow fieldRef "fieldPath: status.hostIP" values.
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    name_value := split(i_var, "=")
+    count(name_value) == 2
+    is_ip(name_value[1])
+
+    some p_var in p_process.Env
+    allow_host_ip_var(name_value[0], p_var)
+
+}
+
+# Allow resourceFieldRef values (e.g., "limits.cpu").
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    name_value := split(i_var, "=")
+    count(name_value) == 2
+
+    some p_var in p_process.Env
+    p_name_value := split(p_var, "=")
+    count(p_name_value) == 2
+
+    p_name_value[0] == name_value[0]
+
+    # TODO: should these be handled in a different way?
+    always_allowed = ["$(resource-field)", "$(todo-annotation)"]
+    some allowed in always_allowed
+    contains(p_name_value[1], allowed)
+
+}
+
+allow_var(p_process, i_process, i_var, s_name, s_namespace) if {
+    some p_var in p_process.Env
+    p_var2 := replace(p_var, "$(sandbox-namespace)", s_namespace)
+
+    p_var2 == i_var
+
+}
+
+allow_pod_ip_var(var_name, p_var) if {
+
+    p_name_value := split(p_var, "=")
+    count(p_name_value) == 2
+
+    p_name_value[0] == var_name
+    p_name_value[1] == "$(pod-ip)"
+
+}
+
+allow_host_ip_var(var_name, p_var) if {
+
+    p_name_value := split(p_var, "=")
+    count(p_name_value) == 2
+
+    p_name_value[0] == var_name
+    p_name_value[1] == "$(host-ip)"
+
+}
+
+is_ip(value) if {
+    bytes = split(value, ".")
+    count(bytes) == 4
+
+    is_ip_first_byte(bytes[0])
+    is_ip_other_byte(bytes[1])
+    is_ip_other_byte(bytes[2])
+    is_ip_other_byte(bytes[3])
+}
+is_ip_first_byte(component) if {
+    number = to_number(component)
+    number >= 1
+    number <= 255
+}
+is_ip_other_byte(component) if {
+    number = to_number(component)
+    number >= 0
+    number <= 255
+}
+
+allow_mount(p_oci, i_mount, i_storages, bundle_id, sandbox_id):= p_index if {
+
+    some p_index, p_mount in p_oci.Mounts
+
+    check_mount(p_mount, i_mount, bundle_id, sandbox_id)
+
+}
+allow_mount(p_oci, i_mount, i_storages, bundle_id, sandbox_id):= p_index if {
+
+    some p_index, p_mount in p_oci.Mounts
+
+    p_mount.destination == i_mount.destination
+    p_mount.type_ == i_mount.type_
+    p_mount.options == i_mount.options
+
+    some i_storage in i_storages
+
+    sandbox_storage_mount_point(i_storage) == i_mount.source
+
+}
+
+check_mount(p_mount, i_mount, bundle_id, sandbox_id) if {
+    p_mount == i_mount
+}
+check_mount(p_mount, i_mount, bundle_id, sandbox_id) if {
+    p_mount.destination == i_mount.destination
+    p_mount.type_ == i_mount.type_
+    p_mount.options == i_mount.options
+
+    mount_source_allows(p_mount, i_mount, bundle_id, sandbox_id)
+
+}
+check_mount(p_mount, i_mount, bundle_id, sandbox_id) if {
+    # This check passes if the policy container has RW, the input container has
+    # RO and the volume type is sysfs, working around different handling of
+    # privileged containers after containerd 2.0.4.
+    i_mount.type_ == "sysfs"
+    p_mount.type_ == i_mount.type_
+    p_mount.destination == i_mount.destination
+    p_mount.source == i_mount.source
+
+    i_options := {x | x = i_mount.options[_]} | {"rw"}
+    p_options := {x | x = p_mount.options[_]} | {"ro"}
+    p_options == i_options
+
+}
+
+check_mount(p_mount, i_mount, bundle_id, sandbox_id) if {
+    # Unified cgroup v2 mounts on newer kernels may add flags genpolicy does not
+    # embed (e.g. nsdelegate, memory_recursiveprot). Allow extras listed in
+    # policy_data.cluster_config.cgroup_mount_extras_allowed (from genpolicy-settings.json).
+    i_mount.type_ == "cgroup"
+    p_mount.type_ == "cgroup"
+    p_mount.destination == i_mount.destination
+    p_mount.source == i_mount.source
+
+    allowed_extras := {x | x = policy_data.cluster_config.cgroup_mount_extras_allowed[_]}
+
+    p_opts := {x | x = p_mount.options[_]}
+    i_opts := {x | x = i_mount.options[_]}
+    every opt in p_mount.options {
+        opt in i_opts
+    }
+
+    extras := i_opts - p_opts
+    every extra in extras {
+        extra in allowed_extras
+    }
+
+    mount_source_allows(p_mount, i_mount, bundle_id, sandbox_id)
+
+}
+
+mount_source_allows(p_mount, i_mount, bundle_id, sandbox_id) if {
+    regex1 := p_mount.source
+
+    regex2 := replace(regex1, "$(sfprefix)", policy_data.common.sfprefix)
+
+    regex3 := replace(regex2, "$(cpath)", policy_data.common.cpath)
+
+    regex4 := replace(regex3, "$(bundle-id)", bundle_id)
+    regex.match(regex4, i_mount.source)
+
+}
+mount_source_allows(p_mount, i_mount, bundle_id, sandbox_id) if {
+    regex1 := p_mount.source
+
+    regex2 := replace(regex1, "$(sfprefix)", policy_data.common.sfprefix)
+
+    regex3 := replace(regex2, "$(cpath)", policy_data.common.cpath)
+
+    regex4 := replace(regex3, "$(sandbox-id)", sandbox_id)
+    regex.match(regex4, i_mount.source)
+
+}
+
+######################################################################
+# Create container Storages
+
+allow_storages(p_storages, i_storages, bundle_id, sandbox_id) if {
+
+    p_count := count(p_storages)
+    i_count := count(i_storages)
+    img_pull_count := count([s | s := i_storages[_]; s.driver == "image_guest_pull"])
+
+    p_count == i_count - img_pull_count
+
+    every i_storage in i_storages {
+        allow_storage(p_storages, i_storage, bundle_id, sandbox_id)
+    }
+
+}
+
+allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
+    some p_storage in p_storages
+
+
+    p_storage.driver == i_storage.driver
+    allow_storage_source(p_storage, i_storage, bundle_id)
+
+    allow_storage_base(p_storage, i_storage, bundle_id, sandbox_id)
+
+}
+allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
+    i_storage.driver == "image_guest_pull"
+    i_storage.fstype == "overlay"
+    i_storage.fs_group == null
+    i_storage.shared == false
+    count(i_storage.options) == 0
+
+    count(i_storage.source) > 0                          # Local change: added
+    check_directory_traversal(i_storage.source)           # Local change: added
+    allow_guest_pull_source(i_storage.source)             # Local change: added — extension point
+
+    mount_pattern := replace(policy_data.common.root_path, "$(bundle-id)", bundle_id) # Local change: added
+    regex.match(mount_pattern, i_storage.mount_point)     # Local change: added
+
+}
+
+# Local change: extension point — image_guest_pull storage source validation.
+# Default: allow any non-empty source when image pinning is not active.
+# Override by concatenating rules-image-pinning.rego.
+allow_guest_pull_source(source) if {
+    not image_pinning_active
+}
+allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
+
+    i_storage.driver == "scsi"
+    regex.match("^[0-9]+:[0-9]+$", i_storage.source)
+
+    allow_block_storage(p_storages, i_storage, bundle_id, sandbox_id)
+
+}
+allow_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
+
+    i_storage.driver == "blk"
+    regex.match("^[0-9]{2}/[0-9]{2}$", i_storage.source)
+
+    allow_block_storage(p_storages, i_storage, bundle_id, sandbox_id)
+
+}
+
+# Validates all storage fields except driver and source.
+allow_storage_base(p_storage, i_storage, bundle_id, sandbox_id) if {
+    # Not logging as this is reused multiple times.
+
+    p_storage.driver_options == i_storage.driver_options
+    p_storage.fs_group       == i_storage.fs_group
+    p_storage.fstype         == i_storage.fstype
+    p_storage.shared         == i_storage.shared
+
+    allow_mount_point(p_storage, i_storage, bundle_id, sandbox_id)
+    allow_storage_options(p_storage, i_storage)
+}
+
+allow_block_storage(p_storages, i_storage, bundle_id, sandbox_id) if {
+
+    some p_storage in p_storages
+
+    p_storage.driver == i_storage.driver
+    allow_storage_source(p_storage, i_storage, bundle_id)
+
+    allow_storage_base(p_storage, i_storage, bundle_id, sandbox_id)
+
+}
+
+allow_storage_source(p_storage, i_storage, bundle_id) if {
+
+    p_storage.source == i_storage.source
+
+}
+allow_storage_source(p_storage, i_storage, bundle_id) if {
+
+    source1 := p_storage.source
+    source2 := replace(source1, "$(sfprefix)", policy_data.common.sfprefix)
+    source3 := replace(source2, "$(cpath)", policy_data.common.cpath)
+    source4 := replace(source3, "$(bundle-id)", bundle_id)
+
+    regex.match(source4, i_storage.source)
+
+}
+allow_storage_source(p_storage, i_storage, bundle_id) if {
+
+    p_storage.driver == "overlayfs"
+    i_storage.source == "none"
+
+}
+
+allow_storage_options(p_storage, i_storage) if {
+
+    p_storage.driver != "blk"
+    p_storage.driver != "overlayfs"
+    p_storage.options == i_storage.options
+
+}
+
+# Local change: upstream only has the catch-all rule above. These two rules add
+# regex-based option matching for blk and overlayfs drivers so that genpolicy-
+# generated patterns (with bundle-id placeholders) are properly evaluated.
+allow_storage_options(p_storage, i_storage) if {
+
+    p_storage.driver == "blk"
+    count(p_storage.options) == count(i_storage.options)
+    every i, p_opt in p_storage.options {
+        regex.match(p_opt, i_storage.options[i])
+    }
+
+}
+allow_storage_options(p_storage, i_storage) if {
+
+    p_storage.driver == "overlayfs"
+    count(p_storage.options) == count(i_storage.options)
+    every i, p_opt in p_storage.options {
+        regex.match(p_opt, i_storage.options[i])
+    }
+
+}
+
+allow_mount_point(p_storage, i_storage, bundle_id, sandbox_id) if {
+
+    p_storage.fstype == "local"
+
+    mount1 := p_storage.mount_point
+
+    mount2 := replace(mount1, "$(cpath)", policy_data.common.cpath)
+
+    mount3 := replace(mount2, "$(sandbox-id)", sandbox_id)
+
+    regex.match(mount3, i_storage.mount_point)
+
+}
+allow_mount_point(p_storage, i_storage, bundle_id, sandbox_id) if {
+
+    p_storage.fstype == "bind"
+
+    mount1 := p_storage.mount_point
+
+    mount2 := replace(mount1, "$(cpath)", policy_data.common.cpath)
+
+    mount3 := replace(mount2, "$(bundle-id)", bundle_id)
+
+    regex.match(mount3, i_storage.mount_point)
+
+}
+allow_mount_point(p_storage, i_storage, bundle_id, sandbox_id) if {
+
+    p_storage.fstype == "tmpfs"
+
+    mount1 := p_storage.mount_point
+
+    regex.match(mount1, i_storage.mount_point)
+
+}
+allow_mount_point(p_storage, i_storage, bundle_id, sandbox_id) if {
+
+    i_storage.driver == "blk"
+    allow_mount_point_by_device_id(p_storage, i_storage)
+
+}
+allow_mount_point(p_storage, i_storage, bundle_id, sandbox_id) if {
+
+    i_storage.driver == "scsi"
+    allow_mount_point_by_device_id(p_storage, i_storage)
+
+}
+
+allow_mount_point_by_device_id(p_storage, i_storage) if {
+
+    mount1 := p_storage.mount_point
+
+    mount2 := replace(mount1, "$(spath)", policy_data.common.spath)
+
+    mount3 := replace(mount2, "$(b64_device_id)", base64url.encode(i_storage.source))
+
+    mount3 == i_storage.mount_point
+
+}
+
+# ExecProcessRequest.process.Capabilities
+allow_exec_caps(i_caps) if {
+    not i_caps.Ambient
+    not i_caps.Bounding
+    not i_caps.Effective
+    not i_caps.Inheritable
+    not i_caps.Permitted
+}
+
+# OCI.Process.Capabilities
+allow_caps(p_caps, i_caps) if {
+    match_caps(p_caps.Ambient, i_caps.Ambient)
+
+    match_caps(p_caps.Bounding, i_caps.Bounding)
+
+    match_caps(p_caps.Effective, i_caps.Effective)
+
+    match_caps(p_caps.Inheritable, i_caps.Inheritable)
+
+    match_caps(p_caps.Permitted, i_caps.Permitted)
+}
+
+match_caps(p_caps, i_caps) if {
+
+    norm_p_caps := { strip_cap_prefix(c) | c := p_caps[_] }
+    norm_i_caps := { strip_cap_prefix(c) | c := i_caps[_] }
+    norm_p_caps == norm_i_caps
+
+}
+match_caps(p_caps, i_caps) if {
+
+    count(p_caps) == 1
+    p_caps[0] == "$(default_caps)"
+
+
+    norm_defaults := { strip_cap_prefix(c) | c := policy_data.common.default_caps[_] }
+    norm_input := { strip_cap_prefix(c) | c := i_caps[_] }
+
+    norm_defaults == norm_input
+
+}
+match_caps(p_caps, i_caps) if {
+
+    count(p_caps) == 1
+    p_caps[0] == "$(privileged_caps)"
+
+
+    norm_defaults := { strip_cap_prefix(c) | c := policy_data.common.privileged_caps[_] }
+    norm_input    := { strip_cap_prefix(c) | c := i_caps[_] }
+
+    norm_defaults == norm_input
+
+}
+
+######################################################################
+
+normalize_namespace_type(type) := normalized_type if {
+    lower(type) == "mount"
+    normalized_type := "mnt"
+} else := normalized_type if {
+    normalized_type := type
+}
+
+strip_cap_prefix(s) := result if {
+    startswith(s, "CAP_")
+    result := substring(s, 4, count(s) - 4)
+} else := result if {
+    result := s
+}
+
+check_directory_traversal(i_path) if {
+    not regex.match("(^|/)..($|/)", i_path)
+}
+
+allow_sandbox_storages(i_storages) if {
+
+    p_storages := policy_data.sandbox.storages
+    every i_storage in i_storages {
+        allow_sandbox_storage(p_storages, i_storage)
+    }
+
+}
+
+allow_sandbox_storage(p_storages, i_storage) if {
+
+    some p_storage in p_storages
+
+    # Compare field-by-field: genpolicy omits "shared" but the runtime sends it.
+    i_storage.driver == p_storage.driver
+    i_storage.driver_options == p_storage.driver_options
+    i_storage.source == p_storage.source
+    i_storage.fstype == p_storage.fstype
+    i_storage.options == p_storage.options
+    sandbox_storage_mount_point(i_storage) == p_storage.mount_point
+    i_storage.fs_group == p_storage.fs_group
+
+}
+
+sandbox_storage_mount_point(i_storage) = mount_point if {
+    mount_point := i_storage.mount_point
+}
+
+sandbox_storage_mount_point(i_storage) = mount_point if {
+    mount_point := i_storage.mountpoint
+}
+
+CopyFileRequest if {
+
+    allow_copy_file
+
+}
+
+allow_copy_file if {
+
+    input.file_type == "Regular"
+    allow_copy_file_path(input.path, "")
+
+}
+
+allow_copy_file if {
+
+    input.file_type == "Directory"
+    allow_copy_file_path(input.path, "")
+
+}
+
+allow_copy_file if {
+
+    input.file_type == "Symlink"
+    # Symlinks are not allowed on the top-level of the shared directory, from which we mount.
+    allow_copy_file_path(input.path, ".*/.+")
+    # Symlinks must be normalized.
+    check_directory_traversal(input.symlink_target)
+    # Symlinks must be relative.
+    not startswith(input.symlink_target, "/")
+
+}
+
+allow_copy_file_path(path, regex_suffix) if {
+    check_directory_traversal(path)
+
+    some regex1 in policy_data.request_defaults.CopyFileRequest
+    regex2 := replace(regex1, "$(sfprefix)", policy_data.common.sfprefix)
+    regex3 := replace(regex2, "$(cpath)", policy_data.common.cpath)
+    regex4 := replace(regex3, "$(bundle-id)", "[a-z0-9]{64}")
+    regex5 := concat("", [regex4, regex_suffix])
+    regex.match(regex5, path)
+}
+
+CreateSandboxRequest if {
+    count(input.guest_hook_path) == 0
+
+    count(input.kernel_modules) == 0
+
+    i_pidns := input.sandbox_pidns
+    i_pidns == false
+    allow_sandbox_storages(input.storages)
+}
+
+allow_exec(p_container, i_process) if {
+
+    p_oci = p_container.OCI
+    p_s_name = p_oci.Annotations[S_NAME_KEY]
+    s_namespace = get_state_val("namespace")
+    allow_probe_process(p_oci.Process, i_process, p_s_name, s_namespace)
+
+}
+
+allow_interactive_exec(p_container, i_process) if {
+
+    p_oci = p_container.OCI
+    p_s_name = p_oci.Annotations[S_NAME_KEY]
+    s_namespace = get_state_val("namespace")
+    allow_interactive_process(p_oci.Process, i_process, p_s_name, s_namespace)
+
+}
+
+get_state_container(container_id):= p_container if {
+    idx := get_state_val(container_id)
+    p_container := policy_data.containers[idx]
+}
+
+ExecProcessRequest if {
+    allow_exec_process_input
+
+    some p_command in policy_data.request_defaults.ExecProcessRequest.allowed_commands
+    p_command == input.process.Args
+
+    p_container := get_state_container(input.container_id)
+    allow_interactive_exec(p_container, input.process)
+
+}
+ExecProcessRequest if {
+    allow_exec_process_input
+
+    p_container := get_state_container(input.container_id)
+
+    some p_command in p_container.exec_commands
+
+    p_command == input.process.Args
+
+    allow_exec(p_container, input.process)
+
+}
+ExecProcessRequest if {
+    allow_exec_process_input
+
+    i_command = concat(" ", input.process.Args)
+
+    some p_regex in policy_data.request_defaults.ExecProcessRequest.regex
+
+    regex.match(p_regex, i_command)
+
+    p_container := get_state_container(input.container_id)
+
+    allow_interactive_exec(p_container, input.process)
+
+}
+
+allow_exec_process_input if {
+    is_null(input.string_user)
+
+    i_process := input.process
+    count(i_process.SelinuxLabel) == 0
+    count(i_process.ApparmorProfile) == 0
+
+}
+
+UpdateRoutesRequest if {
+
+    i_routes := input.routes.Routes
+    p_source_regex = policy_data.request_defaults.UpdateRoutesRequest.forbidden_source_regex
+    p_names = policy_data.request_defaults.UpdateRoutesRequest.forbidden_device_names
+
+    every i_route in i_routes {
+        every p_regex in p_source_regex {
+            not regex.match(p_regex, i_route.source)
+        }
+
+        not i_route.device in p_names
+    }
+
+}
+
+UpdateInterfaceRequest if {
+
+    i_interface := input.interface
+    p_flags := policy_data.request_defaults.UpdateInterfaceRequest.allow_raw_flags
+
+    # Typically, just IFF_NOARP is used.
+    bits.and(i_interface.raw_flags, bits.negate(p_flags)) == 0
+
+    p_names := policy_data.request_defaults.UpdateInterfaceRequest.forbidden_names
+
+    not i_interface.name in p_names
+
+    p_hwaddrs := policy_data.request_defaults.UpdateInterfaceRequest.forbidden_hw_addrs
+
+    not i_interface.hwAddr in p_hwaddrs
+
+}
+
+AddARPNeighborsRequest if {
+    p_defaults := policy_data.request_defaults.AddARPNeighborsRequest
+
+    every i_neigh in input.neighbors.ARPNeighbors {
+
+        not i_neigh.device in p_defaults.forbidden_device_names
+        i_neigh.toIPAddress.mask == ""
+        every p_cidr in p_defaults.forbidden_cidrs_regex {
+            not regex.match(p_cidr, i_neigh.toIPAddress.address)
+        }
+        i_neigh.state in p_defaults.allowed_states
+        bits.or(i_neigh.flags, 136) == 136
+    }
+
+}
+
+CloseStdinRequest if {
+    policy_data.request_defaults.CloseStdinRequest == true
+}
+
+ReadStreamRequest if {
+    policy_data.request_defaults.ReadStreamRequest == true
+}
+
+UpdateEphemeralMountsRequest if {
+    policy_data.request_defaults.UpdateEphemeralMountsRequest == true
+}
+
+WriteStreamRequest if {
+    policy_data.request_defaults.WriteStreamRequest == true
+}
+
+GetDiagnosticDataRequest if {
+    policy_data.request_defaults.GetDiagnosticDataRequest == true
+}
+
+RemoveContainerRequest:= {"ops": ops, "allowed": true} if {
+
+    # Delete input.container_id from p_state
+    ops_builder1 := []
+    del_container := state_del_key(input.container_id)
+    ops := concat_op_if_not_null(ops_builder1, del_container)
+
+}
+
+
+######################################################################
+# GPU/CDI Policy Extensions
+#
+# Concatenated after rules-base.rego at build time. Provides alternative
+# rule definitions (Rego OR semantics) that extend the base policy to
+# support NVIDIA GPU workloads with CDI (Container Device Interface)
+# injected resources.
+#
+# Extension points implemented:
+#   allow_hooks             — accept nvidia-cdi-hook CreateContainer hooks
+#   allow_resource_devices  — accept CDI-injected cgroup device rules
+#   allow_single_linux_device — accept GPU device nodes (/dev/nvidia*, /dev/dri/*)
+#   allow_all_mounts        — separate CDI bind-mounts from standard mounts
+#   allow_anno_key_value    — accept cdi.k8s.io/* annotations
+######################################################################
+
+######################################################################
+# Hook validation
+#
+# CDI-injected containers carry CreateContainer hooks pointing at
+# /usr/bin/nvidia-cdi-hook. All hooks must use this path.
+
+allow_hooks(hooks) if {
+    not is_null(hooks)
+    every hook in hooks.CreateContainer {
+        hook.Path == "/usr/bin/nvidia-cdi-hook"
+    }
+}
+
+######################################################################
+# Device cgroup rules
+#
+# CDI injects cgroup "allow" rules for GPU device nodes (major 195
+# for nvidia, major 226 for drm).
+
+allow_resource_devices(devices) if {
+    count(devices) > 0
+    every device in devices {
+        device.Allow == true
+    }
+}
+
+######################################################################
+# NVIDIA bind-mount recognition
+#
+# CDI injects ~50 read-only bind mounts for NVIDIA libraries, firmware,
+# binaries, and Vulkan/EGL configs. These are identified by mount
+# options and a destination path pattern.
+
+is_nvidia_cdi_mount(mount) if {
+    mount.type_ == "bind"
+    some opt1 in mount.options; opt1 == "ro"
+    some opt2 in mount.options; opt2 == "nosuid"
+    some opt3 in mount.options; opt3 == "nodev"
+    some opt4 in mount.options; opt4 == "rbind"
+    nvidia_mount_path_pattern(mount.destination)
+}
+
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/usr/lib/x86_64-linux-gnu/lib(nvidia|cuda|nvcuv|nv|EGL|GL|OpenGL|wayland-egl|vdpau)", dest)
+}
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/usr/bin/nvidia-", dest)
+}
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/etc/(vulkan|nvidia|egl)/", dest)
+}
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/usr/share/(vulkan|nvidia|egl|glvnd)/", dest)
+}
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/lib/firmware/nvidia/", dest)
+}
+nvidia_mount_path_pattern(dest) if {
+    dest == "/run/nvidia-persistenced/socket"
+}
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/usr/lib/xorg/", dest)
+}
+nvidia_mount_path_pattern(dest) if {
+    regex.match("^/dev/dri/by-path/", dest)
+}
+
+######################################################################
+# GPU device node allowlist
+
+allow_gpu_device_path(path) if {
+    regex.match("^/dev/nvidia[0-9]+$", path)
+}
+allow_gpu_device_path(path) if {
+    path == "/dev/nvidiactl"
+}
+allow_gpu_device_path(path) if {
+    path == "/dev/nvidia-modeset"
+}
+allow_gpu_device_path(path) if {
+    regex.match("^/dev/nvidia-uvm(-tools)?$", path)
+}
+allow_gpu_device_path(path) if {
+    regex.match("^/dev/dri/(card|renderD)[0-9]+$", path)
+}
+
+######################################################################
+# Linux device node: accept GPU devices not in policy
+
+allow_single_linux_device(p_devices, i_device) if {
+    allow_gpu_device_path(i_device.Path)
+}
+
+######################################################################
+# Mount validation: separate CDI-injected mounts from standard mounts
+#
+# Standard mounts must match policy entries 1:1. CDI-injected NVIDIA
+# bind-mounts are validated by destination path pattern instead.
+
+allow_all_mounts(p_oci, i_oci, i_storages, bundle_id, sandbox_id) if {
+    i_standard_mounts := [m | m := i_oci.Mounts[_]; not is_nvidia_cdi_mount(m)]
+    i_cdi_mounts := [m | m := i_oci.Mounts[_]; is_nvidia_cdi_mount(m)]
+
+    count(i_cdi_mounts) > 0
+
+    p_matches := { p_index | some i_index; p_index = allow_mount(p_oci, i_standard_mounts[i_index], i_storages, bundle_id, sandbox_id) }
+    count(p_matches) == count(i_standard_mounts)
+
+    every cdi_mount in i_cdi_mounts {
+        nvidia_mount_path_pattern(cdi_mount.destination)
+    }
+}
+
+######################################################################
+# Annotation: accept CDI-injected annotations (cdi.k8s.io/*)
+
+allow_anno_key_value(i_key, i_value, p_container) if {
+
+    startswith(i_key, "cdi.k8s.io/")
+
+}
+
+
+######################################################################
+# Image Pinning Policy Extension
+#
+# Concatenated after rules-base.rego at build time. Activates image
+# reference pinning so that the OPA policy enforces which container
+# images are allowed, binding them to the attestation chain via RTMR3.
+#
+# When active:
+#   - io.kubernetes.cri.image-name annotation must match the value
+#     embedded by genpolicy in the policy container data.
+#   - image_guest_pull storage source must match an image reference
+#     from a policy container.
+#
+# For effective pinning, use digest references in manifests:
+#   image: registry.io/image@sha256:abc123...
+# Tags (:latest, :v1.0) are mutable and provide weaker guarantees.
+#
+# Extension points implemented:
+#   image_pinning_active        — feature flag (overrides base default)
+#   allow_image_name_annotation — pin image-name annotation to policy data
+#   allow_guest_pull_source     — pin storage source to policy containers
+######################################################################
+
+# Activate image pinning — disables the permissive defaults in the base.
+image_pinning_active := true
+
+######################################################################
+# Annotation pinning
+#
+# The input image-name annotation must exactly match the value from the
+# policy container that genpolicy generated from the manifest.
+
+allow_image_name_annotation(i_value, p_container) if {
+    p_value := p_container.OCI.Annotations["io.kubernetes.cri.image-name"]
+    p_value == i_value
+}
+
+######################################################################
+# Storage source pinning
+#
+# The image_guest_pull storage source (the image reference passed to
+# CDH/image-rs for pulling) must match an image reference from one of
+# the policy containers. This prevents the host from requesting a pull
+# of an image not specified in the attested policy.
+
+allow_guest_pull_source(source) if {
+    source == "pause"
+}
+
+allow_guest_pull_source(source) if {
+    source != "pause"
+    some p_container in policy_data.containers
+    p_image := p_container.OCI.Annotations["io.kubernetes.cri.image-name"]
+    source == p_image
+}
+policy_data := {
+  "containers": [
+    {
+      "OCI": {
+        "Version": "1.2.1",
+        "Process": {
+          "Terminal": false,
+          "User": {
+            "UID": 10001,
+            "GID": 10001,
+            "AdditionalGids": [
+              10001
+            ],
+            "Username": ""
+          },
+          "Args": [
+            "/pause"
+          ],
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+          ],
+          "Cwd": "/",
+          "Capabilities": {
+            "Ambient": [],
+            "Bounding": [
+              "$(default_caps)"
+            ],
+            "Effective": [
+              "$(default_caps)"
+            ],
+            "Inheritable": [],
+            "Permitted": [
+              "$(default_caps)"
+            ]
+          },
+          "NoNewPrivileges": true
+        },
+        "Root": {
+          "Path": "$(root_path)",
+          "Readonly": true
+        },
+        "Mounts": [
+          {
+            "destination": "/proc",
+            "source": "proc",
+            "type_": "proc",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/dev",
+            "source": "tmpfs",
+            "type_": "tmpfs",
+            "options": [
+              "nosuid",
+              "strictatime",
+              "mode=755",
+              "size=65536k"
+            ]
+          },
+          {
+            "destination": "/dev/pts",
+            "source": "devpts",
+            "type_": "devpts",
+            "options": [
+              "nosuid",
+              "noexec",
+              "newinstance",
+              "ptmxmode=0666",
+              "mode=0620",
+              "gid=5"
+            ]
+          },
+          {
+            "destination": "/dev/shm",
+            "source": "/run/kata-containers/sandbox/shm",
+            "type_": "bind",
+            "options": [
+              "rbind"
+            ]
+          },
+          {
+            "destination": "/dev/mqueue",
+            "source": "mqueue",
+            "type_": "mqueue",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/sys",
+            "source": "sysfs",
+            "type_": "sysfs",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/etc/resolv.conf",
+            "source": "$(sfprefix)resolv.conf$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "ro",
+              "nosuid",
+              "nodev",
+              "noexec"
+            ]
+          }
+        ],
+        "Annotations": {
+          "io.katacontainers.config.hypervisor.default_gpus": "1",
+          "io.katacontainers.config.hypervisor.image": "projects/cohere-artifacts/global/images/podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5",
+          "io.katacontainers.config.hypervisor.machine_type": "a3-highgpu-1g",
+          "io.katacontainers.config.runtime.create_container_timeout": "1800",
+          "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/$(bundle-id)",
+          "io.katacontainers.pkg.oci.container_type": "pod_sandbox",
+          "io.kubernetes.cri.container-type": "sandbox",
+          "io.kubernetes.cri.image-name": "us-central1-artifactregistry.gcr.io/gke-release/gke-release/pause:3.8@sha256:880e63f94b145e46f1b1082bb71b85e21f16b99b180b9996407d61240ceb9830",
+          "io.kubernetes.cri.podsandbox.image-name": "us-central1-artifactregistry.gcr.io/gke-release/gke-release/pause:3.8@sha256:880e63f94b145e46f1b1082bb71b85e21f16b99b180b9996407d61240ceb9830",
+          "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
+          "io.kubernetes.cri.sandbox-log-directory": "^/var/log/pods/$(sandbox-namespace)_$(sandbox-name)_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+          "io.kubernetes.cri.sandbox-name": "^cmp-l-cc-[0-9]+$",
+          "io.kubernetes.cri.sandbox-namespace": "",
+          "nerdctl/network-namespace": "^/var/run/netns/cni-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+        },
+        "Linux": {
+          "Namespaces": [
+            {
+              "Type": "ipc",
+              "Path": ""
+            },
+            {
+              "Type": "uts",
+              "Path": ""
+            },
+            {
+              "Type": "mount",
+              "Path": ""
+            }
+          ],
+          "MaskedPaths": [
+            "/proc/acpi",
+            "/proc/asound",
+            "/proc/kcore",
+            "/proc/keys",
+            "/proc/latency_stats",
+            "/proc/timer_list",
+            "/proc/timer_stats",
+            "/proc/sched_debug",
+            "/sys/firmware",
+            "/sys/devices/virtual/powercap",
+            "/proc/scsi"
+          ],
+          "ReadonlyPaths": [
+            "/proc/bus",
+            "/proc/fs",
+            "/proc/irq",
+            "/proc/sys",
+            "/proc/sysrq-trigger"
+          ],
+          "Devices": []
+        }
+      },
+      "storages": [],
+      "devices": [],
+      "sandbox_pidns": false,
+      "exec_commands": [],
+      "runtime_anno_patterns": {}
+    },
+    {
+      "OCI": {
+        "Version": "1.2.1",
+        "Process": {
+          "Terminal": false,
+          "User": {
+            "UID": 10001,
+            "GID": 10001,
+            "AdditionalGids": [
+              10001
+            ],
+            "Username": ""
+          },
+          "Args": [
+            "s5cmd",
+            "--endpoint-url=https://cwobject.com",
+            "--addressing-style=virtual",
+            "cp",
+            "s3://us-east-01a/cohere-baselines/packed/compass-multilingual-r4-fast-03-2026/*",
+            "/opt/ml/model"
+          ],
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOSTNAME=$(host-name)",
+            "AWS_ACCESS_KEY_ID=\u0000\u0000\u0000",
+            "AWS_ENDPOINT_URL=\u0000\u0000\u0000",
+            "AWS_REGION=\u0000\u0000\u0000",
+            "AWS_SECRET_ACCESS_KEY=\u0000\u0000\u0000",
+            "S3_ENDPOINT=\u0000\u0000\u0000"
+          ],
+          "Cwd": "/",
+          "Capabilities": {
+            "Ambient": [],
+            "Bounding": [],
+            "Effective": [],
+            "Inheritable": [],
+            "Permitted": []
+          },
+          "NoNewPrivileges": true
+        },
+        "Root": {
+          "Path": "$(root_path)",
+          "Readonly": false
+        },
+        "Mounts": [
+          {
+            "destination": "/proc",
+            "source": "proc",
+            "type_": "proc",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/dev",
+            "source": "tmpfs",
+            "type_": "tmpfs",
+            "options": [
+              "nosuid",
+              "strictatime",
+              "mode=755",
+              "size=65536k"
+            ]
+          },
+          {
+            "destination": "/dev/pts",
+            "source": "devpts",
+            "type_": "devpts",
+            "options": [
+              "nosuid",
+              "noexec",
+              "newinstance",
+              "ptmxmode=0666",
+              "mode=0620",
+              "gid=5"
+            ]
+          },
+          {
+            "destination": "/dev/shm",
+            "source": "/run/kata-containers/sandbox/shm",
+            "type_": "bind",
+            "options": [
+              "rbind"
+            ]
+          },
+          {
+            "destination": "/dev/mqueue",
+            "source": "mqueue",
+            "type_": "mqueue",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/sys",
+            "source": "sysfs",
+            "type_": "sysfs",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/sys/fs/cgroup",
+            "source": "cgroup",
+            "type_": "cgroup",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "relatime",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/etc/hosts",
+            "source": "$(sfprefix)hosts$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/dev/termination-log",
+            "source": "$(sfprefix)termination-log$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/hostname",
+            "source": "$(sfprefix)hostname$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/resolv.conf",
+            "source": "$(sfprefix)resolv.conf$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/var/run/secrets/kubernetes.io/serviceaccount",
+            "source": "$(sfprefix)serviceaccount$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/opt/ml/model",
+            "source": "^$(cpath)/$(sandbox-id)/rootfs/local/mnt$",
+            "type_": "local",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          }
+        ],
+        "Annotations": {
+          "cdi.k8s.io/peer-pods": "nvidia\\.com/gpu=.*",
+          "io.katacontainers.config.hypervisor.default_gpus": "1",
+          "io.katacontainers.config.hypervisor.image": "projects/cohere-artifacts/global/images/podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5",
+          "io.katacontainers.config.hypervisor.machine_type": "a3-highgpu-1g",
+          "io.katacontainers.config.runtime.create_container_timeout": "1800",
+          "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/$(bundle-id)",
+          "io.katacontainers.pkg.oci.container_type": "pod_container",
+          "io.kubernetes.cri.container-name": "downloader",
+          "io.kubernetes.cri.container-type": "container",
+          "io.kubernetes.cri.image-name": "us-central1-docker.pkg.dev/cohere-artifacts/cohere/s5cmd:v1.0.3-patched",
+          "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
+          "io.kubernetes.cri.sandbox-name": "^cmp-l-cc-[0-9]+$",
+          "io.kubernetes.cri.sandbox-namespace": ""
+        },
+        "Linux": {
+          "Namespaces": [
+            {
+              "Type": "ipc",
+              "Path": ""
+            },
+            {
+              "Type": "uts",
+              "Path": ""
+            },
+            {
+              "Type": "mount",
+              "Path": ""
+            }
+          ],
+          "MaskedPaths": [
+            "/proc/acpi",
+            "/proc/kcore",
+            "/proc/keys",
+            "/proc/latency_stats",
+            "/proc/timer_list",
+            "/proc/timer_stats",
+            "/proc/sched_debug",
+            "/proc/scsi",
+            "/sys/firmware"
+          ],
+          "ReadonlyPaths": [
+            "/proc/asound",
+            "/proc/bus",
+            "/proc/fs",
+            "/proc/irq",
+            "/proc/sys",
+            "/proc/sysrq-trigger"
+          ],
+          "Devices": []
+        }
+      },
+      "storages": [
+        {
+          "driver": "local",
+          "driver_options": [],
+          "source": "local",
+          "fstype": "local",
+          "options": [
+            "mode=0777",
+            "fsgid=10001"
+          ],
+          "mount_point": "^$(cpath)/$(sandbox-id)/rootfs/local/mnt$",
+          "fs_group": null,
+          "shared": false
+        }
+      ],
+      "devices": [],
+      "sandbox_pidns": false,
+      "exec_commands": [],
+      "runtime_anno_patterns": {
+        "^io\\.kubernetes\\.container\\.terminationMessagePath$": "^/.*$",
+        "^io\\.kubernetes\\.container\\.terminationMessagePolicy$": "^(File|FallbackToLogsOnError)$"
+      }
+    },
+    {
+      "OCI": {
+        "Version": "1.2.1",
+        "Process": {
+          "Terminal": false,
+          "User": {
+            "UID": 10001,
+            "GID": 10001,
+            "AdditionalGids": [
+              10001
+            ],
+            "Username": ""
+          },
+          "Args": [
+            "sh",
+            "-c",
+            "${COHERE_APP_PATH}/serve.sh"
+          ],
+          "Env": [
+            "PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/bin:/usr/local/bin:/usr/local/nvidia/bin",
+            "NVARCH=x86_64",
+            "NVIDIA_REQUIRE_CUDA=cuda>=12.9 brand=unknown,driver>=535,driver<536 brand=grid,driver>=535,driver<536 brand=tesla,driver>=535,driver<536 brand=nvidia,driver>=535,driver<536 brand=quadro,driver>=535,driver<536 brand=quadrortx,driver>=535,driver<536 brand=nvidiartx,driver>=535,driver<536 brand=vapps,driver>=535,driver<536 brand=vpc,driver>=535,driver<536 brand=vcs,driver>=535,driver<536 brand=vws,driver>=535,driver<536 brand=cloudgaming,driver>=535,driver<536 brand=unknown,driver>=550,driver<551 brand=grid,driver>=550,driver<551 brand=tesla,driver>=550,driver<551 brand=nvidia,driver>=550,driver<551 brand=quadro,driver>=550,driver<551 brand=quadrortx,driver>=550,driver<551 brand=nvidiartx,driver>=550,driver<551 brand=vapps,driver>=550,driver<551 brand=vpc,driver>=550,driver<551 brand=vcs,driver>=550,driver<551 brand=vws,driver>=550,driver<551 brand=cloudgaming,driver>=550,driver<551 brand=unknown,driver>=560,driver<561 brand=grid,driver>=560,driver<561 brand=tesla,driver>=560,driver<561 brand=nvidia,driver>=560,driver<561 brand=quadro,driver>=560,driver<561 brand=quadrortx,driver>=560,driver<561 brand=nvidiartx,driver>=560,driver<561 brand=vapps,driver>=560,driver<561 brand=vpc,driver>=560,driver<561 brand=vcs,driver>=560,driver<561 brand=vws,driver>=560,driver<561 brand=cloudgaming,driver>=560,driver<561 brand=unknown,driver>=565,driver<566 brand=grid,driver>=565,driver<566 brand=tesla,driver>=565,driver<566 brand=nvidia,driver>=565,driver<566 brand=quadro,driver>=565,driver<566 brand=quadrortx,driver>=565,driver<566 brand=nvidiartx,driver>=565,driver<566 brand=vapps,driver>=565,driver<566 brand=vpc,driver>=565,driver<566 brand=vcs,driver>=565,driver<566 brand=vws,driver>=565,driver<566 brand=cloudgaming,driver>=565,driver<566 brand=unknown,driver>=570,driver<571 brand=grid,driver>=570,driver<571 brand=tesla,driver>=570,driver<571 brand=nvidia,driver>=570,driver<571 brand=quadro,driver>=570,driver<571 brand=quadrortx,driver>=570,driver<571 brand=nvidiartx,driver>=570,driver<571 brand=vapps,driver>=570,driver<571 brand=vpc,driver>=570,driver<571 brand=vcs,driver>=570,driver<571 brand=vws,driver>=570,driver<571 brand=cloudgaming,driver>=570,driver<571",
+            "NV_CUDA_CUDART_VERSION=12.9.79-1",
+            "CUDA_VERSION=12.9.1",
+            "LD_LIBRARY_PATH=/usr/local/cuda/compat:/usr/local/nvidia/lib:/usr/local/nvidia/lib64:/usr/local/cuda/lib64",
+            "NVIDIA_VISIBLE_DEVICES=all",
+            "NVIDIA_DRIVER_CAPABILITIES=compute,utility",
+            "NV_CUDA_LIB_VERSION=12.9.1-1",
+            "NV_NVTX_VERSION=12.9.79-1",
+            "NV_LIBNPP_VERSION=12.4.1.87-1",
+            "NV_LIBNPP_PACKAGE=libnpp-12-9=12.4.1.87-1",
+            "NV_LIBCUSPARSE_VERSION=12.5.10.65-1",
+            "NV_LIBCUBLAS_PACKAGE_NAME=libcublas-12-9",
+            "NV_LIBCUBLAS_VERSION=12.9.1.4-1",
+            "NV_LIBCUBLAS_PACKAGE=libcublas-12-9=12.9.1.4-1",
+            "NV_LIBNCCL_PACKAGE_NAME=libnccl2",
+            "NV_LIBNCCL_PACKAGE_VERSION=2.27.3-1",
+            "NCCL_VERSION=2.27.3-1",
+            "NV_LIBNCCL_PACKAGE=libnccl2=2.27.3-1+cuda12.9",
+            "NVIDIA_PRODUCT_NAME=CUDA",
+            "NV_CUDNN_VERSION=9.10.2.21-1",
+            "NV_CUDNN_PACKAGE_NAME=libcudnn9-cuda-12",
+            "NV_CUDNN_PACKAGE=libcudnn9-cuda-12=9.10.2.21-1",
+            "COHERE_APP_PATH=/app/cohere",
+            "PYPOSEIDON_PATH=/app/cohere/pyposeidon/.venv/bin/pyposeidon",
+            "PROMETHEUS_MULTIPROC_DIR=/app/cohere/prometheus_multiproc",
+            "VLLM_ENGINE_ITERATION_TIMEOUT_S=1000",
+            "VLLM_WORKER_MULTIPROC_METHOD=spawn",
+            "SERVING_ENGINE_VERSION=v0.14.1b04",
+            "VLLM_VERSION=v0.14.1b04",
+            "SC_NAME=single-serving-cohere-oss",
+            "SC_VERSION=",
+            "GIT_COMMIT=ee2d1d6d32e45afbc617d1ae6d4fbf906914e71d",
+            "GIT_DATE=",
+            "HOME=/app/cohere",
+            "GPU_SCHEDULING_STRATEGY=replicate",
+            "MODEL_PATH=/opt/ml/model",
+            "HOSTNAME=$(host-name)",
+            "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu",
+            "TRACING_ENABLED=true",
+            "NAMESPACE=$(sandbox-namespace)",
+            "POD_NAME=$(sandbox-name)",
+            "POD_IP=$(pod-ip)"
+          ],
+          "Cwd": "/opt/ml/model",
+          "Capabilities": {
+            "Ambient": [],
+            "Bounding": [],
+            "Effective": [],
+            "Inheritable": [],
+            "Permitted": []
+          },
+          "NoNewPrivileges": true
+        },
+        "Root": {
+          "Path": "$(root_path)",
+          "Readonly": false
+        },
+        "Mounts": [
+          {
+            "destination": "/proc",
+            "source": "proc",
+            "type_": "proc",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/dev",
+            "source": "tmpfs",
+            "type_": "tmpfs",
+            "options": [
+              "nosuid",
+              "strictatime",
+              "mode=755",
+              "size=65536k"
+            ]
+          },
+          {
+            "destination": "/dev/pts",
+            "source": "devpts",
+            "type_": "devpts",
+            "options": [
+              "nosuid",
+              "noexec",
+              "newinstance",
+              "ptmxmode=0666",
+              "mode=0620",
+              "gid=5"
+            ]
+          },
+          {
+            "destination": "/dev/shm",
+            "source": "/run/kata-containers/sandbox/shm",
+            "type_": "bind",
+            "options": [
+              "rbind"
+            ]
+          },
+          {
+            "destination": "/dev/mqueue",
+            "source": "mqueue",
+            "type_": "mqueue",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/sys",
+            "source": "sysfs",
+            "type_": "sysfs",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/sys/fs/cgroup",
+            "source": "cgroup",
+            "type_": "cgroup",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "relatime",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/etc/hosts",
+            "source": "$(sfprefix)hosts$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/dev/termination-log",
+            "source": "$(sfprefix)termination-log$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/hostname",
+            "source": "$(sfprefix)hostname$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/resolv.conf",
+            "source": "$(sfprefix)resolv.conf$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/var/run/secrets/kubernetes.io/serviceaccount",
+            "source": "$(sfprefix)serviceaccount$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/dev/shm",
+            "source": "^/run/kata-containers/sandbox/ephemeral/devshm$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/opt/ml/model",
+            "source": "^$(cpath)/$(sandbox-id)/rootfs/local/mnt$",
+            "type_": "local",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          }
+        ],
+        "Annotations": {
+          "cdi.k8s.io/peer-pods": "nvidia\\.com/gpu=.*",
+          "io.katacontainers.config.hypervisor.default_gpus": "1",
+          "io.katacontainers.config.hypervisor.image": "projects/cohere-artifacts/global/images/podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5",
+          "io.katacontainers.config.hypervisor.machine_type": "a3-highgpu-1g",
+          "io.katacontainers.config.runtime.create_container_timeout": "1800",
+          "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/$(bundle-id)",
+          "io.katacontainers.pkg.oci.container_type": "pod_container",
+          "io.kubernetes.cri.container-name": "cohere",
+          "io.kubernetes.cri.container-type": "container",
+          "io.kubernetes.cri.image-name": "us-central1-docker.pkg.dev/cohere-artifacts/cohere/single-serving-cohere-all:v0.14.1-04162026-manual@sha256:6aeb7bab60c3b249568f31625a5fb4041a44a4212276cd5c4f04cd065aed4e92",
+          "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
+          "io.kubernetes.cri.sandbox-name": "^cmp-l-cc-[0-9]+$",
+          "io.kubernetes.cri.sandbox-namespace": ""
+        },
+        "Linux": {
+          "Namespaces": [
+            {
+              "Type": "ipc",
+              "Path": ""
+            },
+            {
+              "Type": "uts",
+              "Path": ""
+            },
+            {
+              "Type": "mount",
+              "Path": ""
+            }
+          ],
+          "MaskedPaths": [
+            "/proc/acpi",
+            "/proc/kcore",
+            "/proc/keys",
+            "/proc/latency_stats",
+            "/proc/timer_list",
+            "/proc/timer_stats",
+            "/proc/sched_debug",
+            "/proc/scsi",
+            "/sys/firmware"
+          ],
+          "ReadonlyPaths": [
+            "/proc/asound",
+            "/proc/bus",
+            "/proc/fs",
+            "/proc/irq",
+            "/proc/sys",
+            "/proc/sysrq-trigger"
+          ],
+          "Devices": []
+        }
+      },
+      "storages": [
+        {
+          "driver": "ephemeral",
+          "driver_options": [],
+          "source": "tmpfs",
+          "fstype": "tmpfs",
+          "options": [
+            "fsgid=10001"
+          ],
+          "mount_point": "^/run/kata-containers/sandbox/ephemeral/devshm$",
+          "fs_group": null,
+          "shared": false
+        },
+        {
+          "driver": "local",
+          "driver_options": [],
+          "source": "local",
+          "fstype": "local",
+          "options": [
+            "mode=0777",
+            "fsgid=10001"
+          ],
+          "mount_point": "^$(cpath)/$(sandbox-id)/rootfs/local/mnt$",
+          "fs_group": null,
+          "shared": false
+        }
+      ],
+      "devices": [],
+      "sandbox_pidns": false,
+      "exec_commands": [],
+      "runtime_anno_patterns": {
+        "^io\\.kubernetes\\.container\\.terminationMessagePath$": "^/.*$",
+        "^io\\.kubernetes\\.container\\.terminationMessagePolicy$": "^(File|FallbackToLogsOnError)$"
+      }
+    },
+    {
+      "OCI": {
+        "Version": "1.2.1",
+        "Process": {
+          "Terminal": false,
+          "User": {
+            "UID": 10001,
+            "GID": 10001,
+            "AdditionalGids": [
+              10001
+            ],
+            "Username": ""
+          },
+          "Args": [
+            "docker-entrypoint.sh"
+          ],
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOSTNAME=$(host-name)",
+            "RUST_LOG=info",
+            "ITA_API_KEY=\u0000\u0000\u0000",
+            "POLICY_IDS=cbeedffa-e224-4664-b6b4-573fcd4133d3",
+            "PEERS=cmp-l-cc:8301"
+          ],
+          "Cwd": "/",
+          "Capabilities": {
+            "Ambient": [],
+            "Bounding": [],
+            "Effective": [],
+            "Inheritable": [],
+            "Permitted": []
+          },
+          "NoNewPrivileges": true
+        },
+        "Root": {
+          "Path": "$(root_path)",
+          "Readonly": false
+        },
+        "Mounts": [
+          {
+            "destination": "/proc",
+            "source": "proc",
+            "type_": "proc",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/dev",
+            "source": "tmpfs",
+            "type_": "tmpfs",
+            "options": [
+              "nosuid",
+              "strictatime",
+              "mode=755",
+              "size=65536k"
+            ]
+          },
+          {
+            "destination": "/dev/pts",
+            "source": "devpts",
+            "type_": "devpts",
+            "options": [
+              "nosuid",
+              "noexec",
+              "newinstance",
+              "ptmxmode=0666",
+              "mode=0620",
+              "gid=5"
+            ]
+          },
+          {
+            "destination": "/dev/shm",
+            "source": "/run/kata-containers/sandbox/shm",
+            "type_": "bind",
+            "options": [
+              "rbind"
+            ]
+          },
+          {
+            "destination": "/dev/mqueue",
+            "source": "mqueue",
+            "type_": "mqueue",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/sys",
+            "source": "sysfs",
+            "type_": "sysfs",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/sys/fs/cgroup",
+            "source": "cgroup",
+            "type_": "cgroup",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "relatime",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/etc/hosts",
+            "source": "$(sfprefix)hosts$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/dev/termination-log",
+            "source": "$(sfprefix)termination-log$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/hostname",
+            "source": "$(sfprefix)hostname$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/resolv.conf",
+            "source": "$(sfprefix)resolv.conf$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/var/run/secrets/kubernetes.io/serviceaccount",
+            "source": "$(sfprefix)serviceaccount$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "ro"
+            ]
+          }
+        ],
+        "Annotations": {
+          "cdi.k8s.io/peer-pods": "nvidia\\.com/gpu=.*",
+          "io.katacontainers.config.hypervisor.default_gpus": "1",
+          "io.katacontainers.config.hypervisor.image": "projects/cohere-artifacts/global/images/podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5",
+          "io.katacontainers.config.hypervisor.machine_type": "a3-highgpu-1g",
+          "io.katacontainers.config.runtime.create_container_timeout": "1800",
+          "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/$(bundle-id)",
+          "io.katacontainers.pkg.oci.container_type": "pod_container",
+          "io.kubernetes.cri.container-name": "tng",
+          "io.kubernetes.cri.container-type": "container",
+          "io.kubernetes.cri.image-name": "ghcr.io/cohere-ai/tng:0.6.0@sha256:20b24a539a526a13582527fe9e6564756e1307d9f3230824655c8449ca9e034d",
+          "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
+          "io.kubernetes.cri.sandbox-name": "^cmp-l-cc-[0-9]+$",
+          "io.kubernetes.cri.sandbox-namespace": ""
+        },
+        "Linux": {
+          "Namespaces": [
+            {
+              "Type": "ipc",
+              "Path": ""
+            },
+            {
+              "Type": "uts",
+              "Path": ""
+            },
+            {
+              "Type": "mount",
+              "Path": ""
+            }
+          ],
+          "MaskedPaths": [
+            "/proc/acpi",
+            "/proc/kcore",
+            "/proc/keys",
+            "/proc/latency_stats",
+            "/proc/timer_list",
+            "/proc/timer_stats",
+            "/proc/sched_debug",
+            "/proc/scsi",
+            "/sys/firmware"
+          ],
+          "ReadonlyPaths": [
+            "/proc/asound",
+            "/proc/bus",
+            "/proc/fs",
+            "/proc/irq",
+            "/proc/sys",
+            "/proc/sysrq-trigger"
+          ],
+          "Devices": []
+        }
+      },
+      "storages": [],
+      "devices": [],
+      "sandbox_pidns": false,
+      "exec_commands": [],
+      "runtime_anno_patterns": {
+        "^io\\.kubernetes\\.container\\.terminationMessagePath$": "^/.*$",
+        "^io\\.kubernetes\\.container\\.terminationMessagePolicy$": "^(File|FallbackToLogsOnError)$"
+      }
+    },
+    {
+      "OCI": {
+        "Version": "1.2.1",
+        "Process": {
+          "Terminal": false,
+          "User": {
+            "UID": 10001,
+            "GID": 10001,
+            "AdditionalGids": [
+              10001
+            ],
+            "Username": ""
+          },
+          "Args": [
+            "/otelcol-contrib",
+            "--config=/etc/otelcol/config.yaml"
+          ],
+          "Env": [
+            "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "HOSTNAME=$(host-name)"
+          ],
+          "Cwd": "/",
+          "Capabilities": {
+            "Ambient": [],
+            "Bounding": [],
+            "Effective": [],
+            "Inheritable": [],
+            "Permitted": []
+          },
+          "NoNewPrivileges": true
+        },
+        "Root": {
+          "Path": "$(root_path)",
+          "Readonly": false
+        },
+        "Mounts": [
+          {
+            "destination": "/proc",
+            "source": "proc",
+            "type_": "proc",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/dev",
+            "source": "tmpfs",
+            "type_": "tmpfs",
+            "options": [
+              "nosuid",
+              "strictatime",
+              "mode=755",
+              "size=65536k"
+            ]
+          },
+          {
+            "destination": "/dev/pts",
+            "source": "devpts",
+            "type_": "devpts",
+            "options": [
+              "nosuid",
+              "noexec",
+              "newinstance",
+              "ptmxmode=0666",
+              "mode=0620",
+              "gid=5"
+            ]
+          },
+          {
+            "destination": "/dev/shm",
+            "source": "/run/kata-containers/sandbox/shm",
+            "type_": "bind",
+            "options": [
+              "rbind"
+            ]
+          },
+          {
+            "destination": "/dev/mqueue",
+            "source": "mqueue",
+            "type_": "mqueue",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev"
+            ]
+          },
+          {
+            "destination": "/sys",
+            "source": "sysfs",
+            "type_": "sysfs",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/sys/fs/cgroup",
+            "source": "cgroup",
+            "type_": "cgroup",
+            "options": [
+              "nosuid",
+              "noexec",
+              "nodev",
+              "relatime",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/etc/hosts",
+            "source": "$(sfprefix)hosts$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/dev/termination-log",
+            "source": "$(sfprefix)termination-log$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/hostname",
+            "source": "$(sfprefix)hostname$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/etc/resolv.conf",
+            "source": "$(sfprefix)resolv.conf$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "rw"
+            ]
+          },
+          {
+            "destination": "/var/run/secrets/kubernetes.io/serviceaccount",
+            "source": "$(sfprefix)serviceaccount$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "ro"
+            ]
+          },
+          {
+            "destination": "/etc/otelcol",
+            "source": "$(sfprefix)otelcol$",
+            "type_": "bind",
+            "options": [
+              "rbind",
+              "rprivate",
+              "ro"
+            ]
+          }
+        ],
+        "Annotations": {
+          "cdi.k8s.io/peer-pods": "nvidia\\.com/gpu=.*",
+          "io.katacontainers.config.hypervisor.default_gpus": "1",
+          "io.katacontainers.config.hypervisor.image": "projects/cohere-artifacts/global/images/podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5",
+          "io.katacontainers.config.hypervisor.machine_type": "a3-highgpu-1g",
+          "io.katacontainers.config.runtime.create_container_timeout": "1800",
+          "io.katacontainers.pkg.oci.bundle_path": "/run/containerd/io.containerd.runtime.v2.task/k8s.io/$(bundle-id)",
+          "io.katacontainers.pkg.oci.container_type": "pod_container",
+          "io.kubernetes.cri.container-name": "otelcol",
+          "io.kubernetes.cri.container-type": "container",
+          "io.kubernetes.cri.image-name": "otel/opentelemetry-collector-contrib:0.144.0@sha256:213886eb6407af91b87fa47551c3632be1a6419ff3a5114ef1e6fc364628496f",
+          "io.kubernetes.cri.sandbox-id": "^[a-z0-9]{64}$",
+          "io.kubernetes.cri.sandbox-name": "^cmp-l-cc-[0-9]+$",
+          "io.kubernetes.cri.sandbox-namespace": ""
+        },
+        "Linux": {
+          "Namespaces": [
+            {
+              "Type": "ipc",
+              "Path": ""
+            },
+            {
+              "Type": "uts",
+              "Path": ""
+            },
+            {
+              "Type": "mount",
+              "Path": ""
+            }
+          ],
+          "MaskedPaths": [
+            "/proc/acpi",
+            "/proc/kcore",
+            "/proc/keys",
+            "/proc/latency_stats",
+            "/proc/timer_list",
+            "/proc/timer_stats",
+            "/proc/sched_debug",
+            "/proc/scsi",
+            "/sys/firmware"
+          ],
+          "ReadonlyPaths": [
+            "/proc/asound",
+            "/proc/bus",
+            "/proc/fs",
+            "/proc/irq",
+            "/proc/sys",
+            "/proc/sysrq-trigger"
+          ],
+          "Devices": []
+        }
+      },
+      "storages": [],
+      "devices": [],
+      "sandbox_pidns": false,
+      "exec_commands": [],
+      "runtime_anno_patterns": {
+        "^io\\.kubernetes\\.container\\.terminationMessagePath$": "^/.*$",
+        "^io\\.kubernetes\\.container\\.terminationMessagePolicy$": "^(File|FallbackToLogsOnError)$"
+      }
+    }
+  ],
+  "common": {
+    "cpath": "/run/kata-containers/shared/containers(?:/passthrough)?",
+    "root_path": "/run/kata-containers/$(bundle-id)/rootfs",
+    "sfprefix": "^$(cpath)/(watchable/)?$(bundle-id)-[a-z0-9]{16}-",
+    "spath": "/run/kata-containers/sandbox/storage",
+    "ipv4_a": "(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])",
+    "ip_p": "[0-9]{1,5}",
+    "svc_name_downward_env": "[A-Z](?:[A-Z0-9_]{0,61}[A-Z0-9])?",
+    "dns_label": "[a-zA-Z0-9_\\.\\-]+",
+    "default_caps": [
+      "CAP_CHOWN",
+      "CAP_DAC_OVERRIDE",
+      "CAP_FSETID",
+      "CAP_FOWNER",
+      "CAP_MKNOD",
+      "CAP_NET_RAW",
+      "CAP_SETGID",
+      "CAP_SETUID",
+      "CAP_SETFCAP",
+      "CAP_SETPCAP",
+      "CAP_NET_BIND_SERVICE",
+      "CAP_SYS_CHROOT",
+      "CAP_KILL",
+      "CAP_AUDIT_WRITE"
+    ],
+    "privileged_caps": [
+      "CAP_CHOWN",
+      "CAP_DAC_OVERRIDE",
+      "CAP_DAC_READ_SEARCH",
+      "CAP_FOWNER",
+      "CAP_FSETID",
+      "CAP_KILL",
+      "CAP_SETGID",
+      "CAP_SETUID",
+      "CAP_SETPCAP",
+      "CAP_LINUX_IMMUTABLE",
+      "CAP_NET_BIND_SERVICE",
+      "CAP_NET_BROADCAST",
+      "CAP_NET_ADMIN",
+      "CAP_NET_RAW",
+      "CAP_IPC_LOCK",
+      "CAP_IPC_OWNER",
+      "CAP_SYS_MODULE",
+      "CAP_SYS_RAWIO",
+      "CAP_SYS_CHROOT",
+      "CAP_SYS_PTRACE",
+      "CAP_SYS_PACCT",
+      "CAP_SYS_ADMIN",
+      "CAP_SYS_BOOT",
+      "CAP_SYS_NICE",
+      "CAP_SYS_RESOURCE",
+      "CAP_SYS_TIME",
+      "CAP_SYS_TTY_CONFIG",
+      "CAP_MKNOD",
+      "CAP_LEASE",
+      "CAP_AUDIT_WRITE",
+      "CAP_AUDIT_CONTROL",
+      "CAP_SETFCAP",
+      "CAP_MAC_OVERRIDE",
+      "CAP_MAC_ADMIN",
+      "CAP_SYSLOG",
+      "CAP_WAKE_ALARM",
+      "CAP_BLOCK_SUSPEND",
+      "CAP_AUDIT_READ",
+      "CAP_PERFMON",
+      "CAP_BPF",
+      "CAP_CHECKPOINT_RESTORE"
+    ]
+  },
+  "sandbox": {
+    "storages": [
+      {
+        "driver": "ephemeral",
+        "driver_options": [],
+        "source": "shm",
+        "fstype": "tmpfs",
+        "options": [
+          "noexec",
+          "nosuid",
+          "nodev",
+          "mode=1777",
+          "size=67108864"
+        ],
+        "mount_point": "/run/kata-containers/sandbox/shm",
+        "fs_group": null,
+        "shared": false
+      }
+    ]
+  },
+  "request_defaults": {
+    "CreateContainerRequest": {
+      "allow_env_regex": [
+        "^HOSTNAME=$(dns_label)$",
+        "^HOME=/[A-Za-z0-9_./-]*$",
+        "^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)=(tcp|udp)://$(ipv4_a):$(ip_p)$",
+        "^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)_PROTO=(tcp|udp)$",
+        "^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)_PORT=$(ip_p)$",
+        "^$(svc_name_downward_env)_PORT_$(ip_p)_(TCP|UDP)_ADDR=$(ipv4_a)$",
+        "^$(svc_name_downward_env)_SERVICE_HOST=$(ipv4_a)$",
+        "^$(svc_name_downward_env)_SERVICE_PORT=$(ip_p)$",
+        "^$(svc_name_downward_env)_SERVICE_PORT_$(dns_label)=$(ip_p)$",
+        "^$(svc_name_downward_env)_PORT=(tcp|udp)://$(ipv4_a):$(ip_p)$",
+        "^JOB_COMPLETION_INDEX=[0-9]+$",
+        "^TERM=xterm$",
+        "^NVIDIA_VISIBLE_DEVICES=.*$",
+        "^NVIDIA_DRIVER_CAPABILITIES=.*$",
+        "^NVIDIA_REQUIRE_CUDA=.*$",
+        "^CUDA_VERSION=.*$",
+        "^LD_LIBRARY_PATH=(/usr/lib/x86_64-linux-gnu|/usr/local/nvidia/lib64|/usr/local/cuda/lib64)(:/usr/lib/x86_64-linux-gnu|:/usr/local/nvidia/lib64|:/usr/local/cuda/lib64)*$",
+        "^NVARCH=.*$",
+        "^NV_CUDA_CUDART_VERSION=.*$",
+        "^NVIDIA_CTK_LIBCUDA_DIR=.*$"
+      ]
+    },
+    "CopyFileRequest": [
+      "$(sfprefix)",
+      "^$(cpath)/$(bundle-id)/rootfs/local(/|$)"
+    ],
+    "ExecProcessRequest": {
+      "allowed_commands": [],
+      "regex": []
+    },
+    "UpdateRoutesRequest": {
+      "forbidden_device_names": [
+        "lo"
+      ],
+      "forbidden_source_regex": [
+        "^(?:0{0,4}:){0,7}0{0,3}1$",
+        "^127\\.(?:[0-9]{1,3}\\.){2}[0-9]{1,3}$"
+      ]
+    },
+    "UpdateInterfaceRequest": {
+      "allow_raw_flags": 128,
+      "forbidden_names": [
+        "lo"
+      ],
+      "forbidden_hw_addrs": [
+        "00:00:00:00:00:00"
+      ]
+    },
+    "AddARPNeighborsRequest": {
+      "forbidden_device_names": [
+        "lo"
+      ],
+      "forbidden_cidrs_regex": [
+        "^127\\.(?:[0-9]{1,3}\\.){2}[0-9]{1,3}$"
+      ],
+      "allowed_states": [
+        2,
+        128
+      ]
+    },
+    "CloseStdinRequest": false,
+    "ReadStreamRequest": true,
+    "UpdateEphemeralMountsRequest": false,
+    "WriteStreamRequest": false,
+    "GetDiagnosticDataRequest": false
+  },
+  "devices": {
+    "vfio": {
+      "device_path": "/dev/vfio/devices/vfio",
+      "nvidia": {}
+    }
+  },
+  "cluster_config": {
+    "pause_container_image": "us-central1-artifactregistry.gcr.io/gke-release/gke-release/pause:3.8@sha256:880e63f94b145e46f1b1082bb71b85e21f16b99b180b9996407d61240ceb9830",
+    "guest_pull": true,
+    "pause_container_id_policy": "v1",
+    "encrypted_emptydir": false,
+    "cgroup_mount_extras_allowed": [
+      "nsdelegate",
+      "memory_recursiveprot"
+    ]
+  }
+}'''
