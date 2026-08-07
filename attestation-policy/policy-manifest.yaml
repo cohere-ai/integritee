@@ -150,6 +150,7 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
 - model: cmp-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -160,6 +161,7 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
 - model: e4-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -170,6 +172,7 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
 - model: nmc2606-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -180,6 +183,7 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
 - model: qw3-4b-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -190,6 +194,7 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
 - model: r4f-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -200,6 +205,7 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
 - model: r4p-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -210,3 +216,4 @@ targets:
   sources:
   - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
   - e72dfcc496d62cbdac961ec57eae6c39354afa29
+  - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
