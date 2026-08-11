@@ -46,6 +46,7 @@ concurrency:
 jobs:
   release:
     runs-on: ubuntu-latest
+    environment: release
     env:
       ITA_SLOT: ${{ inputs.ita_slot || 'slot-a' }}
       REASON: ${{ inputs.reason || '' }}
@@ -87,6 +88,16 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: cohere-cc-baselines,blobheart
+
+      - name: Mint Integritee release token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
 
       - name: Install ORAS
         uses: oras-project/setup-oras@38de303aac69abb66f3e6255b7198bff35f323e3  # v2.0.0
@@ -208,7 +219,7 @@ jobs:
       - name: Create release
         if: github.event_name == 'push' || inputs.dry_run == false
         env:
-          GH_TOKEN: ${{ github.token }}
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
           VERSION: ${{ steps.version.outputs.version }}
         run: >-
           gh release create "$VERSION"
