@@ -11,7 +11,7 @@ Only the latest release of Integritee is supported with security updates. We rec
 If you discover a security vulnerability in Integritee, please report it through one of the following channels:
 
 - **GitHub Security Advisory (preferred):** [Create a private security advisory](https://github.com/cohere-ai/integritee/security/advisories/new)
-- **Email:** [inference-confidential-computing@cohere.com](mailto:inference-confidential-computing@cohere.com)
+- **Email:** [security@cohere.com](mailto:security@cohere.com)
 
 ### What to Include
 
