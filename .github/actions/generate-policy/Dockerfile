@@ -11,7 +11,7 @@ RUN apt-get update && \
 RUN pip install --no-cache-dir pyyaml
 
 ARG CVM_MEASURE_REPO=https://github.com/cohere-ai/cvm-measure.git
-ARG CVM_MEASURE_REF=11c99206c1f73242102787314b154f3a28a221b6
+ARG CVM_MEASURE_REF=160e32e60ef2309adba06de41bfaa56f74e8c080
 
 RUN git init /tmp/cvm-measure && \
     git -C /tmp/cvm-measure remote add origin "${CVM_MEASURE_REPO}" && \
