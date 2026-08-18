@@ -19,7 +19,8 @@ ${POLICY_NONCE}
 #
 # Disabled: GCP refreshes the platform TCB on its own schedule, so an expired
 # grace period takes production models offline with no action available to us.
-# Attestation currently places no constraint on platform TCB freshness.
+# Attestation currently places no constraint on platform TCB freshness; only
+# revoked TCB levels are rejected, by tcb_level_not_revoked below.
 # Re-enable these rules, together with the tcb_level_acceptable reference in
 # tdx_base_checks below, once the host TCB refresh schedule is predictable, or
 # replace them with an attester_advisory_ids allowlist.
@@ -42,8 +43,15 @@ ${POLICY_NONCE}
 # tcb_level_acceptable if { tcb_level_is_up2date }
 # tcb_level_acceptable if { tcb_level_outofdate_within_ttl }
 
+# A revoked TCB level is never acceptable, independent of the freshness rules
+# above. A token carrying no attester_tcb_status claim also fails this rule.
+tcb_level_not_revoked if {
+    input.tdx.attester_tcb_status != "Revoked"
+}
+
 tdx_base_checks if {
     # tcb_level_acceptable
+    tcb_level_not_revoked
 
     tdx := input.tdx
     tdx.tdx_mrsignerseam == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
