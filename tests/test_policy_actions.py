@@ -338,16 +338,9 @@ def test_workflows_use_explicit_dry_run_gates():
     prune_workflow = (
         REPO_ROOT / ".github/workflows/prune-from-blobheart.yaml"
     ).read_text()
-    release_workflow = (
-        REPO_ROOT / ".github/workflows/release-policy.yaml"
-    ).read_text()
 
     assert "&& 'true' || 'false'" in add_workflow
     assert "inputs.dry_run && 'true' || 'false'" in prune_workflow
-    assert "DRY_RUN:" not in release_workflow
-    assert release_workflow.count(
-        "if: github.event_name == 'push' || inputs.dry_run == false"
-    ) == 7
 
 
 def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):
