@@ -8,6 +8,7 @@ on:
     paths:
       - "attestation-policy/policy-manifest.yaml"
       - "attestation-policy/initdata/**"
+      - ".github/actions/generate-policy/generate_policy/policy-template.rego"
   workflow_dispatch:
     inputs:
       version:
