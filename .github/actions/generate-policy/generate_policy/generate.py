@@ -16,6 +16,8 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import yaml
+
 from .fetch import (
     fetch_baseline_variants,
     fetch_firmware,
@@ -36,11 +38,29 @@ DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
 PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
 MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
 
+MACHINE_TYPES_PATH = Path(__file__).parent / "machine-types.yaml"
+
 
 def validate_measurement(field: str, value: object) -> str:
     if not isinstance(value, str) or not MEASUREMENT_RE.fullmatch(value):
         raise ValueError(f"invalid or missing TDX measurement: {field}")
     return value
+
+
+def load_machine_types() -> dict[str, dict]:
+    """Load the shared machine type table."""
+    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
+
+
+def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
+    """Return the machine-types entry backing a target."""
+    machine_type = target["machine_type"]
+    machine = machine_types.get(machine_type)
+    if machine is None:
+        raise ValueError(
+            f"unknown machine type '{machine_type}' -- update machine-types.yaml"
+        )
+    return machine
 
 
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
@@ -338,6 +358,7 @@ class GenerationContext:
         self,
         *,
         target: dict,
+        ram_gib: int,
         initdata: bytes,
         podvm_tag: str,
         uki_path: Path,
@@ -346,7 +367,7 @@ class GenerationContext:
     ) -> dict:
         key = (
             target["machine_type"],
-            target["ram_gib"],
+            ram_gib,
             podvm_tag,
             baseline.firmware_sha384,
             baseline.sha256,
@@ -364,7 +385,7 @@ class GenerationContext:
             f"{baseline.firmware_sha384[:12]}/{baseline.version}..."
         )
         computed = compute_measurements(
-            ram_gib=target["ram_gib"],
+            ram_gib=ram_gib,
             initdata=initdata,
             firmware_path=baseline.firmware_path,
             baseline_path=baseline.path,
@@ -384,6 +405,7 @@ class GenerationContext:
 def process_target(
     index: int,
     target: dict,
+    machine: dict,
     manifest_file: Path,
     context: GenerationContext,
 ) -> dict:
@@ -396,6 +418,7 @@ def process_target(
     print(f"Target {index}: {model}")
     print(f"{'=' * 60}")
 
+    ram_gib = machine["ram_gib"]
     baselines = context.get_baselines(machine_type)
     podvm_ref = f"{context.podvm_image}:{podvm_tag}"
     podvm = context.get_podvm(podvm_ref, podvm_tag)
@@ -412,6 +435,7 @@ def process_target(
         )
         platform_measurements = context.get_platform_measurements(
             target=target,
+            ram_gib=ram_gib,
             initdata=initdata,
             podvm_tag=podvm_tag,
             uki_path=podvm.uki_path,
@@ -440,6 +464,7 @@ def process_target(
     target["baseline_variants"] = measured_variants
     return {
         **target,
+        **machine,
         "podvm_image": podvm_ref,
         "podvm_digest": podvm.digest,
         "firmware_sha384": primary_variant["firmware_sha384"],
@@ -467,7 +492,6 @@ def generate_policy(
         print(f"ERROR: manifest file not found: {manifest_file}", file=sys.stderr)
         sys.exit(1)
 
-    import yaml
     doc = yaml.safe_load(manifest_file.read_text()) or {}
     targets = doc.get("targets", [])
     if not targets:
@@ -476,6 +500,7 @@ def generate_policy(
 
     print(f"Loaded {len(targets)} targets from {manifest_file}")
 
+    machine_types = load_machine_types()
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     context = GenerationContext(
         baselines_repo=baselines_repo,
@@ -485,8 +510,9 @@ def generate_policy(
     predicate_targets: list[dict] = []
     for index, target in enumerate(targets):
         try:
+            machine = resolve_machine(target, machine_types)
             predicate_targets.append(
-                process_target(index, target, manifest_file, context)
+                process_target(index, target, machine, manifest_file, context)
             )
         except ValueError as error:
             print(f"ERROR: {error}", file=sys.stderr)
