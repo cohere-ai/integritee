@@ -9,7 +9,6 @@ import os
 import re
 import shutil
 import subprocess
-import sys
 import tarfile
 from pathlib import Path
 
@@ -19,16 +18,6 @@ UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
     r"[0-9a-f]{4}-[0-9a-f]{12}"
 )
-SLOTS = {
-    "slot-a": {
-        "id": "cbeedffa-e224-4664-b6b4-573fcd4133d3",
-        "name": "integritee-policy-a",
-    },
-    "slot-b": {
-        "id": "ecdf9171-2f85-47b4-9941-703118f731a8",
-        "name": "integritee-policy-b",
-    },
-}
 
 
 def run(*command: str, capture_output: bool = False) -> str:
@@ -89,45 +78,6 @@ def initialize_predicate(args: argparse.Namespace) -> None:
     args.output.write_text(json.dumps(predicate, indent=2) + "\n")
 
 
-def detect_last_slot() -> str:
-    """Read the ITA slot used by the latest release."""
-    try:
-        body = run(
-            "gh",
-            "release",
-            "view",
-            "--json",
-            "body",
-            "-q",
-            ".body",
-            capture_output=True,
-        )
-    except subprocess.CalledProcessError:
-        return ""
-    match = re.search(r"ITA Policy Slot.*?`(slot-[ab])", body)
-    return match.group(1) if match else ""
-
-
-def select_slot(args: argparse.Namespace) -> None:
-    """Select and emit the target ITA policy slot."""
-    if args.override != "auto":
-        target = args.override
-        print(f"Slot override: {target}", file=sys.stderr)
-    else:
-        last = detect_last_slot()
-        print(f"Last release used: {last or 'none detected'}", file=sys.stderr)
-        target = "slot-b" if last == "slot-a" else "slot-a"
-
-    slot = SLOTS[target]
-    print(
-        f"Targeting: {target} ({slot['name']} / {slot['id']})",
-        file=sys.stderr,
-    )
-    print(f"policy_slot={target}")
-    print(f"policy_id={slot['id']}")
-    print(f"policy_name={slot['name']}")
-
-
 def prepare_assets(args: argparse.Namespace) -> None:
     """Collect release assets and generate release notes."""
     if not UUID_RE.fullmatch(args.policy_id):
@@ -156,12 +106,7 @@ def prepare_assets(args: argparse.Namespace) -> None:
     sections = []
     if args.reason:
         sections.append(f"**Reason:** {args.reason}")
-    sections.extend(
-        (
-            f"**ITA Policy ID:** `{args.policy_id}`",
-            f"**ITA Policy Slot:** `{args.policy_slot}`",
-        )
-    )
+    sections.append(f"**ITA Policy ID:** `{args.policy_id}`")
     args.release_notes.write_text("\n\n".join(sections) + "\n")
 
 
@@ -180,14 +125,6 @@ def parser() -> argparse.ArgumentParser:
     predicate_parser.add_argument("--previous-log-index", type=int, default=0)
     predicate_parser.set_defaults(handler=initialize_predicate)
 
-    slot_parser = commands.add_parser("select-slot")
-    slot_parser.add_argument(
-        "--override",
-        choices=("auto", "slot-a", "slot-b"),
-        default="auto",
-    )
-    slot_parser.set_defaults(handler=select_slot)
-
     assets_parser = commands.add_parser("prepare-assets")
     assets_parser.add_argument("--policy", type=Path, required=True)
     assets_parser.add_argument("--manifest", type=Path, required=True)
@@ -196,11 +133,6 @@ def parser() -> argparse.ArgumentParser:
     assets_parser.add_argument("--output-dir", type=Path, required=True)
     assets_parser.add_argument("--release-notes", type=Path, required=True)
     assets_parser.add_argument("--policy-id", required=True)
-    assets_parser.add_argument(
-        "--policy-slot",
-        choices=("slot-a", "slot-b"),
-        required=True,
-    )
     assets_parser.add_argument("--reason", default="")
     assets_parser.set_defaults(handler=prepare_assets)
     return result
