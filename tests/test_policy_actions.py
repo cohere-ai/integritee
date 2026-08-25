@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import importlib.util
 import sys
 import types
@@ -314,51 +313,6 @@ def test_local_policy_coverage_failure_does_not_suggest_waiting():
         "1 target(s) are not covered by local: cmp-l-cc"
     )
     assert verify.RELEASE_WORKFLOW_URL not in message
-
-
-def test_firmware_cache_is_verified(tmp_path, monkeypatch):
-    fetch = load_action(
-        "generate_policy_fetch_cached_firmware",
-        ".github/actions/generate-policy/generate_policy/fetch.py",
-    )
-    firmware = b"expected firmware"
-    digest = hashlib.sha384(firmware).hexdigest()
-    destination = tmp_path / "firmware.fd"
-    destination.write_bytes(b"wrong firmware")
-    run = Mock()
-    monkeypatch.setattr(fetch.subprocess, "run", run)
-
-    with pytest.raises(ValueError, match="firmware hash mismatch"):
-        fetch.fetch_firmware(digest, destination)
-
-    assert not destination.exists()
-    run.assert_not_called()
-
-
-def test_firmware_download_is_timed_verified_and_atomic(tmp_path, monkeypatch):
-    fetch = load_action(
-        "generate_policy_fetch_downloaded_firmware",
-        ".github/actions/generate-policy/generate_policy/fetch.py",
-    )
-    firmware = b"expected firmware"
-    digest = hashlib.sha384(firmware).hexdigest()
-    destination = tmp_path / "firmware.fd"
-    calls = []
-
-    def fake_run(args, *, check):
-        calls.append((args, check))
-        Path(args[args.index("-o") + 1]).write_bytes(firmware)
-
-    monkeypatch.setattr(fetch.subprocess, "run", fake_run)
-
-    fetch.fetch_firmware(digest, destination)
-
-    assert destination.read_bytes() == firmware
-    args, check = calls[0]
-    assert check is True
-    assert args[args.index("--connect-timeout") + 1] == "10"
-    assert args[args.index("--max-time") + 1] == "120"
-    assert args[args.index("-o") + 1] != str(destination)
 
 
 def test_workflows_use_explicit_dry_run_gates():

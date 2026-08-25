@@ -13,7 +13,7 @@ This repository contains:
 ## How It Works
 
 ```
-podspec.yaml ─► genpolicy ─► Kata policy + initdata
+Blobheart podspec ─► genpolicy ─► Kata policy + initdata
                                      │
                                      ▼
               OVMF + UKI + baseline + initdata ─► cvm-measure ─► MRTD + RTMR[0-3]
@@ -42,20 +42,25 @@ TNG discovers the latest policy by fetching the latest GitHub release:
 GET /repos/cohere-ai/integritee/releases/latest
 ```
 
-Then downloads `{model}/attestation.sigstore.json` and verifies the Sigstore bundle
-locally before extracting the `policy_id` for ITA token requests.
+Then downloads `attestation-bundle.sigstore.json` and verifies the Sigstore bundle
+locally before extracting the `policy_id` for ITA token requests. The verified
+predicate is the authoritative source for the policy ID; consumers should read it
+from there rather than hardcoding it.
 
 ## For Auditors
 
-Every release contains per-model artifacts:
+Every release contains:
 
-- `{model}/measurements.json` -- expected TDX register values (MRTD, RTMR[0-3])
-- `{model}/kata-policy.rego` -- full Kata agent policy text
-- `{model}/predicate.json` -- complete in-toto predicate with all metadata
-- `{model}/attestation.sigstore.json` -- Sigstore bundle (verifiable against public Rekor)
+- `attestation-policy.rego` -- the composite ITA appraisal policy that was uploaded
+- `policy-manifest.yaml` -- every workload the policy covers
+- `policy-manifest-bundle.tar.gz` -- the manifest plus its content-addressed initdata
+- `predicate.json` -- in-toto predicate: per-target measurements and baseline refs,
+  `cvm_measure_version`, the `policy_id`, the manifest commit, and the chain link
+- `attestation-bundle.sigstore.json` -- Sigstore bundle over `attestation-policy.rego`,
+  verifiable against public Rekor
 
-Each model's Sigstore attestation includes a `previous_rekor_log_index` field that
-chains entries together, forming a per-model linked list in the public Rekor transparency log.
+The predicate includes a `previous_rekor_log_index` field that chains releases
+together, forming a linked list in the public Rekor transparency log.
 
 ## Repository Structure
 
