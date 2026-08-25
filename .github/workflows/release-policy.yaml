@@ -127,12 +127,11 @@ jobs:
       # ----------------------------------------------------------------
       # Upload to ITA
       # ----------------------------------------------------------------
-      - name: Verify manifest targets use the managed ITA policy
+      - name: Validate policy manifest
         if: github.event_name == 'push' || inputs.dry_run == false
         uses: ./.github/actions/validate-manifest
         with:
           manifest-file: attestation-policy/policy-manifest.yaml
-          policy-id: ${{ env.ITA_POLICY_ID }}
 
       - name: Upload policy to ITA
         if: github.event_name == 'push' || inputs.dry_run == false
