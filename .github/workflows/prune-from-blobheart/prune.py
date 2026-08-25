@@ -2,7 +2,8 @@
 """Prune targets from the policy manifest by retiring blobheart sources.
 
 For each target, removes retired sources from its `sources` list. If the list
-becomes empty, the target is removed from the manifest entirely.
+becomes empty, the target is removed from the manifest entirely, along with any
+initdata file no longer referenced by a surviving target.
 
 Warns if a provided source is not found in any target's sources list (it may
 not have introduced any changes, or was processed as all-duplicate).
@@ -20,6 +21,15 @@ import sys
 from pathlib import Path
 
 import yaml
+
+
+def prune_initdata(manifest_path: Path, targets: list[dict]) -> None:
+    """Delete initdata files the updated manifest no longer references."""
+    referenced = {Path(target["initdata_file"]).name for target in targets}
+    for path in sorted((manifest_path.parent / "initdata").glob("*.toml")):
+        if path.name not in referenced:
+            path.unlink()
+            print(f"  DELETE initdata: {path.name}", file=sys.stderr)
 
 
 def main() -> None:
@@ -78,6 +88,8 @@ def main() -> None:
     doc["targets"] = remaining_targets
     with open(manifest_path, "w") as f:
         yaml.dump(doc, f, default_flow_style=False, sort_keys=False)
+
+    prune_initdata(manifest_path, remaining_targets)
 
     remaining = len(remaining_targets)
     print(f"\nPrune complete: {removed} removed, {trimmed} trimmed, "
