@@ -1,4 +1,8 @@
-"""Tests for versioned TDX baseline discovery and policy rendering."""
+"""Tests for the generate-policy action.
+
+Covers artifact fetching (firmware, versioned TDX baselines), initdata
+measurement, and Rego policy rendering.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import Mock
 
 import pytest
 
@@ -81,6 +86,43 @@ def test_github_api_errors_include_response_details(monkeypatch):
 
     with pytest.raises(RuntimeError, match="API rate limit exceeded"):
         fetch._gh_api("/repos/owner/repo/contents/file")
+
+
+def test_firmware_cache_is_verified(tmp_path, monkeypatch):
+    firmware = b"expected firmware"
+    digest = hashlib.sha384(firmware).hexdigest()
+    destination = tmp_path / "firmware.fd"
+    destination.write_bytes(b"wrong firmware")
+    run = Mock()
+    monkeypatch.setattr(fetch.subprocess, "run", run)
+
+    with pytest.raises(ValueError, match="firmware hash mismatch"):
+        fetch.fetch_firmware(digest, destination)
+
+    assert not destination.exists()
+    run.assert_not_called()
+
+
+def test_firmware_download_is_timed_verified_and_atomic(tmp_path, monkeypatch):
+    firmware = b"expected firmware"
+    digest = hashlib.sha384(firmware).hexdigest()
+    destination = tmp_path / "firmware.fd"
+    calls = []
+
+    def fake_run(args, *, check):
+        calls.append((args, check))
+        Path(args[args.index("-o") + 1]).write_bytes(firmware)
+
+    monkeypatch.setattr(fetch.subprocess, "run", fake_run)
+
+    fetch.fetch_firmware(digest, destination)
+
+    assert destination.read_bytes() == firmware
+    args, check = calls[0]
+    assert check is True
+    assert args[args.index("--connect-timeout") + 1] == "10"
+    assert args[args.index("--max-time") + 1] == "120"
+    assert args[args.index("-o") + 1] != str(destination)
 
 
 def test_fetches_all_firmware_and_event_versions(monkeypatch):
@@ -295,6 +337,57 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
         f"{json.dumps(injected_version)}"
     ) in policy
     assert "\ndefault match := true\n" not in policy
+
+
+def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path):
+    # PLATFORM_FIELDS excludes rtmr3, which the workload block requires.
+    measurements = {
+        field: "a" * 96
+        for field in generate.PLATFORM_FIELDS
+    }
+    measurements["rtmr3"] = "b" * 96
+    target = {
+        "model": "cmp-l",
+        "measurements": measurements,
+        "baseline_variants": [
+            {
+                "version": "v1",
+                "firmware_sha384": "1" * 96,
+                "measurements": measurements,
+            },
+        ],
+    }
+    output = tmp_path / "policy.rego"
+
+    generate.render_policy(
+        [target],
+        "580.159.04",
+        ACTION_ROOT / "generate_policy" / "policy-template.rego",
+        output,
+    )
+    policy = output.read_text()
+
+    assert policy.count("tdx_base_checks if {") == 1
+    assert "tcb_level_not_revoked" in policy
+    assert "tdx.tdx_is_debuggable == false" in policy
+    assert "tdx.tdx_seamsvn >= 271" in policy
+
+    # Fields constant across every target belong to tdx_base_checks alone. A
+    # second occurrence means a generated per-target block re-asserted one,
+    # which silently makes it a per-target value instead.
+    for field in (
+        "tdx_mrsignerseam",
+        "tdx_mrconfigid",
+        "tdx_mrowner",
+        "tdx_mrownerconfig",
+        "tdx_seam_attributes",
+        "tdx_td_attributes",
+    ):
+        assert policy.count(f"tdx.{field} ==") == 1, field
+
+    # Pinning either of these would break on any TDX module update.
+    assert "tdx.tdx_mrseam ==" not in policy
+    assert "tdx.tdx_tee_tcb_svn ==" not in policy
 
 
 @pytest.mark.parametrize("missing_field", generate.PLATFORM_FIELDS)
