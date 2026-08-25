@@ -5,10 +5,6 @@ inputs:
   manifest-file:
     description: Policy manifest YAML file
     required: true
-  policy-id:
-    description: ITA policy ID that every target initdata must contain
-    required: false
-    default: ""
 
 runs:
   using: composite
@@ -21,8 +17,6 @@ runs:
       shell: bash
       env:
         MANIFEST_FILE: ${{ inputs.manifest-file }}
-        POLICY_ID: ${{ inputs.policy-id }}
       run: >-
         python3 "${{ github.action_path }}/validate_manifest.py"
         "$MANIFEST_FILE"
-        --policy-id "$POLICY_ID"
