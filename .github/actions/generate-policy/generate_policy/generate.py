@@ -33,12 +33,29 @@ from .measure import (
 PLATFORM_PLACEHOLDER = "${TDX_PLATFORM_MATCH_BLOCKS}"
 WORKLOAD_PLACEHOLDER = "${TDX_WORKLOAD_MATCH_BLOCKS}"
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
-DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
+DRIVER_VERSIONS_PLACEHOLDER = "${NVIDIA_DRIVER_VERSIONS}"
+PLACEHOLDERS = (
+    PLATFORM_PLACEHOLDER,
+    WORKLOAD_PLACEHOLDER,
+    NONCE_PLACEHOLDER,
+    DRIVER_VERSIONS_PLACEHOLDER,
+)
 
 PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
 MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
 
 MACHINE_TYPES_PATH = Path(__file__).parent / "machine-types.yaml"
+
+# The TEEs ITA can appraise. A target on any other one produces evidence ITA
+# cannot read and has no baseline to look up, so it is skipped rather than
+# measured.
+ITA_SUPPORTED_TEES = frozenset({"tdx"})
+
+EMPTY_POLICY_HEADER = """\
+# WARNING: this policy matched no TDX target in the manifest. Every generated
+# section is empty, so it admits nothing.
+
+"""
 
 
 def validate_measurement(field: str, value: object) -> str:
@@ -70,10 +87,16 @@ def to_nvat_driver_version(apt_pkg_version: str) -> str:
     return version
 
 
-def resolve_nvidia_driver_version(
+def resolve_nvidia_driver_versions(
     targets: list[dict], artifacts_dir: Path
-) -> str:
-    """Resolve the NVIDIA driver version from UKI measurements.json files."""
+) -> list[str]:
+    """Resolve accepted NVIDIA driver versions from UKI measurements.json files.
+
+    Every version comes from a target's own PodVM image, so a manifest spanning
+    images that disagree accepts each of them rather than failing generation,
+    the same disjunction a multi-target manifest already implies for platform
+    and workload blocks.
+    """
     versions: dict[str, str] = {}
     for target in targets:
         podvm_tag = target.get("podvm_image_tag")
@@ -93,22 +116,31 @@ def resolve_nvidia_driver_version(
             print(f"ERROR: {meas_file}: {error}", file=sys.stderr)
             sys.exit(1)
 
-    if not versions:
-        print("ERROR: no podvm_image_tag in any target", file=sys.stderr)
-        sys.exit(1)
-
-    unique = set(versions.values())
-    if len(unique) > 1:
-        details = ", ".join(f"{t}={v}" for t, v in sorted(versions.items()))
-        print(f"ERROR: driver mismatch across PodVM images ({details})", file=sys.stderr)
-        sys.exit(1)
-
-    return unique.pop()
+    return sorted(set(versions.values()))
 
 
 def generate_nonce_rule() -> str:
     nonce = str(uuid.uuid4())
     return f'integritee_nonce := "{nonce}"'
+
+
+def generate_driver_versions_block(versions: list[str]) -> str:
+    """Emit the accepted driver versions as a rule-local set assignment.
+
+    A rule-local set tested by reference is the form with ITA release history;
+    a top-level collection and a defaulted function are both constructs ITA
+    rejected in the past.
+    """
+    if not versions:
+        return "    accepted_gpu_driver_versions := {}"
+    entries = ",\n".join(
+        f"        {json.dumps(version)}" for version in versions
+    )
+    return "\n".join([
+        "    accepted_gpu_driver_versions := {",
+        entries,
+        "    }",
+    ])
 
 
 def generate_platform_match_block(
@@ -149,13 +181,18 @@ def generate_workload_match_block(
 
 def render_policy(
     targets: list[dict],
-    nv_driver_version: str,
+    nv_driver_versions: list[str],
     template_path: Path,
     output_path: Path,
 ) -> None:
-    """Render the Rego policy file from targets with pre-computed measurements."""
+    """Render the Rego policy file from targets with pre-computed measurements.
+
+    An empty target list is a legitimate input, not a failure: it renders an
+    inert policy that admits nothing, which is what revoking every target looks
+    like. The template's defaults keep that policy loadable.
+    """
     template = template_path.read_text()
-    for placeholder in (PLATFORM_PLACEHOLDER, WORKLOAD_PLACEHOLDER):
+    for placeholder in PLACEHOLDERS:
         if placeholder not in template:
             print(
                 f"ERROR: Template does not contain {placeholder}",
@@ -203,10 +240,6 @@ def render_policy(
                 ))
             variant_count += 1
 
-    if not variant_count:
-        print("ERROR: No targets to generate policy from", file=sys.stderr)
-        sys.exit(1)
-
     policy = template.replace(
         PLATFORM_PLACEHOLDER,
         "\n\n".join(platform_blocks),
@@ -217,22 +250,24 @@ def render_policy(
     )
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
     policy = policy.replace(
-        DRIVER_VERSION_PLACEHOLDER,
-        json.dumps(nv_driver_version),
+        DRIVER_VERSIONS_PLACEHOLDER,
+        generate_driver_versions_block(nv_driver_versions),
     )
 
-    if DRIVER_VERSION_PLACEHOLDER in policy:
-        print(f"ERROR: {DRIVER_VERSION_PLACEHOLDER} not substituted", file=sys.stderr)
-        sys.exit(1)
+    if not variant_count:
+        # Warn on inert policy
+        print("::warning::ITA policy matched no TDX targets; it admits nothing")
+        policy = EMPTY_POLICY_HEADER + policy
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(policy)
 
-    model_names = [t["model"] for t in targets]
+    model_names = [target["model"] for target in targets]
     print(
         f"Generated ITA policy with {variant_count} TDX measurement variant(s) "
         f"from {len(targets)} target(s): "
-        f"{', '.join(model_names)} (driver={nv_driver_version}"
+        f"{', '.join(model_names) or 'none'} "
+        f"(drivers={', '.join(nv_driver_versions) or 'none'}"
         f") -> {output_path}"
     )
 
@@ -507,13 +542,22 @@ def generate_policy(
         podvm_image=podvm_image,
         artifacts_dir=artifacts_dir,
     )
+    ita_targets: list[dict] = []
     predicate_targets: list[dict] = []
     for index, target in enumerate(targets):
         try:
             machine = resolve_machine(target, machine_types)
+            if machine["tee"] not in ITA_SUPPORTED_TEES:
+                supported = ", ".join(sorted(ITA_SUPPORTED_TEES))
+                print(
+                    f"::notice::Skipping {target['model']}: ITA appraises "
+                    f"{supported} evidence, not {machine['tee']}"
+                )
+                continue
             predicate_targets.append(
                 process_target(index, target, machine, manifest_file, context)
             )
+            ita_targets.append(target)
         except ValueError as error:
             print(f"ERROR: {error}", file=sys.stderr)
             sys.exit(1)
@@ -521,10 +565,12 @@ def generate_policy(
     print(f"\n{'=' * 60}")
     print("Generating ITA policy")
     print(f"{'=' * 60}")
-    nv_driver_version = resolve_nvidia_driver_version(targets, artifacts_dir)
+    nv_driver_versions = resolve_nvidia_driver_versions(
+        ita_targets, artifacts_dir
+    )
     render_policy(
-        targets,
-        nv_driver_version,
+        ita_targets,
+        nv_driver_versions,
         template_path,
         policy_output,
     )
