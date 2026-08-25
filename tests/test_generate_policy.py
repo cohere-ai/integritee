@@ -20,6 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTION_ROOT = REPO_ROOT / ".github" / "actions" / "generate-policy"
 sys.path.insert(0, str(ACTION_ROOT))
 
+# The schema of machine-types.yaml. Changing the table's structure means
+# updating this set and the table; nothing else should need to name a field.
+MACHINE_TYPE_FIELDS = {"platform", "tee", "ram_gib"}
+
 from generate_policy import fetch  # noqa: E402
 from generate_policy import generate  # noqa: E402
 from generate_policy import measure  # noqa: E402
@@ -29,6 +33,27 @@ def test_computes_rtmr3_directly_from_initdata():
     assert measure.compute_initdata_rtmr3(b"test") == (
         "e6c7526759cbdca9a11ba0bf7efe6d2193308532a85ba7e969889200de"
         "19583f4d3746983b22bf4638d571ec8aeabb85"
+    )
+
+
+def test_every_machine_type_declares_the_expected_fields():
+    """Pin the schema of machine-types.yaml.
+
+    An exact field match rejects a missing field, a stray one, and a typo like
+    ram_gb, none of which the consuming code would notice until it read the
+    entry.
+    """
+    table = generate.load_machine_types()
+    assert table, "machine-types.yaml must not be empty"
+
+    mismatched = {
+        machine_type: sorted(set(entry) ^ MACHINE_TYPE_FIELDS)
+        for machine_type, entry in table.items()
+        if set(entry) != MACHINE_TYPE_FIELDS
+    }
+    assert not mismatched, (
+        f"machine-types.yaml entries disagree with the expected schema "
+        f"{sorted(MACHINE_TYPE_FIELDS)}: {mismatched}"
     )
 
 
@@ -514,13 +539,11 @@ def test_generate_policy_measures_and_records_each_baseline(
         "  - model: cmp-l\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
-        "    ram_gib: 234\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
         "  - model: cmp-l-old\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
-        "    ram_gib: 234\n"
         f"    initdata_file: initdata/{second_sha384}.toml\n"
         f"    initdata_sha384: {second_sha384}\n"
     )
@@ -543,6 +566,10 @@ def test_generate_policy_measures_and_records_each_baseline(
         "v1",
         "v2",
     ]
+    # The manifest carries no machine attributes; every field of the table
+    # entry is resolved at generation time and must reach the signed predicate.
+    machine = generate.load_machine_types()["a3-highgpu-1g"]
+    assert {field: target[field] for field in machine} == machine
     assert baseline_calls == [
         ("owner/baselines", "a3-highgpu-1g"),
     ]

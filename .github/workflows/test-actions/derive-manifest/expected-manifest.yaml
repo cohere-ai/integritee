@@ -2,36 +2,30 @@ targets:
 - model: cmp-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  ram_gib: 234
   initdata_file: initdata/5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13.toml
   initdata_sha384: 5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13
 - model: e4-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  ram_gib: 234
   initdata_file: initdata/4a4a60804cfc32b3f74ef9cf5ca221c5bba05d5d627774a26b1d601f15fcf90cbec9541e51cd3bb7d4cd75ae389494cd.toml
   initdata_sha384: 4a4a60804cfc32b3f74ef9cf5ca221c5bba05d5d627774a26b1d601f15fcf90cbec9541e51cd3bb7d4cd75ae389494cd
 - model: nmc2606-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  ram_gib: 234
   initdata_file: initdata/a0ef1696e2fb874630d957a811536b683c27259d3374db8572ce772d680956a803042d087bb1ef605c54adb57d8ee333.toml
   initdata_sha384: a0ef1696e2fb874630d957a811536b683c27259d3374db8572ce772d680956a803042d087bb1ef605c54adb57d8ee333
 - model: qw3-4b-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  ram_gib: 234
   initdata_file: initdata/a75964c5cceebb02fe75c16b272344b25bbfed43b5fdb00e284d1a9ab8a8ac9db1cb30529f056a17dc59d947d9187963.toml
   initdata_sha384: a75964c5cceebb02fe75c16b272344b25bbfed43b5fdb00e284d1a9ab8a8ac9db1cb30529f056a17dc59d947d9187963
 - model: r4f-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  ram_gib: 234
   initdata_file: initdata/d0aec9a8da0a69667c795f435e14295461494abc6c1e9b695d1cc1f21f79de17633e38423f4828d89d7be36d73828d68.toml
   initdata_sha384: d0aec9a8da0a69667c795f435e14295461494abc6c1e9b695d1cc1f21f79de17633e38423f4828d89d7be36d73828d68
 - model: r4p-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  ram_gib: 234
   initdata_file: initdata/56265cfc797c1682a632cc30acca88452a1642ad37f2f36355fd2ccead7482fd04c4410ad4cc0cf6728e606e0eaeaa4a.toml
   initdata_sha384: 56265cfc797c1682a632cc30acca88452a1642ad37f2f36355fd2ccead7482fd04c4410ad4cc0cf6728e606e0eaeaa4a

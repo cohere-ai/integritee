@@ -16,7 +16,6 @@ CONTENT_FIELDS = (
     "model",
     "machine_type",
     "podvm_image_tag",
-    "ram_gib",
 )
 REQUIRED_FIELDS = set(CONTENT_FIELDS) | {
     "initdata_file",
@@ -25,6 +24,12 @@ REQUIRED_FIELDS = set(CONTENT_FIELDS) | {
 }
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA384_RE = re.compile(r"[0-9a-f]{96}")
+
+# Shared with derive.py and the generator; see the header of the table itself.
+MACHINE_TYPES_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "generate-policy/generate_policy/machine-types.yaml"
+)
 
 
 def content_hash(target: dict[str, Any], initdata_sha384: str) -> str:
@@ -58,10 +63,16 @@ def resolve_initdata(target: dict[str, Any], manifest_path: Path) -> str:
     return digest
 
 
+def load_machine_types() -> dict[str, dict]:
+    """Load the shared machine type table."""
+    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
+
+
 def validate_target(
     target: Any,
     index: int,
     manifest_path: Path,
+    machine_types: dict[str, dict],
 ) -> tuple[str | None, list[str]]:
     """Validate one manifest target."""
     label = f"target {index}"
@@ -76,8 +87,11 @@ def validate_target(
     for field in ("model", "machine_type", "podvm_image_tag"):
         if not isinstance(target[field], str) or not target[field]:
             errors.append(f"{label} has invalid {field}")
-    if not isinstance(target["ram_gib"], int) or target["ram_gib"] <= 0:
-        errors.append(f"{label} has invalid ram_gib")
+    if target["machine_type"] not in machine_types:
+        errors.append(
+            f"{label} has unknown machine type "
+            f"'{target['machine_type']}' -- update machine-types.yaml"
+        )
 
     sources = target["sources"]
     if not isinstance(sources, list) or not sources:
@@ -105,10 +119,13 @@ def validate_manifest(path: Path) -> list[str]:
     if not isinstance(targets, list) or not targets:
         return ["policy manifest must contain a non-empty targets list"]
 
+    machine_types = load_machine_types()
     errors: list[str] = []
     hashes: set[str] = set()
     for index, target in enumerate(targets):
-        target_hash, target_errors = validate_target(target, index, path)
+        target_hash, target_errors = validate_target(
+            target, index, path, machine_types
+        )
         errors.extend(target_errors)
         if target_hash is not None:
             if target_hash in hashes:
