@@ -943,3 +943,18 @@ def test_stale_policies_are_cleared_before_a_run(tmp_path, capsys):
     assert not stale.exists()
     assert bystander.exists()
     assert str(stale) in capsys.readouterr().out
+
+
+def test_policy_output_dir_is_workspace_relative(monkeypatch):
+    """Because the paths this action reports are used from the host.
+
+    Inside the container the workspace is /github/workspace, a path that does
+    not exist on the runner, so an absolute path here would be reported to
+    steps that then cannot find the file it names.
+    """
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/github/workspace")
+
+    output_dir = generate.policy_output_dir()
+
+    assert not output_dir.is_absolute()
+    assert "github/workspace" not in str(output_dir)

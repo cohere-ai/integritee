@@ -82,7 +82,9 @@ choose which services to generate for and pass no output path:
 
 The action writes to `generated-policies/` in the workspace and reports
 `ita-policy-file` and `ita-target-count`, so every later step reads a path the
-generator wrote rather than a literal it has to keep in agreement.
+generator wrote rather than a literal it has to keep in agreement. Reported
+paths are workspace-relative, since the action runs in a container where the
+workspace is `/github/workspace` and the steps that consume them do not.
 
 A requested policy is always written, even when it matched no target -- an
 empty policy admits nothing, which is what revoking withdrawn targets looks
