@@ -1,6 +1,7 @@
 """Entrypoint for the generate-policy Docker action.
 
-Thin shell that parses environment inputs and delegates to generate.py.
+Thin shell that parses environment inputs, builds the renderers, and
+delegates to the shared pipeline.
 
 Invoked via: python -m generate_policy
 """
@@ -12,6 +13,7 @@ import sys
 from pathlib import Path
 
 from .generate import generate_policy
+from .ita import ItaRenderer
 
 
 def main() -> None:
@@ -34,11 +36,12 @@ def main() -> None:
 
     generate_policy(
         manifest_file=Path(manifest_file),
-        baselines_repo=os.environ["BASELINES_REPO"],
         podvm_image=os.environ["PODVM_IMAGE"],
         artifacts_dir=Path(artifacts_dir),
-        template_path=Path(__file__).parent / "policy-template.rego",
-        policy_output=Path(policy_file),
+        renderers=[ItaRenderer(
+            baselines_repo=os.environ["BASELINES_REPO"],
+            policy_output=Path(policy_file),
+        )],
         predicate_file=Path(predicate_env) if predicate_env else None,
     )
 
