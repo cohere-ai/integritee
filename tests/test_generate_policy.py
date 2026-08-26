@@ -19,7 +19,6 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTION_ROOT = REPO_ROOT / ".github" / "actions" / "generate-policy"
-TEMPLATE = ACTION_ROOT / "generate_policy" / "policy-template.rego"
 OPA = shutil.which("opa")
 sys.path.insert(0, str(ACTION_ROOT))
 
@@ -45,7 +44,10 @@ MACHINE_TYPE_FIELDS = {"platform", "tee", "ram_gib"}
 
 from generate_policy import fetch  # noqa: E402
 from generate_policy import generate  # noqa: E402
+from generate_policy import ita  # noqa: E402
 from generate_policy import measure  # noqa: E402
+
+TEMPLATE = ita.TEMPLATE
 
 
 def test_computes_rtmr3_directly_from_initdata():
@@ -347,10 +349,9 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     }
     output = tmp_path / "policy.rego"
 
-    generate.render_policy(
+    ita.render_policy(
         [target],
         ["580.159.04"],
-        TEMPLATE,
         output,
     )
 
@@ -364,13 +365,12 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     assert "# Model: cmp-l (Initdata: unknown)" in policy
     assert 'accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]' in policy
     assert '        "580.159.04"\n' in policy
-    assert generate.EMPTY_POLICY_HEADER not in policy
+    assert ita.EMPTY_POLICY_HEADER not in policy
 
     injected_version = '580.159.04"\n}\ndefault match := true\n#'
-    generate.render_policy(
+    ita.render_policy(
         [target],
         [injected_version],
-        TEMPLATE,
         output,
     )
     policy = output.read_text()
@@ -382,7 +382,7 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     # PLATFORM_FIELDS excludes rtmr3, which the workload block requires.
     measurements = {
         field: "a" * 96
-        for field in generate.PLATFORM_FIELDS
+        for field in ita.PLATFORM_FIELDS
     }
     measurements["rtmr3"] = "b" * 96
     target = {
@@ -398,10 +398,9 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     }
     output = tmp_path / "policy.rego"
 
-    generate.render_policy(
+    ita.render_policy(
         [target],
         ["580.159.04"],
-        TEMPLATE,
         output,
     )
     policy = output.read_text()
@@ -434,12 +433,12 @@ def _unsupported_machine_type() -> str:
     return next(
         machine_type
         for machine_type, entry in generate.load_machine_types().items()
-        if entry["tee"] not in generate.ITA_SUPPORTED_TEES
+        if entry["tee"] not in ita.SUPPORTED_TEES
     )
 
 
 def _tdx_target() -> dict:
-    measurements = {field: "a" * 96 for field in generate.PLATFORM_FIELDS}
+    measurements = {field: "a" * 96 for field in ita.PLATFORM_FIELDS}
     measurements["rtmr3"] = "b" * 96
     return {
         "model": "cmp-l",
@@ -455,7 +454,7 @@ def _tdx_target() -> dict:
 def test_renders_an_inert_policy_when_nothing_matched(tmp_path, capsys):
     output = tmp_path / "policy.rego"
 
-    generate.render_policy([], [], TEMPLATE, output)
+    ita.render_policy([], [], output)
 
     policy = output.read_text()
     # Every generated section is absent, so only the defaults define these.
@@ -467,7 +466,7 @@ def test_renders_an_inert_policy_when_nothing_matched(tmp_path, capsys):
     assert "accepted_gpu_driver_versions := {}" in policy
     assert '""' not in policy
 
-    assert generate.EMPTY_POLICY_HEADER in policy
+    assert ita.EMPTY_POLICY_HEADER in policy
     assert "::warning::" in capsys.readouterr().out
 
 
@@ -477,10 +476,9 @@ def _render_module(tmp_path: Path, targets: list[dict]) -> Path:
     ITA supplies the package declaration, so the uploaded file carries none.
     """
     policy = tmp_path / "policy.rego"
-    generate.render_policy(
+    ita.render_policy(
         targets,
         ["580.159.04"] if targets else [],
-        TEMPLATE,
         policy,
     )
     module = tmp_path / "module.rego"
@@ -608,11 +606,11 @@ def test_gpu_driver_version_must_be_one_the_policy_lists(
         assert value is None
 
 
-@pytest.mark.parametrize("missing_field", generate.PLATFORM_FIELDS)
+@pytest.mark.parametrize("missing_field", ita.PLATFORM_FIELDS)
 def test_platform_match_requires_every_measurement(missing_field):
     measurements = {
         field: "a" * 96
-        for field in generate.PLATFORM_FIELDS
+        for field in ita.PLATFORM_FIELDS
     }
     del measurements[missing_field]
 
@@ -620,21 +618,21 @@ def test_platform_match_requires_every_measurement(missing_field):
         ValueError,
         match=f"invalid or missing TDX measurement: {missing_field}",
     ):
-        generate.generate_platform_match_block("baseline", measurements)
+        ita.generate_platform_match_block("baseline", measurements)
 
 
 def test_measurement_values_cannot_inject_rego():
     injected = 'a' * 96 + '"\n}\ndefault match := true\n#'
     measurements = {
         field: "a" * 96
-        for field in generate.PLATFORM_FIELDS
+        for field in ita.PLATFORM_FIELDS
     }
     measurements["mrtd"] = injected
 
     with pytest.raises(ValueError, match="TDX measurement: mrtd"):
-        generate.generate_platform_match_block("baseline", measurements)
+        ita.generate_platform_match_block("baseline", measurements)
     with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
-        generate.generate_workload_match_block("model", "initdata", injected)
+        ita.generate_workload_match_block("model", "initdata", injected)
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -660,12 +658,10 @@ def test_generate_policy_measures_and_records_each_baseline(
         baseline_calls.append((repo, machine))
         return variants
 
-    monkeypatch.setattr(
-        generate, "fetch_baseline_variants", fake_baseline_variants
-    )
+    monkeypatch.setattr(ita, "fetch_baseline_variants", fake_baseline_variants)
     firmware_calls = []
     monkeypatch.setattr(
-        generate,
+        ita,
         "fetch_firmware",
         lambda *args: firmware_calls.append(args),
     )
@@ -683,7 +679,7 @@ def test_generate_policy_measures_and_records_each_baseline(
 
     monkeypatch.setattr(generate, "fetch_oci_digest", fake_oci_digest)
     monkeypatch.setattr(
-        generate,
+        ita,
         "resolve_nvidia_driver_versions",
         lambda targets, artifacts: ["580.159.04"],
     )
@@ -691,7 +687,7 @@ def test_generate_policy_measures_and_records_each_baseline(
     measurement_calls = []
     rtmr3_calls = []
     monkeypatch.setattr(
-        generate,
+        ita,
         "compute_initdata_rtmr3",
         lambda initdata: rtmr3_calls.append(initdata) or "6" * 96,
     )
@@ -702,7 +698,7 @@ def test_generate_policy_measures_and_records_each_baseline(
         baseline_hash_calls.append(data)
         return real_sha256(data)
 
-    monkeypatch.setattr(generate.hashlib, "sha256", tracked_sha256)
+    monkeypatch.setattr(ita.hashlib, "sha256", tracked_sha256)
 
     def fake_measurements(*, baseline_path, output_dir, **kwargs):
         output_dir.mkdir(parents=True)
@@ -716,7 +712,7 @@ def test_generate_policy_measures_and_records_each_baseline(
             "rtmr2": "5" * 96,
         }
 
-    monkeypatch.setattr(generate, "compute_measurements", fake_measurements)
+    monkeypatch.setattr(ita, "compute_measurements", fake_measurements)
 
     manifest = tmp_path / "manifest.yaml"
     initdata = b"test"
@@ -751,11 +747,12 @@ def test_generate_policy_measures_and_records_each_baseline(
 
     generate.generate_policy(
         manifest_file=manifest,
-        baselines_repo="owner/baselines",
         podvm_image="ghcr.io/owner/podvm",
         artifacts_dir=tmp_path / "artifacts",
-        template_path=TEMPLATE,
-        policy_output=policy,
+        renderers=[ita.ItaRenderer(
+            baselines_repo="owner/baselines",
+            policy_output=policy,
+        )],
         predicate_file=predicate,
     )
 
@@ -790,3 +787,67 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert policy_text.count("matches_tdx_workload if {") == 2
     assert "# Model: cmp-l (Initdata:" in policy_text
     assert "# Model: cmp-l-old (Initdata:" in policy_text
+
+
+class _StubRenderer:
+    """A renderer that records its targets instead of measuring them."""
+
+    def __init__(self, name: str, tee: str | None, entry: dict):
+        self.name = name
+        self.tee = tee
+        self.entry = entry
+        self.seen: list[str] = []
+
+    def cannot_appraise(self, machine: dict) -> str | None:
+        if self.tee is None or machine["tee"] == self.tee:
+            return None
+        return f"{self.name} appraises {self.tee}, not {machine['tee']}"
+
+    def render(self, targets, context) -> generate.RenderResult:
+        self.seen = [resolved.target["model"] for resolved in targets]
+        return generate.RenderResult(
+            policy_files=[],
+            predicate_targets={
+                resolved.index: dict(self.entry) for resolved in targets
+            },
+        )
+
+
+def test_each_renderer_sees_only_what_it_appraises(tmp_path, capsys):
+    """The seam two attestation services meet at.
+
+    Each renderer is handed its own subset, and a target appraised by more
+    than one accumulates into a single predicate entry rather than appearing
+    once per renderer.
+    """
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "targets:\n"
+        "  - model: cmp-l\n"
+        "    machine_type: a3-highgpu-1g\n"
+        "  - model: cmp-l-snp\n"
+        f"    machine_type: {_unsupported_machine_type()}\n"
+    )
+    predicate = tmp_path / "predicate.json"
+    tdx_only = _StubRenderer("tdx-only", "tdx", {"appraised_by_tdx": True})
+    every_tee = _StubRenderer("every-tee", None, {"appraised_by_all": True})
+
+    generate.generate_policy(
+        manifest_file=manifest,
+        podvm_image="ghcr.io/owner/podvm",
+        artifacts_dir=tmp_path / "artifacts",
+        renderers=[tdx_only, every_tee],
+        predicate_file=predicate,
+    )
+
+    assert tdx_only.seen == ["cmp-l"]
+    assert every_tee.seen == ["cmp-l", "cmp-l-snp"]
+    # Manifest order, and one entry per target rather than per renderer.
+    assert json.loads(predicate.read_text())["targets"] == [
+        {"appraised_by_tdx": True, "appraised_by_all": True},
+        {"appraised_by_all": True},
+    ]
+    assert (
+        "::notice::Skipping cmp-l-snp: tdx-only appraises tdx"
+        in capsys.readouterr().out
+    )
