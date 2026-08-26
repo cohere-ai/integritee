@@ -85,7 +85,7 @@ def prepare_assets(args: argparse.Namespace) -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     assets = {
-        args.policy: args.policy.name,
+        **{policy: policy.name for policy in args.policy},
         args.manifest: "policy-manifest.yaml",
         args.predicate: "predicate.json",
         args.bundle: "attestation-bundle.sigstore.json",
@@ -107,6 +107,10 @@ def prepare_assets(args: argparse.Namespace) -> None:
     if args.reason:
         sections.append(f"**Reason:** {args.reason}")
     sections.append(f"**ITA Policy ID:** `{args.policy_id}`")
+    # Named rather than counted, since a Trustee consumer resolves these by
+    # filename and the set of them changes as services are added or dropped.
+    policies = ", ".join(f"`{policy.name}`" for policy in args.policy)
+    sections.append(f"**Policies:** {policies}")
     args.release_notes.write_text("\n\n".join(sections) + "\n")
 
 
@@ -126,7 +130,7 @@ def parser() -> argparse.ArgumentParser:
     predicate_parser.set_defaults(handler=initialize_predicate)
 
     assets_parser = commands.add_parser("prepare-assets")
-    assets_parser.add_argument("--policy", type=Path, required=True)
+    assets_parser.add_argument("--policy", type=Path, nargs="+", required=True)
     assets_parser.add_argument("--manifest", type=Path, required=True)
     assets_parser.add_argument("--predicate", type=Path, required=True)
     assets_parser.add_argument("--bundle", type=Path, required=True)

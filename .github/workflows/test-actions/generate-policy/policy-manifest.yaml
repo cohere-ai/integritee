@@ -7,3 +7,11 @@ targets:
   - 8abd02c84e4764cb0e721a810588054f37bb6ca4
   initdata_file: initdata/5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13.toml
   initdata_sha384: 5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13
+- model: cmp-l
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  added: '2026-08-26'
+  sources:
+  - 8abd02c84e4764cb0e721a810588054f37bb6ca4
+  initdata_file: initdata/5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13.toml
+  initdata_sha384: 5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13

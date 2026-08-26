@@ -20,6 +20,7 @@ from .generate import (
     policy_output_dir,
 )
 from .ita import ItaRenderer
+from .trustee import TrusteeRenderer
 
 
 def build_renderers(output_dir: Path) -> dict[str, Renderer]:
@@ -38,6 +39,7 @@ def build_renderers(output_dir: Path) -> dict[str, Renderer]:
             baselines_repo=os.environ["BASELINES_REPO"],
             output_dir=output_dir,
         ),
+        TrusteeRenderer.name: TrusteeRenderer(output_dir=output_dir),
     }
 
 
