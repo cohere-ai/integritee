@@ -34,10 +34,18 @@ MACHINE_TYPES_PATH = Path(__file__).parent / "machine-types.yaml"
 # caller, and no later step has to guess a path the generator chose.
 POLICY_DIR_NAME = "generated-policies"
 
-# The workspace is the base because it is the only mounted directory a Docker
-# action can hand files back through.
+
 def policy_output_dir() -> Path:
-    return Path(os.environ.get("GITHUB_WORKSPACE", ".")) / POLICY_DIR_NAME
+    """Where every renderer writes, relative to the workspace.
+
+    Relative rather than absolute, because these paths leave the process as
+    action outputs and are then used by steps on the host, where the
+    container's /github/workspace does not exist. A Docker action runs with
+    the workspace mounted there and as its working directory, so one relative
+    path resolves correctly on both sides and no renderer has to remember to
+    translate what it reports.
+    """
+    return Path(POLICY_DIR_NAME)
 
 
 def load_machine_types() -> dict[str, dict]:
