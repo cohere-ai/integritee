@@ -1,5 +1,5 @@
 name: "Generate Policy"
-description: "Generate an ITA attestation policy from a policy manifest"
+description: "Generate attestation policies from a policy manifest"
 
 inputs:
   manifest-file:
@@ -11,12 +11,20 @@ inputs:
   output-artifacts-dir:
     description: "Path to write intermediate artifacts (baselines, firmware, UKI, per-target measurements)"
     required: true
-  output-policy-file:
-    description: "Path to write the generated .rego policy file"
+  policy-types:
+    description: "Which policies to generate, space- or comma-separated. Supported: ita"
     required: true
   predicate-file:
     description: "Path to predicate JSON file; read and updated in place with target data (optional)"
     required: false
+
+# The action names and places the files it writes, so a caller passes no
+# output path and reads every path back from here.
+outputs:
+  ita-policy-file:
+    description: "Path to the generated ITA policy, empty unless ita was requested"
+  ita-target-count:
+    description: "How many manifest targets the ITA policy covers, 0 if none matched"
 
 runs:
   using: "docker"
@@ -27,5 +35,5 @@ runs:
     PODVM_IMAGE: "ghcr.io/cohere-ai/cloud-api-adaptor/podvm"
     INPUT_MANIFEST_FILE: ${{ inputs.manifest-file }}
     INPUT_OUTPUT_ARTIFACTS_DIR: ${{ inputs.output-artifacts-dir }}
-    INPUT_OUTPUT_POLICY_FILE: ${{ inputs.output-policy-file }}
+    INPUT_POLICY_TYPES: ${{ inputs.policy-types }}
     INPUT_PREDICATE_FILE: ${{ inputs.predicate-file }}

@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -18,11 +19,35 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTION_ROOT = REPO_ROOT / ".github" / "actions" / "generate-policy"
+OPA = shutil.which("opa")
 sys.path.insert(0, str(ACTION_ROOT))
+
+
+@pytest.fixture(scope="session")
+def opa() -> str:
+    """The opa binary, required rather than optional.
+
+    Compiling and evaluating the generated policy is the coverage most worth
+    having, so its absence fails instead of quietly reporting a green suite
+    that never checked a policy at all.
+    """
+    if OPA is None:
+        pytest.fail(
+            "opa is not on PATH; install it from "
+            "https://www.openpolicyagent.org/docs/#running-opa"
+        )
+    return OPA
+
+# The schema of machine-types.yaml. Changing the table's structure means
+# updating this set and the table; nothing else should need to name a field.
+MACHINE_TYPE_FIELDS = {"platform", "tee", "ram_gib"}
 
 from generate_policy import fetch  # noqa: E402
 from generate_policy import generate  # noqa: E402
+from generate_policy import ita  # noqa: E402
 from generate_policy import measure  # noqa: E402
+
+TEMPLATE = ita.TEMPLATE
 
 
 def test_computes_rtmr3_directly_from_initdata():
@@ -32,10 +57,29 @@ def test_computes_rtmr3_directly_from_initdata():
     )
 
 
+def test_every_machine_type_declares_the_expected_fields():
+    """Pin the schema of machine-types.yaml.
+
+    An exact field match rejects a missing field, a stray one, and a typo like
+    ram_gb, none of which the consuming code would notice until it read the
+    entry.
+    """
+    table = generate.load_machine_types()
+    assert table, "machine-types.yaml must not be empty"
+
+    mismatched = {
+        machine_type: sorted(set(entry) ^ MACHINE_TYPE_FIELDS)
+        for machine_type, entry in table.items()
+        if set(entry) != MACHINE_TYPE_FIELDS
+    }
+    assert not mismatched, (
+        f"machine-types.yaml entries disagree with the expected schema "
+        f"{sorted(MACHINE_TYPE_FIELDS)}: {mismatched}"
+    )
+
+
 def test_policy_template_uses_nras_v3_gpu_claims():
-    policy = (
-        ACTION_ROOT / "generate_policy" / "policy-template.rego"
-    ).read_text()
+    policy = TEMPLATE.read_text()
 
     assert 'input.nvgpu["x-nvidia-overall-att-result"] == true' in policy
     assert "count(input.nvgpu.claim_details) > 0" in policy
@@ -46,9 +90,7 @@ def test_policy_template_uses_nras_v3_gpu_claims():
 
 
 def test_nras_v3_gcp_mismatch_workaround_is_narrow():
-    policy = (
-        ACTION_ROOT / "generate_policy" / "policy-template.rego"
-    ).read_text()
+    policy = TEMPLATE.read_text()
 
     assert 'input.nvgpu["x-nvidia-overall-att-result"] == false' in policy
     assert "count(input.nvgpu.claim_details) == 1" in policy
@@ -307,10 +349,9 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     }
     output = tmp_path / "policy.rego"
 
-    generate.render_policy(
+    ita.render_policy(
         [target],
-        "580.159.04",
-        ACTION_ROOT / "generate_policy" / "policy-template.rego",
+        ["580.159.04"],
         output,
     )
 
@@ -322,20 +363,18 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     assert "# Platform baseline: 111111111111/v2" in policy
     assert "# Platform baseline: 111111111111/v3" not in policy
     assert "# Model: cmp-l (Initdata: unknown)" in policy
-    assert 'gpu["x-nvidia-gpu-driver-version"] == "580.159.04"' in policy
+    assert 'accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]' in policy
+    assert '        "580.159.04"\n' in policy
+    assert ita.EMPTY_POLICY_HEADER not in policy
 
     injected_version = '580.159.04"\n}\ndefault match := true\n#'
-    generate.render_policy(
+    ita.render_policy(
         [target],
-        injected_version,
-        ACTION_ROOT / "generate_policy" / "policy-template.rego",
+        [injected_version],
         output,
     )
     policy = output.read_text()
-    assert (
-        'gpu["x-nvidia-gpu-driver-version"] == '
-        f"{json.dumps(injected_version)}"
-    ) in policy
+    assert f"        {json.dumps(injected_version)}\n" in policy
     assert "\ndefault match := true\n" not in policy
 
 
@@ -343,7 +382,7 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     # PLATFORM_FIELDS excludes rtmr3, which the workload block requires.
     measurements = {
         field: "a" * 96
-        for field in generate.PLATFORM_FIELDS
+        for field in ita.PLATFORM_FIELDS
     }
     measurements["rtmr3"] = "b" * 96
     target = {
@@ -359,10 +398,9 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     }
     output = tmp_path / "policy.rego"
 
-    generate.render_policy(
+    ita.render_policy(
         [target],
-        "580.159.04",
-        ACTION_ROOT / "generate_policy" / "policy-template.rego",
+        ["580.159.04"],
         output,
     )
     policy = output.read_text()
@@ -390,11 +428,189 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     assert "tdx.tdx_tee_tcb_svn ==" not in policy
 
 
-@pytest.mark.parametrize("missing_field", generate.PLATFORM_FIELDS)
+def _unsupported_machine_type() -> str:
+    """A machine type ITA cannot appraise, taken from the table itself."""
+    return next(
+        machine_type
+        for machine_type, entry in generate.load_machine_types().items()
+        if entry["tee"] not in ita.SUPPORTED_TEES
+    )
+
+
+def _tdx_target() -> dict:
+    measurements = {field: "a" * 96 for field in ita.PLATFORM_FIELDS}
+    measurements["rtmr3"] = "b" * 96
+    return {
+        "model": "cmp-l",
+        "measurements": measurements,
+        "baseline_variants": [{
+            "version": "v1",
+            "firmware_sha384": "1" * 96,
+            "measurements": measurements,
+        }],
+    }
+
+
+def test_renders_an_inert_policy_when_nothing_matched(tmp_path, capsys):
+    output = tmp_path / "policy.rego"
+
+    ita.render_policy([], [], output)
+
+    policy = output.read_text()
+    # Every generated section is absent, so only the defaults define these.
+    assert "matches_tdx_platform if {" not in policy
+    assert "matches_tdx_workload if {" not in policy
+    assert "default matches_tdx_platform := false" in policy
+    assert "default matches_tdx_workload := false" in policy
+    # An empty set, not a fabricated version no GPU can report.
+    assert "accepted_gpu_driver_versions := {}" in policy
+    assert '""' not in policy
+
+    assert ita.EMPTY_POLICY_HEADER in policy
+    assert "::warning::" in capsys.readouterr().out
+
+
+def _render_module(tmp_path: Path, targets: list[dict]) -> Path:
+    """Render a policy and wrap it in a package for opa to load standalone.
+
+    ITA supplies the package declaration, so the uploaded file carries none.
+    """
+    policy = tmp_path / "policy.rego"
+    ita.render_policy(
+        targets,
+        ["580.159.04"] if targets else [],
+        policy,
+    )
+    module = tmp_path / "module.rego"
+    module.write_text("package integritee\n\n" + policy.read_text())
+    return module
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [[], [_tdx_target()]],
+    ids=["zero-targets", "one-target"],
+)
+def test_rendered_policy_compiles(tmp_path, opa, targets):
+    """A section substituted to nothing leaves its name undefined, which Rego
+    rejects as an unsafe variable rather than a policy that denies. This is the
+    check that the template's defaults hold that off.
+    """
+    result = subprocess.run(
+        [opa, "check", str(_render_module(tmp_path, targets))],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def _opa_eval(
+    opa: str,
+    module: Path,
+    query: str,
+    input_file: Path | None = None,
+):
+    """Evaluate a query, returning None where the rule is undefined."""
+    command = [opa, "eval", "--data", str(module), query]
+    if input_file:
+        command += ["--input", str(input_file)]
+    result = subprocess.run(command, capture_output=True, text=True, check=True)
+
+    entries = json.loads(result.stdout).get("result")
+    if not entries:
+        return None
+    return entries[0]["expressions"][0]["value"]
+
+
+def test_policy_with_no_targets_denies(tmp_path, opa):
+    """Loading is not the property that matters; denying is.
+
+    With no generated blocks there is no input that can satisfy the platform or
+    workload rules, so the defaults must resolve them to false and carry that
+    through to match.
+    """
+    document = _opa_eval(opa, _render_module(tmp_path, []), "data.integritee")
+
+    assert document["matches_tdx_platform"] is False
+    assert document["matches_tdx_workload"] is False
+    assert document["match"] is False
+
+
+def _accepting_nvgpu_input(tmp_path: Path, driver: str) -> Path:
+    """Claims satisfying every NRAS check, leaving the driver the only variable."""
+    valid = {"x-nvidia-cert-status": "valid"}
+    flags = [
+        "x-nvidia-gpu-attestation-report-nonce-match",
+        "x-nvidia-gpu-arch-check",
+        "x-nvidia-gpu-attestation-report-parsed",
+        "x-nvidia-gpu-attestation-report-signature-verified",
+        "x-nvidia-gpu-attestation-report-cert-chain-fwid-match",
+    ] + [
+        f"x-nvidia-gpu-{kind}-rim-{state}"
+        for kind in ("driver", "vbios")
+        for state in (
+            "fetched",
+            "measurements-available",
+            "schema-validated",
+            "signature-verified",
+            "version-match",
+        )
+    ]
+    gpu = {flag: True for flag in flags}
+    gpu.update({
+        "hwmodel": "GH100",
+        "secboot": True,
+        "measres": "success",
+        "x-nvidia-gpu-driver-version": driver,
+        "x-nvidia-gpu-attestation-report-cert-chain": valid,
+        "x-nvidia-gpu-driver-rim-cert-chain": valid,
+        "x-nvidia-gpu-vbios-rim-cert-chain": valid,
+    })
+
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps({
+        "nvgpu": {
+            "x-nvidia-overall-att-result": True,
+            "claim_details": {"GPU-0": gpu},
+        },
+    }))
+    return path
+
+
+@pytest.mark.parametrize(
+    "driver, accepted",
+    [("580.159.04", True), ("999.99.99", False)],
+)
+def test_gpu_driver_version_must_be_one_the_policy_lists(
+    tmp_path,
+    opa,
+    driver,
+    accepted,
+):
+    """Set membership replaced a direct ==, so it has to enforce both ways.
+
+    An unlisted version leaves the rule undefined rather than false, which
+    fails the enclosing body just the same.
+    """
+    value = _opa_eval(
+        opa,
+        _render_module(tmp_path, [_tdx_target()]),
+        "data.integritee.matches_nvgpu",
+        _accepting_nvgpu_input(tmp_path, driver),
+    )
+
+    if accepted:
+        assert value is True
+    else:
+        assert value is None
+
+
+@pytest.mark.parametrize("missing_field", ita.PLATFORM_FIELDS)
 def test_platform_match_requires_every_measurement(missing_field):
     measurements = {
         field: "a" * 96
-        for field in generate.PLATFORM_FIELDS
+        for field in ita.PLATFORM_FIELDS
     }
     del measurements[missing_field]
 
@@ -402,21 +618,21 @@ def test_platform_match_requires_every_measurement(missing_field):
         ValueError,
         match=f"invalid or missing TDX measurement: {missing_field}",
     ):
-        generate.generate_platform_match_block("baseline", measurements)
+        ita.generate_platform_match_block("baseline", measurements)
 
 
 def test_measurement_values_cannot_inject_rego():
     injected = 'a' * 96 + '"\n}\ndefault match := true\n#'
     measurements = {
         field: "a" * 96
-        for field in generate.PLATFORM_FIELDS
+        for field in ita.PLATFORM_FIELDS
     }
     measurements["mrtd"] = injected
 
     with pytest.raises(ValueError, match="TDX measurement: mrtd"):
-        generate.generate_platform_match_block("baseline", measurements)
+        ita.generate_platform_match_block("baseline", measurements)
     with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
-        generate.generate_workload_match_block("model", "initdata", injected)
+        ita.generate_workload_match_block("model", "initdata", injected)
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -442,12 +658,10 @@ def test_generate_policy_measures_and_records_each_baseline(
         baseline_calls.append((repo, machine))
         return variants
 
-    monkeypatch.setattr(
-        generate, "fetch_baseline_variants", fake_baseline_variants
-    )
+    monkeypatch.setattr(ita, "fetch_baseline_variants", fake_baseline_variants)
     firmware_calls = []
     monkeypatch.setattr(
-        generate,
+        ita,
         "fetch_firmware",
         lambda *args: firmware_calls.append(args),
     )
@@ -465,15 +679,15 @@ def test_generate_policy_measures_and_records_each_baseline(
 
     monkeypatch.setattr(generate, "fetch_oci_digest", fake_oci_digest)
     monkeypatch.setattr(
-        generate,
-        "resolve_nvidia_driver_version",
-        lambda targets, artifacts: "580.159.04",
+        ita,
+        "resolve_nvidia_driver_versions",
+        lambda targets, artifacts: ["580.159.04"],
     )
 
     measurement_calls = []
     rtmr3_calls = []
     monkeypatch.setattr(
-        generate,
+        ita,
         "compute_initdata_rtmr3",
         lambda initdata: rtmr3_calls.append(initdata) or "6" * 96,
     )
@@ -484,7 +698,7 @@ def test_generate_policy_measures_and_records_each_baseline(
         baseline_hash_calls.append(data)
         return real_sha256(data)
 
-    monkeypatch.setattr(generate.hashlib, "sha256", tracked_sha256)
+    monkeypatch.setattr(ita.hashlib, "sha256", tracked_sha256)
 
     def fake_measurements(*, baseline_path, output_dir, **kwargs):
         output_dir.mkdir(parents=True)
@@ -498,7 +712,7 @@ def test_generate_policy_measures_and_records_each_baseline(
             "rtmr2": "5" * 96,
         }
 
-    monkeypatch.setattr(generate, "compute_measurements", fake_measurements)
+    monkeypatch.setattr(ita, "compute_measurements", fake_measurements)
 
     manifest = tmp_path / "manifest.yaml"
     initdata = b"test"
@@ -514,35 +728,52 @@ def test_generate_policy_measures_and_records_each_baseline(
         "  - model: cmp-l\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
-        "    ram_gib: 234\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
         "  - model: cmp-l-old\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
-        "    ram_gib: 234\n"
         f"    initdata_file: initdata/{second_sha384}.toml\n"
         f"    initdata_sha384: {second_sha384}\n"
+        "  - model: cmp-l-snp\n"
+        f"    machine_type: {_unsupported_machine_type()}\n"
+        "    podvm_image_tag: image-tag\n"
+        f"    initdata_file: initdata/{initdata_sha384}.toml\n"
+        f"    initdata_sha384: {initdata_sha384}\n"
     )
     predicate = tmp_path / "predicate.json"
     predicate.write_text("{}")
-    policy = tmp_path / "policy.rego"
+    renderer = ita.ItaRenderer(
+        baselines_repo="owner/baselines",
+        output_dir=tmp_path / "policies",
+    )
 
     generate.generate_policy(
         manifest_file=manifest,
-        baselines_repo="owner/baselines",
         podvm_image="ghcr.io/owner/podvm",
         artifacts_dir=tmp_path / "artifacts",
-        template_path=ACTION_ROOT / "generate_policy" / "policy-template.rego",
-        policy_output=policy,
+        renderers=[renderer],
         predicate_file=predicate,
     )
 
-    target = json.loads(predicate.read_text())["targets"][0]
+    policy = renderer.policy_file
+    assert policy.name == "ita_policy.rego"
+    predicate_targets = json.loads(predicate.read_text())["targets"]
+    # The SNP target is dropped, and dropped before the baseline lookup below:
+    # its machine type has no TDX baselines, so reaching that call would fail.
+    assert [item["model"] for item in predicate_targets] == [
+        "cmp-l",
+        "cmp-l-old",
+    ]
+    target = predicate_targets[0]
     assert [item["version"] for item in target["baseline_variants"]] == [
         "v1",
         "v2",
     ]
+    # The manifest carries no machine attributes; every field of the table
+    # entry is resolved at generation time and must reach the signed predicate.
+    machine = generate.load_machine_types()["a3-highgpu-1g"]
+    assert {field: target[field] for field in machine} == machine
     assert baseline_calls == [
         ("owner/baselines", "a3-highgpu-1g"),
     ]
@@ -558,3 +789,172 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert policy_text.count("matches_tdx_workload if {") == 2
     assert "# Model: cmp-l (Initdata:" in policy_text
     assert "# Model: cmp-l-old (Initdata:" in policy_text
+
+
+class _StubRenderer:
+    """A renderer that records its targets instead of measuring them."""
+
+    def __init__(self, name: str, tee: str | None, output_dir: Path):
+        self.name = name
+        self.tee = tee
+        self.output_dir = output_dir
+        self.seen: list[str] = []
+
+    @property
+    def policy_files(self) -> list[Path]:
+        return [self.output_dir / f"{self.name}.rego"]
+
+    def cannot_appraise(self, machine: dict) -> str | None:
+        if self.tee is None or machine["tee"] == self.tee:
+            return None
+        return f"{self.name} appraises {self.tee}, not {machine['tee']}"
+
+    def render(self, targets, context) -> generate.RenderResult:
+        self.seen = [resolved.target["model"] for resolved in targets]
+        return generate.RenderResult(
+            outputs={f"{self.name}-policy-file": str(self.policy_files[0])},
+            predicate_targets={
+                resolved.index: {f"appraised_by_{self.name}": True}
+                for resolved in targets
+            },
+        )
+
+
+def test_each_renderer_sees_only_what_it_appraises(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    """The seam two attestation services meet at.
+
+    Each renderer is handed its own subset, a target appraised by more than
+    one accumulates into a single predicate entry rather than appearing once
+    per renderer, and every path and count reaches the workflow.
+    """
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "targets:\n"
+        "  - model: cmp-l\n"
+        "    machine_type: a3-highgpu-1g\n"
+        "  - model: cmp-l-snp\n"
+        f"    machine_type: {_unsupported_machine_type()}\n"
+    )
+    predicate = tmp_path / "predicate.json"
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    tdx = _StubRenderer("tdx", "tdx", tmp_path)
+    every = _StubRenderer("every", None, tmp_path)
+
+    generate.generate_policy(
+        manifest_file=manifest,
+        podvm_image="ghcr.io/owner/podvm",
+        artifacts_dir=tmp_path / "artifacts",
+        renderers=[tdx, every],
+        predicate_file=predicate,
+    )
+
+    assert tdx.seen == ["cmp-l"]
+    assert every.seen == ["cmp-l", "cmp-l-snp"]
+    written = json.loads(predicate.read_text())
+    # Manifest order, and one entry per target rather than per renderer.
+    assert written["targets"] == [
+        {"appraised_by_tdx": True, "appraised_by_every": True},
+        {"appraised_by_every": True},
+    ]
+    assert written["target_counts"] == {"tdx": 1, "every": 2}
+    assert github_output.read_text().splitlines() == [
+        f"tdx-policy-file={tmp_path / 'tdx.rego'}",
+        "tdx-target-count=1",
+        f"every-policy-file={tmp_path / 'every.rego'}",
+        "every-target-count=2",
+    ]
+    assert (
+        "::notice::Skipping cmp-l-snp: tdx appraises tdx"
+        in capsys.readouterr().out
+    )
+
+
+def test_a_run_covering_nothing_fails(tmp_path, capsys):
+    """The one floor on target counts, and it spans every requested type.
+
+    A single policy covering nothing is a legitimate revocation, so the run
+    only fails when no requested type matched anything and no policy it
+    produced could admit a node.
+    """
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "targets:\n"
+        "  - model: cmp-l-snp\n"
+        f"    machine_type: {_unsupported_machine_type()}\n"
+    )
+
+    with pytest.raises(SystemExit) as failure:
+        generate.generate_policy(
+            manifest_file=manifest,
+            podvm_image="ghcr.io/owner/podvm",
+            artifacts_dir=tmp_path / "artifacts",
+            renderers=[_StubRenderer("tdx", "tdx", tmp_path)],
+        )
+
+    assert failure.value.code == 1
+    assert "no manifest target matched any requested policy type" in (
+        capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("ita", ["ita"]),
+        (" ita,trustee ", ["ita", "trustee"]),
+        ("ita\ttrustee ita", ["ita", "trustee"]),
+    ],
+)
+def test_policy_types_accepts_a_separated_list(raw, expected):
+    assert generate.parse_policy_types(raw, {"ita", "trustee"}) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "ITA", "ita trustee-cpu"])
+def test_policy_types_rejects_anything_it_cannot_generate(raw):
+    """An empty or misspelled value must fail rather than emit nothing.
+
+    Silently generating no policy is the failure mode this input exists to
+    rule out, since a release would then ship without one.
+    """
+    with pytest.raises(ValueError, match="policy"):
+        generate.parse_policy_types(raw, {"ita", "trustee"})
+
+
+def test_stale_policies_are_cleared_before_a_run(tmp_path, capsys):
+    """Including for a type this run was not asked to generate.
+
+    A leftover file would otherwise be attested and released as current, so
+    clearing covers every type the action can emit, not just the requested
+    ones.
+    """
+    unrequested = _StubRenderer("trustee", None, tmp_path)
+    stale = unrequested.policy_files[0]
+    stale.write_text("# from a previous run\n")
+    bystander = tmp_path / "predicate.json"
+    bystander.write_text("{}")
+
+    generate.clear_policies([unrequested])
+
+    assert not stale.exists()
+    assert bystander.exists()
+    assert str(stale) in capsys.readouterr().out
+
+
+def test_policy_output_dir_is_workspace_relative(monkeypatch):
+    """Because the paths this action reports are used from the host.
+
+    Inside the container the workspace is /github/workspace, a path that does
+    not exist on the runner, so an absolute path here would be reported to
+    steps that then cannot find the file it names.
+    """
+    monkeypatch.setenv("GITHUB_WORKSPACE", "/github/workspace")
+
+    output_dir = generate.policy_output_dir()
+
+    assert not output_dir.is_absolute()
+    assert "github/workspace" not in str(output_dir)
