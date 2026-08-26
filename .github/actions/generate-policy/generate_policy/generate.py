@@ -12,9 +12,11 @@ Returns structured predicate data so the caller can persist it.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
@@ -25,6 +27,17 @@ from .fetch import fetch_oci_digest, fetch_uki
 from .measure import resolve_initdata
 
 MACHINE_TYPES_PATH = Path(__file__).parent / "machine-types.yaml"
+
+# Where every renderer writes its Rego. The action owns this location rather
+# than taking it as an input, so a filename that carries meaning -- Trustee
+# resolves {policy_id}_{tee_class}.rego -- cannot be half-defined by a
+# caller, and no later step has to guess a path the generator chose.
+POLICY_DIR_NAME = "generated-policies"
+
+# The workspace is the base because it is the only mounted directory a Docker
+# action can hand files back through.
+def policy_output_dir() -> Path:
+    return Path(os.environ.get("GITHUB_WORKSPACE", ".")) / POLICY_DIR_NAME
 
 
 def load_machine_types() -> dict[str, dict]:
@@ -125,7 +138,7 @@ class RenderResult:
     entry instead of appearing once per renderer.
     """
 
-    policy_files: list[Path]
+    outputs: dict[str, str]
     predicate_targets: dict[int, dict]
 
 
@@ -187,6 +200,14 @@ class Renderer(Protocol):
 
     name: str
 
+    @property
+    def policy_files(self) -> list[Path]:
+        """Every Rego file this renderer writes, known before it runs.
+
+        Declared up front so stale output can be cleared without having to
+        run the renderer that would overwrite it.
+        """
+
     def cannot_appraise(self, machine: dict) -> str | None:
         """Why this renderer cannot appraise the machine, or None if it can.
 
@@ -205,6 +226,58 @@ class Renderer(Protocol):
         policy rather than failing, so a caller's success never depends on
         manifest contents it may not control.
         """
+
+
+def parse_policy_types(raw: str, known: Iterable[str]) -> list[str]:
+    """Parse the policy-types input into an ordered, deduplicated list.
+    """
+    requested = [item for item in re.split(r"[,\s]+", raw.strip()) if item]
+    supported = sorted(known)
+    if not requested:
+        raise ValueError(
+            f"policy-types is empty; expected one or more of {supported}"
+        )
+    unknown = [item for item in requested if item not in supported]
+    if unknown:
+        raise ValueError(
+            f"unknown policy type(s) {unknown}; expected one or more of "
+            f"{supported}"
+        )
+    return list(dict.fromkeys(requested))
+
+
+def clear_policies(renderers: Iterable[Renderer]) -> None:
+    """Remove policies from an earlier run before writing new ones.
+
+    A file left behind by a previous invocation would otherwise be attested
+    and released as though it were current, so this covers every type the
+    action can emit rather than only the requested ones. It removes only the
+    names the action itself writes, since the directory it owns sits inside
+    the caller's checkout.
+    """
+    for renderer in renderers:
+        for path in renderer.policy_files:
+            if path.exists():
+                print(f"Removing stale policy: {path}")
+                path.unlink()
+
+
+def write_outputs(outputs: dict[str, str]) -> None:
+    """Report what was written back to the workflow.
+
+    A Docker action cannot give its outputs a value in action.yml, so every
+    path a later step needs arrives here rather than as a literal the caller
+    has to keep in agreement with this code.
+    """
+    for name, value in outputs.items():
+        print(f"  {name}={value}")
+
+    output_file = os.environ.get("GITHUB_OUTPUT")
+    if not output_file:
+        return
+    with open(output_file, "a", encoding="utf-8") as handle:
+        for name, value in outputs.items():
+            handle.write(f"{name}={value}\n")
 
 
 def load_targets(manifest_file: Path) -> list[dict]:
@@ -253,6 +326,7 @@ def generate_policy(
         resolved.append(ResolvedTarget(index, target, machine))
 
     predicate_targets: dict[int, dict] = {}
+    target_counts: dict[str, int] = {}
     for renderer in renderers:
         selected: list[ResolvedTarget] = []
         for candidate in resolved:
@@ -272,10 +346,34 @@ def generate_policy(
             sys.exit(1)
         for index, entry in result.predicate_targets.items():
             predicate_targets.setdefault(index, {}).update(entry)
+        target_counts[renderer.name] = len(selected)
+        write_outputs({
+            **result.outputs,
+            f"{renderer.name}-target-count": str(len(selected)),
+        })
+
+    # One type matching nothing is legitimate: an empty policy revokes the
+    # targets that service used to admit, which is what withdrawing
+    # compromised software looks like and is the end state of migrating off
+    # a service. Every requested type matching nothing is different in kind,
+    # since no policy this run produced can admit anything, and that is a
+    # manifest or configuration mistake rather than an intended revocation.
+    if not any(target_counts.values()):
+        print(
+            "ERROR: no manifest target matched any requested policy type "
+            f"({', '.join(target_counts)}); every policy generated here "
+            "admits nothing",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if predicate_file:
         predicate = json.loads(predicate_file.read_text()) if predicate_file.exists() else {}
         predicate["cvm_measure_version"] = get_cvm_measure_version()
+        # How much each policy covers, so a policy that matched nothing is
+        # legible from the signed artifact rather than discovered later from
+        # a node failing attestation.
+        predicate["target_counts"] = target_counts
         predicate["targets"] = [
             predicate_targets[index] for index in sorted(predicate_targets)
         ]

@@ -1,7 +1,7 @@
 """The ITA renderer: Intel TDX targets measured with cvm-measure tdx.
 
 Everything narrower than the shared pipeline lives here: the TDX evidence
-filter, the versioned baseline and OVMF firmware fetches that only a TDX
+filter, the versioned baseline and OVMF firmware fetches that only a GCP
 measurement needs, and the Rego this service accepts. ITA enforces a
 restricted Rego subset, so prefer constructs the template has already
 shipped over ones that merely ought to work.
@@ -26,6 +26,11 @@ from .generate import (
 from .measure import compute_initdata_rtmr3, compute_measurements
 
 TEMPLATE = Path(__file__).parent / "ita-template.rego"
+
+# The action names its own output. For ITA the name only has to be stable, so
+# that the release workflow and prepare-assets have nothing to keep in
+# agreement.
+POLICY_FILE = "ita_policy.rego"
 
 PLATFORM_PLACEHOLDER = "${TDX_PLATFORM_MATCH_BLOCKS}"
 WORKLOAD_PLACEHOLDER = "${TDX_WORKLOAD_MATCH_BLOCKS}"
@@ -225,7 +230,7 @@ class ItaRenderer:
 
     # Run configuration.
     baselines_repo: str
-    policy_output: Path
+    output_dir: Path
 
     # Per-run caches. Only a TDX measurement reads these, so they belong to
     # the renderer rather than the shared context.
@@ -238,6 +243,14 @@ class ItaRenderer:
     _platform_measurements: dict[tuple, dict] = field(
         default_factory=dict, init=False, repr=False
     )
+
+    @property
+    def policy_file(self) -> Path:
+        return self.output_dir / POLICY_FILE
+
+    @property
+    def policy_files(self) -> list[Path]:
+        return [self.policy_file]
 
     def cannot_appraise(self, machine: dict) -> str | None:
         if machine["tee"] in SUPPORTED_TEES:
@@ -260,10 +273,10 @@ class ItaRenderer:
             resolve_nvidia_driver_versions(
                 manifest_targets, context.artifacts_dir
             ),
-            self.policy_output,
+            self.policy_file,
         )
         return RenderResult(
-            policy_files=[self.policy_output],
+            outputs={"ita-policy-file": str(self.policy_file)},
             predicate_targets=predicate_targets,
         )
 

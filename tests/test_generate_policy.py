@@ -743,19 +743,21 @@ def test_generate_policy_measures_and_records_each_baseline(
     )
     predicate = tmp_path / "predicate.json"
     predicate.write_text("{}")
-    policy = tmp_path / "policy.rego"
+    renderer = ita.ItaRenderer(
+        baselines_repo="owner/baselines",
+        output_dir=tmp_path / "policies",
+    )
 
     generate.generate_policy(
         manifest_file=manifest,
         podvm_image="ghcr.io/owner/podvm",
         artifacts_dir=tmp_path / "artifacts",
-        renderers=[ita.ItaRenderer(
-            baselines_repo="owner/baselines",
-            policy_output=policy,
-        )],
+        renderers=[renderer],
         predicate_file=predicate,
     )
 
+    policy = renderer.policy_file
+    assert policy.name == "ita_policy.rego"
     predicate_targets = json.loads(predicate.read_text())["targets"]
     # The SNP target is dropped, and dropped before the baseline lookup below:
     # its machine type has no TDX baselines, so reaching that call would fail.
@@ -792,11 +794,15 @@ def test_generate_policy_measures_and_records_each_baseline(
 class _StubRenderer:
     """A renderer that records its targets instead of measuring them."""
 
-    def __init__(self, name: str, tee: str | None, entry: dict):
+    def __init__(self, name: str, tee: str | None, output_dir: Path):
         self.name = name
         self.tee = tee
-        self.entry = entry
+        self.output_dir = output_dir
         self.seen: list[str] = []
+
+    @property
+    def policy_files(self) -> list[Path]:
+        return [self.output_dir / f"{self.name}.rego"]
 
     def cannot_appraise(self, machine: dict) -> str | None:
         if self.tee is None or machine["tee"] == self.tee:
@@ -806,19 +812,24 @@ class _StubRenderer:
     def render(self, targets, context) -> generate.RenderResult:
         self.seen = [resolved.target["model"] for resolved in targets]
         return generate.RenderResult(
-            policy_files=[],
+            outputs={f"{self.name}-policy-file": str(self.policy_files[0])},
             predicate_targets={
-                resolved.index: dict(self.entry) for resolved in targets
+                resolved.index: {f"appraised_by_{self.name}": True}
+                for resolved in targets
             },
         )
 
 
-def test_each_renderer_sees_only_what_it_appraises(tmp_path, capsys):
+def test_each_renderer_sees_only_what_it_appraises(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
     """The seam two attestation services meet at.
 
-    Each renderer is handed its own subset, and a target appraised by more
-    than one accumulates into a single predicate entry rather than appearing
-    once per renderer.
+    Each renderer is handed its own subset, a target appraised by more than
+    one accumulates into a single predicate entry rather than appearing once
+    per renderer, and every path and count reaches the workflow.
     """
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text(
@@ -829,25 +840,106 @@ def test_each_renderer_sees_only_what_it_appraises(tmp_path, capsys):
         f"    machine_type: {_unsupported_machine_type()}\n"
     )
     predicate = tmp_path / "predicate.json"
-    tdx_only = _StubRenderer("tdx-only", "tdx", {"appraised_by_tdx": True})
-    every_tee = _StubRenderer("every-tee", None, {"appraised_by_all": True})
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    tdx = _StubRenderer("tdx", "tdx", tmp_path)
+    every = _StubRenderer("every", None, tmp_path)
 
     generate.generate_policy(
         manifest_file=manifest,
         podvm_image="ghcr.io/owner/podvm",
         artifacts_dir=tmp_path / "artifacts",
-        renderers=[tdx_only, every_tee],
+        renderers=[tdx, every],
         predicate_file=predicate,
     )
 
-    assert tdx_only.seen == ["cmp-l"]
-    assert every_tee.seen == ["cmp-l", "cmp-l-snp"]
+    assert tdx.seen == ["cmp-l"]
+    assert every.seen == ["cmp-l", "cmp-l-snp"]
+    written = json.loads(predicate.read_text())
     # Manifest order, and one entry per target rather than per renderer.
-    assert json.loads(predicate.read_text())["targets"] == [
-        {"appraised_by_tdx": True, "appraised_by_all": True},
-        {"appraised_by_all": True},
+    assert written["targets"] == [
+        {"appraised_by_tdx": True, "appraised_by_every": True},
+        {"appraised_by_every": True},
+    ]
+    assert written["target_counts"] == {"tdx": 1, "every": 2}
+    assert github_output.read_text().splitlines() == [
+        f"tdx-policy-file={tmp_path / 'tdx.rego'}",
+        "tdx-target-count=1",
+        f"every-policy-file={tmp_path / 'every.rego'}",
+        "every-target-count=2",
     ]
     assert (
-        "::notice::Skipping cmp-l-snp: tdx-only appraises tdx"
+        "::notice::Skipping cmp-l-snp: tdx appraises tdx"
         in capsys.readouterr().out
     )
+
+
+def test_a_run_covering_nothing_fails(tmp_path, capsys):
+    """The one floor on target counts, and it spans every requested type.
+
+    A single policy covering nothing is a legitimate revocation, so the run
+    only fails when no requested type matched anything and no policy it
+    produced could admit a node.
+    """
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        "targets:\n"
+        "  - model: cmp-l-snp\n"
+        f"    machine_type: {_unsupported_machine_type()}\n"
+    )
+
+    with pytest.raises(SystemExit) as failure:
+        generate.generate_policy(
+            manifest_file=manifest,
+            podvm_image="ghcr.io/owner/podvm",
+            artifacts_dir=tmp_path / "artifacts",
+            renderers=[_StubRenderer("tdx", "tdx", tmp_path)],
+        )
+
+    assert failure.value.code == 1
+    assert "no manifest target matched any requested policy type" in (
+        capsys.readouterr().err
+    )
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("ita", ["ita"]),
+        (" ita,trustee ", ["ita", "trustee"]),
+        ("ita\ttrustee ita", ["ita", "trustee"]),
+    ],
+)
+def test_policy_types_accepts_a_separated_list(raw, expected):
+    assert generate.parse_policy_types(raw, {"ita", "trustee"}) == expected
+
+
+@pytest.mark.parametrize("raw", ["", "   ", "ITA", "ita trustee-cpu"])
+def test_policy_types_rejects_anything_it_cannot_generate(raw):
+    """An empty or misspelled value must fail rather than emit nothing.
+
+    Silently generating no policy is the failure mode this input exists to
+    rule out, since a release would then ship without one.
+    """
+    with pytest.raises(ValueError, match="policy"):
+        generate.parse_policy_types(raw, {"ita", "trustee"})
+
+
+def test_stale_policies_are_cleared_before_a_run(tmp_path, capsys):
+    """Including for a type this run was not asked to generate.
+
+    A leftover file would otherwise be attested and released as current, so
+    clearing covers every type the action can emit, not just the requested
+    ones.
+    """
+    unrequested = _StubRenderer("trustee", None, tmp_path)
+    stale = unrequested.policy_files[0]
+    stale.write_text("# from a previous run\n")
+    bystander = tmp_path / "predicate.json"
+    bystander.write_text("{}")
+
+    generate.clear_policies([unrequested])
+
+    assert not stale.exists()
+    assert bystander.exists()
+    assert str(stale) in capsys.readouterr().out
