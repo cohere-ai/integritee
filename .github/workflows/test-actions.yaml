@@ -159,12 +159,15 @@ jobs:
                   f"{service} count disagrees with targets"
               )
 
-          # Every value the signed predicate advertises has to be one the
-          # released policy actually enforces.
+          # Every register the signed predicate advertises has to be one the
+          # released policy actually pins. Only registers: azure_snp also carries
+          # the dm-verity roothash, which no rule names because PCR 9 measures
+          # the kernel command line it lives on.
           for target in predicate["targets"]:
               variants = target.get("baseline_variants", [])
               values = [v for m in variants for v in m["measurements"].values()]
-              values += list(target.get("azure_snp", {}).values())
+              snp = target.get("azure_snp", {})
+              values += [v for k, v in snp.items() if k.startswith("pcr")]
               for value in values:
                   assert value in rego, f'{target["model"]}: {value} is in no policy'
 
