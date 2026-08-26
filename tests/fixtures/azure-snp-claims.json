@@ -1,0 +1,37 @@
+{
+  "_comment": [
+    "Claims as the az-snp-vtpm verifier emits them, captured from a live boot",
+    "of an Azure Standard_NCC40ads_H100_v5 node. Every scalar is a string,",
+    "because parse_tee_evidence_az renders each one through format!, and the",
+    "PCR keys are zero padded under a tpm object by extend_claim.",
+    "",
+    "init_data holds hex of PCR 8 rather than the initdata digest: the same",
+    "extend_claim overwrites the base64 host_data it was parsed from.",
+    "",
+    "The tests derive the policy's reference values from the tpm values here,",
+    "so a rendered policy and this evidence cannot drift apart."
+  ],
+  "az-snp-vtpm": {
+    "measurement": "qnydpVwThuWxZTsSWXi+2ns/laha6w+d2723g84FaijJ0CHaI5w0pYw6ZXZUJw7v",
+    "policy_abi_major": "0",
+    "policy_abi_minor": "31",
+    "policy_smt_allowed": "true",
+    "policy_migrate_ma": "false",
+    "policy_debug_allowed": "false",
+    "policy_single_socket": "false",
+    "platform_smt_enabled": "false",
+    "platform_tsme_enabled": "false",
+    "reported_tcb_bootloader": "10",
+    "reported_tcb_tee": "0",
+    "reported_tcb_snp": "27",
+    "reported_tcb_microcode": "88",
+    "init_data": "4b58b30becd30d16f7f60d56b32661d921ae0d3310c6a89f5d552f9bfee921a9",
+    "tpm": {
+      "pcr04": "03e74ac8fa511490ba4ff0ec69c772da29b17a43aa0a0589bc852a9b21b21f70",
+      "pcr05": "f27e34c2b08d44128732d3e7a936e72f9b9b3608e249ab05143c76fc670fe1be",
+      "pcr08": "4b58b30becd30d16f7f60d56b32661d921ae0d3310c6a89f5d552f9bfee921a9",
+      "pcr09": "e95cd6d35a12bf74964972550336f4226e1fcfdd7e268c5be5872df0da5e72d9",
+      "pcr11": "12a8c871659de2947c3776771755bb66b346942011f68b1e2ae0e7004d5e8538"
+    }
+  }
+}

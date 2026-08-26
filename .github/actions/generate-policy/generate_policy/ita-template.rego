@@ -91,8 +91,13 @@ matches_tdx if {
 nvgpu_device_base_checks(gpu) if {
     gpu.hwmodel == "GH100"
 
-    # One unique entry per PodVM image in the manifest. An empty set denies,
-    # since indexing it is undefined.
+    # Debug off. Without it the measurements below say nothing about what the
+    # device will do next.
+    gpu.dbgstat == "disabled"
+
+    # One entry per distinct driver version across the manifest's PodVM images,
+    # so images sharing a driver collapse to one. An empty set denies, since
+    # indexing it is undefined.
 ${NVIDIA_DRIVER_VERSIONS}
     accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]
 
@@ -101,9 +106,14 @@ ${NVIDIA_DRIVER_VERSIONS}
     gpu["x-nvidia-gpu-attestation-report-parsed"] == true
     gpu["x-nvidia-gpu-attestation-report-signature-verified"] == true
     gpu["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-status"] == "valid"
+    gpu["x-nvidia-gpu-attestation-report-cert-chain"]["x-nvidia-cert-ocsp-status"] == "good"
     gpu["x-nvidia-gpu-attestation-report-cert-chain-fwid-match"] == true
 
+    # Status alone leaves a revoked signer valid, so every chain is checked
+    # against OCSP too, the RIM signers included: a RIM NVIDIA has disowned
+    # would otherwise still license the measurements compared against it.
     gpu["x-nvidia-gpu-driver-rim-cert-chain"]["x-nvidia-cert-status"] == "valid"
+    gpu["x-nvidia-gpu-driver-rim-cert-chain"]["x-nvidia-cert-ocsp-status"] == "good"
     gpu["x-nvidia-gpu-driver-rim-fetched"] == true
     gpu["x-nvidia-gpu-driver-rim-measurements-available"] == true
     gpu["x-nvidia-gpu-driver-rim-schema-validated"] == true
@@ -111,6 +121,7 @@ ${NVIDIA_DRIVER_VERSIONS}
     gpu["x-nvidia-gpu-driver-rim-version-match"] == true
 
     gpu["x-nvidia-gpu-vbios-rim-cert-chain"]["x-nvidia-cert-status"] == "valid"
+    gpu["x-nvidia-gpu-vbios-rim-cert-chain"]["x-nvidia-cert-ocsp-status"] == "good"
     gpu["x-nvidia-gpu-vbios-rim-fetched"] == true
     gpu["x-nvidia-gpu-vbios-rim-measurements-available"] == true
     gpu["x-nvidia-gpu-vbios-rim-schema-validated"] == true

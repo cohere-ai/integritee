@@ -12,7 +12,7 @@ inputs:
     description: "Path to write intermediate artifacts (baselines, firmware, UKI, per-target measurements)"
     required: true
   policy-types:
-    description: "Which policies to generate, space- or comma-separated. Supported: ita"
+    description: "Which policies to generate, space- or comma-separated. Supported: ita, trustee"
     required: true
   predicate-file:
     description: "Path to predicate JSON file; read and updated in place with target data (optional)"
@@ -25,6 +25,14 @@ outputs:
     description: "Path to the generated ITA policy, empty unless ita was requested"
   ita-target-count:
     description: "How many manifest targets the ITA policy covers, 0 if none matched"
+  trustee-cpu-policy-file:
+    description: "Path to the generated Trustee CPU policy, empty unless trustee was requested"
+  trustee-gpu-policy-file:
+    description: "Path to the generated Trustee GPU policy, empty unless trustee was requested"
+  trustee-policy-dir:
+    description: "Directory holding the Trustee policies, to configure alongside policy_ids: [trustee_policy]"
+  trustee-target-count:
+    description: "How many manifest targets the Trustee policies cover, 0 if none matched"
 
 runs:
   using: "docker"

@@ -23,7 +23,7 @@ from .generate import (
     ResolvedTarget,
     resolve_nvidia_driver_versions,
 )
-from .measure import compute_initdata_rtmr3, compute_measurements
+from .measure import compute_initdata_rtmr3, compute_tdx_measurements
 
 TEMPLATE = Path(__file__).parent / "ita-template.rego"
 
@@ -366,7 +366,7 @@ class ItaRenderer:
             f"  Computing platform measurements for "
             f"{baseline.firmware_sha384[:12]}/{baseline.version}..."
         )
-        computed = compute_measurements(
+        computed = compute_tdx_measurements(
             ram_gib=ram_gib,
             initdata=initdata,
             firmware_path=baseline.firmware_path,

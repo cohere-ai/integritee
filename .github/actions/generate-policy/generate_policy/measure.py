@@ -1,4 +1,9 @@
-"""Compute TDX measurements for a single target using cvm-measure."""
+"""Compute a single target's measurements using cvm-measure.
+
+One function per cvm-measure subcommand rather than one parameterized by TEE:
+the subcommands do not take the same inputs, because the registers they predict
+are not derived from the same things.
+"""
 
 from __future__ import annotations
 
@@ -43,7 +48,7 @@ def resolve_initdata(target: dict, manifest_file: Path) -> bytes:
     return initdata
 
 
-def compute_measurements(
+def compute_tdx_measurements(
     ram_gib: int,
     initdata: bytes,
     firmware_path: Path,
@@ -58,7 +63,7 @@ def compute_measurements(
     initdata_toml = output_dir / "initdata.toml"
     initdata_toml.write_bytes(initdata)
 
-    cmd = [
+    return _run_cvm_measure([
         "cvm-measure", "tdx",
         "--firmware", str(firmware_path),
         "--uki", str(uki_path),
@@ -67,8 +72,37 @@ def compute_measurements(
         "--ram", str(ram_gib),
         "--initdata", str(initdata_toml),
         "--output-format", "json",
-    ]
+    ], output_dir)
 
+
+def compute_azure_snp_pcrs(
+    initdata: bytes,
+    uki_path: Path,
+    disk_path: Path,
+    output_dir: Path,
+) -> dict:
+    """Compute Azure SEV-SNP vTPM PCRs and write measurements.json.
+
+    No firmware and no baseline, unlike the TDX path: Azure publishes no
+    firmware blob, and every register this predicts is a function of the image
+    bytes or of the initdata. Guest memory does not enter into it either, so
+    no --ram.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    initdata_toml = output_dir / "initdata.toml"
+    initdata_toml.write_bytes(initdata)
+
+    return _run_cvm_measure([
+        "cvm-measure", "azure-snp",
+        "--uki", str(uki_path),
+        "--disk", str(disk_path),
+        "--initdata", str(initdata_toml),
+        "--output-format", "json",
+    ], output_dir)
+
+
+def _run_cvm_measure(cmd: list[str], output_dir: Path) -> dict:
     print(f"  $ {' '.join(cmd)}")
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
