@@ -85,7 +85,7 @@ def prepare_assets(args: argparse.Namespace) -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     assets = {
-        args.policy: "attestation-policy.rego",
+        args.policy: args.policy.name,
         args.manifest: "policy-manifest.yaml",
         args.predicate: "predicate.json",
         args.bundle: "attestation-bundle.sigstore.json",

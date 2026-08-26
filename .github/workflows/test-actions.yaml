@@ -43,20 +43,39 @@ jobs:
           manifest-file: .github/workflows/test-actions/generate-policy/policy-manifest.yaml
 
       - name: Generate policy
+        id: generate
         uses: ./.github/actions/generate-policy
         with:
           manifest-file: .github/workflows/test-actions/generate-policy/policy-manifest.yaml
           github-token: ${{ steps.app-token.outputs.token }}
           output-artifacts-dir: artifacts
-          output-policy-file: generated-policy.rego
+          policy-types: ita
           predicate-file: predicate.json
 
+      - name: Assert the action reported what it wrote
+        env:
+          POLICY_FILE: ${{ steps.generate.outputs.ita-policy-file }}
+          TARGET_COUNT: ${{ steps.generate.outputs.ita-target-count }}
+        run: |
+          if [ ! -s "$POLICY_FILE" ]; then
+            echo "ERROR: ita-policy-file is empty or missing: '$POLICY_FILE'"
+            exit 1
+          fi
+          if [ "$TARGET_COUNT" != "1" ]; then
+            echo "ERROR: expected ita-target-count=1, got '$TARGET_COUNT'"
+            exit 1
+          fi
+          echo "Action reported $POLICY_FILE covering $TARGET_COUNT target(s)"
+
       - name: Verify generated rego structure
+        env:
+          POLICY_FILE: ${{ steps.generate.outputs.ita-policy-file }}
         run: |
           python3 - <<'PY'
+          import os
           from pathlib import Path
 
-          rego = Path("generated-policy.rego").read_text()
+          rego = Path(os.environ["POLICY_FILE"]).read_text()
           required = [
               "import rego.v1",
               "default match := false",
@@ -76,13 +95,16 @@ jobs:
           PY
 
       - name: Verify predicate is consistent with rego
+        env:
+          POLICY_FILE: ${{ steps.generate.outputs.ita-policy-file }}
         run: |
           python3 -c "
-          import json, sys
+          import json, os, sys
           pred = json.loads(open('predicate.json').read())
-          rego = open('generated-policy.rego').read()
+          rego = open(os.environ['POLICY_FILE']).read()
           assert 'targets' in pred, 'predicate missing targets'
           assert 'cvm_measure_version' in pred, 'predicate missing cvm_measure_version'
+          assert pred['target_counts']['ita'] == len(pred['targets']), 'ita count disagrees with targets'
           for t in pred['targets']:
               variants = t.get('baseline_variants', [])
               assert variants, f'{t[\"model\"]}: predicate missing baseline variants'
@@ -101,7 +123,7 @@ jobs:
         with:
           name: test-generate-policy-output
           path: |
-            generated-policy.rego
+            generated-policies/
             predicate.json
 
   test-ita-roundtrip:

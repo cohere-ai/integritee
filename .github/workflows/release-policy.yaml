@@ -117,12 +117,13 @@ jobs:
       # Generate policy (appends targets + cvm_measure_version to predicate)
       # ----------------------------------------------------------------
       - name: Generate policy
+        id: generate
         uses: ./.github/actions/generate-policy
         with:
           manifest-file: attestation-policy/policy-manifest.yaml
           github-token: ${{ steps.app-token.outputs.token }}
           output-artifacts-dir: artifacts
-          output-policy-file: attestation-policy.rego
+          policy-types: ita
           predicate-file: predicate.json
 
       # ----------------------------------------------------------------
@@ -139,7 +140,7 @@ jobs:
         id: upload
         uses: ./.github/actions/upload-ita-policy
         with:
-          policy-file: attestation-policy.rego
+          policy-file: ${{ steps.generate.outputs.ita-policy-file }}
           policy-id: ${{ env.ITA_POLICY_ID }}
           policy-name: ${{ env.ITA_POLICY_NAME }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
@@ -157,7 +158,9 @@ jobs:
 
       - name: Verify uploaded policy
         if: github.event_name == 'push' || inputs.dry_run == false
-        run: diff attestation-policy.rego "${{ steps.fetch.outputs.policy-file }}"
+        run: >-
+          diff "${{ steps.generate.outputs.ita-policy-file }}"
+          "${{ steps.fetch.outputs.policy-file }}"
 
       # ----------------------------------------------------------------
       # Attest policy with Sigstore
@@ -167,7 +170,7 @@ jobs:
         id: attest
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
         with:
-          subject-path: attestation-policy.rego
+          subject-path: ${{ steps.generate.outputs.ita-policy-file }}
           predicate-type: https://cohere.com/attestation-policy/v1
           predicate-path: predicate.json
 
@@ -179,7 +182,7 @@ jobs:
         with:
           name: attestation-release-assets
           path: |
-            attestation-policy.rego
+            ${{ steps.generate.outputs.ita-policy-file }}
             predicate.json
 
       # ----------------------------------------------------------------
@@ -192,7 +195,7 @@ jobs:
           POLICY_ID: ${{ steps.upload.outputs.policy-id }}
         run: >-
           python3 .github/workflows/release-policy/manage.py prepare-assets
-          --policy attestation-policy.rego
+          --policy "${{ steps.generate.outputs.ita-policy-file }}"
           --manifest attestation-policy/policy-manifest.yaml
           --predicate predicate.json
           --bundle "$BUNDLE_PATH"
@@ -210,7 +213,7 @@ jobs:
           gh release create "$VERSION"
           --title "Attestation Policy $VERSION"
           --notes-file release-body.md
-          release-assets/attestation-policy.rego
+          release-assets/ita_policy.rego
           release-assets/policy-manifest.yaml
           release-assets/policy-manifest-bundle.tar.gz
           release-assets/predicate.json
