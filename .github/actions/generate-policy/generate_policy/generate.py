@@ -1,46 +1,67 @@
-"""Generate an ITA attestation policy from a policy manifest.
+"""Shared pipeline behind the generate-policy action.
 
-Orchestrates the full pipeline: fetch baselines/firmware/UKI, compute
-measurements per target, render the Rego policy. Returns structured
-predicate data so the caller can persist it.
+Reads the manifest, resolves each target's machine type, and hands the
+targets to one renderer per attestation service. A renderer owns the three
+things the services disagree about -- which evidence it can appraise, how it
+measures a target, and the template it fills -- so everything around those
+lives here and is done once, including the PodVM pull that dominates runtime.
+
+Returns structured predicate data so the caller can persist it.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
-import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Protocol
 
-from .fetch import (
-    fetch_baseline_variants,
-    fetch_firmware,
-    fetch_oci_digest,
-    fetch_uki,
-)
-from .measure import (
-    compute_initdata_rtmr3,
-    compute_measurements,
-    resolve_initdata,
-)
+import yaml
 
-PLATFORM_PLACEHOLDER = "${TDX_PLATFORM_MATCH_BLOCKS}"
-WORKLOAD_PLACEHOLDER = "${TDX_WORKLOAD_MATCH_BLOCKS}"
-NONCE_PLACEHOLDER = "${POLICY_NONCE}"
-DRIVER_VERSION_PLACEHOLDER = "${NVIDIA_DRIVER_VERSION}"
+from .fetch import fetch_oci_digest, fetch_uki
+from .measure import resolve_initdata
 
-PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
-MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
+MACHINE_TYPES_PATH = Path(__file__).parent / "machine-types.yaml"
+
+# Where every renderer writes its Rego. The action owns this location rather
+# than taking it as an input, so a filename that carries meaning -- Trustee
+# resolves {policy_id}_{tee_class}.rego -- cannot be half-defined by a
+# caller, and no later step has to guess a path the generator chose.
+POLICY_DIR_NAME = "generated-policies"
 
 
-def validate_measurement(field: str, value: object) -> str:
-    if not isinstance(value, str) or not MEASUREMENT_RE.fullmatch(value):
-        raise ValueError(f"invalid or missing TDX measurement: {field}")
-    return value
+def policy_output_dir() -> Path:
+    """Where every renderer writes, relative to the workspace.
+
+    Relative rather than absolute, because these paths leave the process as
+    action outputs and are then used by steps on the host, where the
+    container's /github/workspace does not exist. A Docker action runs with
+    the workspace mounted there and as its working directory, so one relative
+    path resolves correctly on both sides and no renderer has to remember to
+    translate what it reports.
+    """
+    return Path(POLICY_DIR_NAME)
+
+
+def load_machine_types() -> dict[str, dict]:
+    """Load the shared machine type table."""
+    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
+
+
+def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
+    """Return the machine-types entry backing a target."""
+    machine_type = target["machine_type"]
+    machine = machine_types.get(machine_type)
+    if machine is None:
+        raise ValueError(
+            f"unknown machine type '{machine_type}' -- update machine-types.yaml"
+        )
+    return machine
 
 
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
@@ -50,10 +71,16 @@ def to_nvat_driver_version(apt_pkg_version: str) -> str:
     return version
 
 
-def resolve_nvidia_driver_version(
+def resolve_nvidia_driver_versions(
     targets: list[dict], artifacts_dir: Path
-) -> str:
-    """Resolve the NVIDIA driver version from UKI measurements.json files."""
+) -> list[str]:
+    """Resolve accepted NVIDIA driver versions from UKI measurements.json files.
+
+    Every version comes from a target's own PodVM image, so a manifest spanning
+    images that disagree accepts each of them rather than failing generation,
+    the same disjunction a multi-target manifest already implies for platform
+    and workload blocks.
+    """
     versions: dict[str, str] = {}
     for target in targets:
         podvm_tag = target.get("podvm_image_tag")
@@ -73,148 +100,7 @@ def resolve_nvidia_driver_version(
             print(f"ERROR: {meas_file}: {error}", file=sys.stderr)
             sys.exit(1)
 
-    if not versions:
-        print("ERROR: no podvm_image_tag in any target", file=sys.stderr)
-        sys.exit(1)
-
-    unique = set(versions.values())
-    if len(unique) > 1:
-        details = ", ".join(f"{t}={v}" for t, v in sorted(versions.items()))
-        print(f"ERROR: driver mismatch across PodVM images ({details})", file=sys.stderr)
-        sys.exit(1)
-
-    return unique.pop()
-
-
-def generate_nonce_rule() -> str:
-    nonce = str(uuid.uuid4())
-    return f'integritee_nonce := "{nonce}"'
-
-
-def generate_platform_match_block(
-    baseline_label: str,
-    measurements: dict,
-) -> str:
-    values = {
-        field: validate_measurement(field, measurements.get(field))
-        for field in PLATFORM_FIELDS
-    }
-    lines = [
-        f"# Platform baseline: {baseline_label}",
-        "matches_tdx_platform if {",
-        "    tdx := input.tdx",
-        "",
-    ]
-    for field in PLATFORM_FIELDS:
-        lines.append(
-            f"    tdx.tdx_{field} == {json.dumps(values[field])}"
-        )
-    lines.append("}")
-    return "\n".join(lines)
-
-
-def generate_workload_match_block(
-    model: str,
-    initdata_label: str,
-    rtmr3: str,
-) -> str:
-    rtmr3 = validate_measurement("rtmr3", rtmr3)
-    return "\n".join([
-        f"# Model: {model} (Initdata: {initdata_label})",
-        "matches_tdx_workload if {",
-        f"    input.tdx.tdx_rtmr3 == {json.dumps(rtmr3)}",
-        "}",
-    ])
-
-
-def render_policy(
-    targets: list[dict],
-    nv_driver_version: str,
-    template_path: Path,
-    output_path: Path,
-) -> None:
-    """Render the Rego policy file from targets with pre-computed measurements."""
-    template = template_path.read_text()
-    for placeholder in (PLATFORM_PLACEHOLDER, WORKLOAD_PLACEHOLDER):
-        if placeholder not in template:
-            print(
-                f"ERROR: Template does not contain {placeholder}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-
-    platform_blocks: list[str] = []
-    workload_blocks: list[str] = []
-    seen_platforms: set[tuple] = set()
-    seen_workloads: set[tuple] = set()
-    variant_count = 0
-    for target in targets:
-        model = target["model"]
-        initdata_label = target.get("initdata_sha384", "unknown")[:12]
-        baseline_variants = target.get("baseline_variants") or [
-            {
-                "version": None,
-                "firmware_sha384": None,
-                "measurements": target["measurements"],
-            }
-        ]
-        for baseline_variant in baseline_variants:
-            baseline_label = "current"
-            if baseline_variant["version"]:
-                firmware = baseline_variant["firmware_sha384"]
-                baseline_label = f"{firmware[:12]}/{baseline_variant['version']}"
-            variant = baseline_variant["measurements"]
-            platform_key = tuple(
-                variant.get(field) for field in PLATFORM_FIELDS
-            )
-            if platform_key not in seen_platforms:
-                seen_platforms.add(platform_key)
-                platform_blocks.append(
-                    generate_platform_match_block(baseline_label, variant)
-                )
-
-            workload_key = (model, variant.get("rtmr3"))
-            if workload_key not in seen_workloads:
-                seen_workloads.add(workload_key)
-                workload_blocks.append(generate_workload_match_block(
-                    model,
-                    initdata_label,
-                    variant["rtmr3"],
-                ))
-            variant_count += 1
-
-    if not variant_count:
-        print("ERROR: No targets to generate policy from", file=sys.stderr)
-        sys.exit(1)
-
-    policy = template.replace(
-        PLATFORM_PLACEHOLDER,
-        "\n\n".join(platform_blocks),
-    )
-    policy = policy.replace(
-        WORKLOAD_PLACEHOLDER,
-        "\n\n".join(workload_blocks),
-    )
-    policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
-    policy = policy.replace(
-        DRIVER_VERSION_PLACEHOLDER,
-        json.dumps(nv_driver_version),
-    )
-
-    if DRIVER_VERSION_PLACEHOLDER in policy:
-        print(f"ERROR: {DRIVER_VERSION_PLACEHOLDER} not substituted", file=sys.stderr)
-        sys.exit(1)
-
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(policy)
-
-    model_names = [t["model"] for t in targets]
-    print(
-        f"Generated ITA policy with {variant_count} TDX measurement variant(s) "
-        f"from {len(targets)} target(s): "
-        f"{', '.join(model_names)} (driver={nv_driver_version}"
-        f") -> {output_path}"
-    )
+    return sorted(set(versions.values()))
 
 
 def get_cvm_measure_version() -> str:
@@ -232,93 +118,62 @@ def get_cvm_measure_version() -> str:
 
 
 @dataclass(frozen=True)
-class PreparedBaseline:
-    version: str
-    firmware_sha384: str
-    ref: str
-    path: Path
-    sha256: str
-    firmware_path: Path
-
-
-@dataclass(frozen=True)
 class PodVMArtifact:
+    ref: str
     uki_path: Path
     digest: str
 
 
+@dataclass(frozen=True)
+class ResolvedTarget:
+    """A manifest target paired with the machine facts behind it.
+
+    The index is the target's position in the manifest, which names its
+    artifact directory and keys its predicate entry.
+    """
+
+    index: int
+    target: dict
+    machine: dict
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """What one renderer produced.
+
+    Predicate entries are keyed by manifest index rather than listed, so a
+    target appraised by more than one service accumulates into a single
+    entry instead of appearing once per renderer.
+    """
+
+    outputs: dict[str, str]
+    predicate_targets: dict[int, dict]
+
+
 @dataclass
 class GenerationContext:
-    """Configuration and memoized artifacts for one generation run."""
+    """Run configuration and the artifacts every renderer shares."""
 
     # Run configuration.
-    baselines_repo: str
+    manifest_file: Path
     podvm_image: str
     artifacts_dir: Path
 
     # Per-run caches. Callers use the methods below, not these dictionaries.
-    _baselines: dict[str, list[PreparedBaseline]] = field(
-        default_factory=dict, init=False, repr=False
-    )
-    _firmware: dict[str, Path] = field(
-        default_factory=dict, init=False, repr=False
-    )
     _podvms: dict[str, PodVMArtifact] = field(
         default_factory=dict, init=False, repr=False
     )
-    _platform_measurements: dict[tuple, dict] = field(
+    _initdata: dict[str, bytes] = field(
         default_factory=dict, init=False, repr=False
     )
 
-    def _get_firmware(self, firmware_sha384: str) -> Path:
-        path = self._firmware.get(firmware_sha384)
-        if path is None:
-            path = (
-                self.artifacts_dir
-                / "firmware"
-                / f"{firmware_sha384}.fd"
-            )
-            fetch_firmware(firmware_sha384, path)
-            self._firmware[firmware_sha384] = path
-        return path
+    def get_podvm(self, podvm_tag: str) -> PodVMArtifact:
+        """Pull and extract a PodVM image once per tag.
 
-    def get_baselines(self, machine_type: str) -> list[PreparedBaseline]:
-        baselines = self._baselines.get(machine_type)
-        if baselines is not None:
-            print(f"  Reusing baseline variants for {machine_type}")
-            return baselines
-
-        baselines = []
-        for variant in fetch_baseline_variants(
-            self.baselines_repo,
-            machine_type,
-        ):
-            version = variant["version"]
-            firmware_sha384 = variant["firmware_sha384"]
-            path = (
-                self.artifacts_dir
-                / "baselines"
-                / machine_type
-                / firmware_sha384
-                / f"{version}.json"
-            )
-            path.parent.mkdir(parents=True, exist_ok=True)
-            data = (
-                json.dumps(variant["baseline"], indent=2) + "\n"
-            ).encode()
-            path.write_bytes(data)
-            baselines.append(PreparedBaseline(
-                version=version,
-                firmware_sha384=firmware_sha384,
-                ref=variant["baseline_ref"],
-                path=path,
-                sha256=hashlib.sha256(data).hexdigest(),
-                firmware_path=self._get_firmware(firmware_sha384),
-            ))
-        self._baselines[machine_type] = baselines
-        return baselines
-
-    def get_podvm(self, podvm_ref: str, podvm_tag: str) -> PodVMArtifact:
+        This is the expensive step of the run and nothing about it is
+        service-specific, which is most of the reason the pipeline is shared.
+        """
+        podvm_ref = f"{self.podvm_image}:{podvm_tag}"
         artifact = self._podvms.get(podvm_ref)
         if artifact is not None:
             print(f"  Reusing UKI: {podvm_tag}")
@@ -328,146 +183,116 @@ class GenerationContext:
         print(f"  UKI: {podvm_tag}")
         fetch_uki(podvm_ref, uki_path)
         artifact = PodVMArtifact(
+            ref=podvm_ref,
             uki_path=uki_path,
             digest=fetch_oci_digest(podvm_ref),
         )
         self._podvms[podvm_ref] = artifact
         return artifact
 
-    def get_platform_measurements(
+    def get_initdata(self, target: dict) -> bytes:
+        """Load and digest-check a target's initdata once.
+
+        Every service measures the same bytes into its own register, so
+        resolving them per renderer would risk them disagreeing.
+        """
+        initdata = self._initdata.get(target.get("initdata_sha384"))
+        if initdata is None:
+            initdata = resolve_initdata(target, self.manifest_file)
+            self._initdata[target["initdata_sha384"]] = initdata
+        return initdata
+
+
+class Renderer(Protocol):
+    """One attestation service's view of the manifest."""
+
+    name: str
+
+    @property
+    def policy_files(self) -> list[Path]:
+        """Every Rego file this renderer writes, known before it runs.
+
+        Declared up front so stale output can be cleared without having to
+        run the renderer that would overwrite it.
+        """
+
+    def cannot_appraise(self, machine: dict) -> str | None:
+        """Why this renderer cannot appraise the machine, or None if it can.
+
+        The reason names the service, since it reaches the log as the
+        explanation for a skipped target.
+        """
+
+    def render(
         self,
-        *,
-        target: dict,
-        initdata: bytes,
-        podvm_tag: str,
-        uki_path: Path,
-        baseline: PreparedBaseline,
-        output_dir: Path,
-    ) -> dict:
-        key = (
-            target["machine_type"],
-            target["ram_gib"],
-            podvm_tag,
-            baseline.firmware_sha384,
-            baseline.sha256,
-        )
-        measurements = self._platform_measurements.get(key)
-        if measurements is not None:
-            print(
-                f"  Reusing platform measurements for "
-                f"{baseline.firmware_sha384[:12]}/{baseline.version}"
-            )
-            return measurements
+        targets: list[ResolvedTarget],
+        context: GenerationContext,
+    ) -> RenderResult:
+        """Measure the targets and write this service's policy files.
 
-        print(
-            f"  Computing platform measurements for "
-            f"{baseline.firmware_sha384[:12]}/{baseline.version}..."
-        )
-        computed = compute_measurements(
-            ram_gib=target["ram_gib"],
-            initdata=initdata,
-            firmware_path=baseline.firmware_path,
-            baseline_path=baseline.path,
-            uki_path=uki_path / "BOOTX64.EFI",
-            disk_path=uki_path / "disk.tar.gz",
-            output_dir=output_dir,
-        )
-        measurements = {
-            field: value
-            for field, value in computed.items()
-            if field != "rtmr3"
-        }
-        self._platform_measurements[key] = measurements
-        return measurements
+        An empty target list is a legitimate input: it renders an inert
+        policy rather than failing, so a caller's success never depends on
+        manifest contents it may not control.
+        """
 
 
-def process_target(
-    index: int,
-    target: dict,
-    manifest_file: Path,
-    context: GenerationContext,
-) -> dict:
-    model = target["model"]
-    machine_type = target["machine_type"]
-    podvm_tag = target["podvm_image_tag"]
-    target_dir = context.artifacts_dir / f"target-{index}"
-
-    print(f"\n{'=' * 60}")
-    print(f"Target {index}: {model}")
-    print(f"{'=' * 60}")
-
-    baselines = context.get_baselines(machine_type)
-    podvm_ref = f"{context.podvm_image}:{podvm_tag}"
-    podvm = context.get_podvm(podvm_ref, podvm_tag)
-    try:
-        initdata = resolve_initdata(target, manifest_file)
-    except ValueError as error:
-        raise ValueError(f"{model}: {error}") from error
-
-    rtmr3 = compute_initdata_rtmr3(initdata)
-    measured_variants: list[dict] = []
-    for baseline in baselines:
-        output_dir = (
-            target_dir / baseline.firmware_sha384 / baseline.version
-        )
-        platform_measurements = context.get_platform_measurements(
-            target=target,
-            initdata=initdata,
-            podvm_tag=podvm_tag,
-            uki_path=podvm.uki_path,
-            baseline=baseline,
-            output_dir=output_dir,
-        )
-        measurements = {
-            **platform_measurements,
-            "rtmr3": rtmr3,
-        }
-        output_dir.mkdir(parents=True, exist_ok=True)
-        (output_dir / "initdata.toml").write_bytes(initdata)
-        (output_dir / "measurements.json").write_text(
-            json.dumps(measurements, indent=2) + "\n"
-        )
-        measured_variants.append({
-            "version": baseline.version,
-            "firmware_sha384": baseline.firmware_sha384,
-            "baseline_ref": baseline.ref,
-            "baseline_sha256": baseline.sha256,
-            "measurements": measurements,
-        })
-
-    primary_variant = measured_variants[0]
-    target["measurements"] = primary_variant["measurements"]
-    target["baseline_variants"] = measured_variants
-    return {
-        **target,
-        "podvm_image": podvm_ref,
-        "podvm_digest": podvm.digest,
-        "firmware_sha384": primary_variant["firmware_sha384"],
-        "baseline_ref": primary_variant["baseline_ref"],
-        "baseline_sha256": primary_variant["baseline_sha256"],
-        "initdata_hash": target["initdata_sha384"],
-    }
-
-
-def generate_policy(
-    manifest_file: Path,
-    baselines_repo: str,
-    podvm_image: str,
-    artifacts_dir: Path,
-    template_path: Path,
-    policy_output: Path,
-    predicate_file: Path | None = None,
-) -> None:
-    """Run the full pipeline: read manifest, fetch, measure, render policy, update predicate.
-
-    If predicate_file is provided and exists, it is read, updated in place
-    with cvm_measure_version and per-target data, and written back.
+def parse_policy_types(raw: str, known: Iterable[str]) -> list[str]:
+    """Parse the policy-types input into an ordered, deduplicated list.
     """
+    requested = [item for item in re.split(r"[,\s]+", raw.strip()) if item]
+    supported = sorted(known)
+    if not requested:
+        raise ValueError(
+            f"policy-types is empty; expected one or more of {supported}"
+        )
+    unknown = [item for item in requested if item not in supported]
+    if unknown:
+        raise ValueError(
+            f"unknown policy type(s) {unknown}; expected one or more of "
+            f"{supported}"
+        )
+    return list(dict.fromkeys(requested))
+
+
+def clear_policies(renderers: Iterable[Renderer]) -> None:
+    """Remove policies from an earlier run before writing new ones.
+
+    A file left behind by a previous invocation would otherwise be attested
+    and released as though it were current, so this covers every type the
+    action can emit rather than only the requested ones. It removes only the
+    names the action itself writes, since the directory it owns sits inside
+    the caller's checkout.
+    """
+    for renderer in renderers:
+        for path in renderer.policy_files:
+            if path.exists():
+                print(f"Removing stale policy: {path}")
+                path.unlink()
+
+
+def write_outputs(outputs: dict[str, str]) -> None:
+    """Report what was written back to the workflow.
+
+    A Docker action cannot give its outputs a value in action.yml, so every
+    path a later step needs arrives here rather than as a literal the caller
+    has to keep in agreement with this code.
+    """
+    for name, value in outputs.items():
+        print(f"  {name}={value}")
+
+    output_file = os.environ.get("GITHUB_OUTPUT")
+    if not output_file:
+        return
+    with open(output_file, "a", encoding="utf-8") as handle:
+        for name, value in outputs.items():
+            handle.write(f"{name}={value}\n")
+
+
+def load_targets(manifest_file: Path) -> list[dict]:
     if not manifest_file.exists():
         print(f"ERROR: manifest file not found: {manifest_file}", file=sys.stderr)
         sys.exit(1)
 
-    import yaml
     doc = yaml.safe_load(manifest_file.read_text()) or {}
     targets = doc.get("targets", [])
     if not targets:
@@ -475,37 +300,90 @@ def generate_policy(
         sys.exit(1)
 
     print(f"Loaded {len(targets)} targets from {manifest_file}")
+    return targets
 
+
+def generate_policy(
+    manifest_file: Path,
+    podvm_image: str,
+    artifacts_dir: Path,
+    renderers: list[Renderer],
+    predicate_file: Path | None = None,
+) -> None:
+    """Run every renderer over the manifest and update the predicate.
+
+    If predicate_file is provided and exists, it is read, updated in place
+    with cvm_measure_version and per-target data, and written back.
+    """
+    targets = load_targets(manifest_file)
+    machine_types = load_machine_types()
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     context = GenerationContext(
-        baselines_repo=baselines_repo,
+        manifest_file=manifest_file,
         podvm_image=podvm_image,
         artifacts_dir=artifacts_dir,
     )
-    predicate_targets: list[dict] = []
+
+    resolved: list[ResolvedTarget] = []
     for index, target in enumerate(targets):
         try:
-            predicate_targets.append(
-                process_target(index, target, manifest_file, context)
-            )
+            machine = resolve_machine(target, machine_types)
         except ValueError as error:
             print(f"ERROR: {error}", file=sys.stderr)
             sys.exit(1)
+        resolved.append(ResolvedTarget(index, target, machine))
 
-    print(f"\n{'=' * 60}")
-    print("Generating ITA policy")
-    print(f"{'=' * 60}")
-    nv_driver_version = resolve_nvidia_driver_version(targets, artifacts_dir)
-    render_policy(
-        targets,
-        nv_driver_version,
-        template_path,
-        policy_output,
-    )
+    predicate_targets: dict[int, dict] = {}
+    target_counts: dict[str, int] = {}
+    for renderer in renderers:
+        selected: list[ResolvedTarget] = []
+        for candidate in resolved:
+            reason = renderer.cannot_appraise(candidate.machine)
+            if reason:
+                print(f"::notice::Skipping {candidate.target['model']}: {reason}")
+                continue
+            selected.append(candidate)
+
+        print(f"\n{'=' * 60}")
+        print(f"Generating {renderer.name} policy")
+        print(f"{'=' * 60}")
+        try:
+            result = renderer.render(selected, context)
+        except ValueError as error:
+            print(f"ERROR: {error}", file=sys.stderr)
+            sys.exit(1)
+        for index, entry in result.predicate_targets.items():
+            predicate_targets.setdefault(index, {}).update(entry)
+        target_counts[renderer.name] = len(selected)
+        write_outputs({
+            **result.outputs,
+            f"{renderer.name}-target-count": str(len(selected)),
+        })
+
+    # One type matching nothing is legitimate: an empty policy revokes the
+    # targets that service used to admit, which is what withdrawing
+    # compromised software looks like and is the end state of migrating off
+    # a service. Every requested type matching nothing is different in kind,
+    # since no policy this run produced can admit anything, and that is a
+    # manifest or configuration mistake rather than an intended revocation.
+    if not any(target_counts.values()):
+        print(
+            "ERROR: no manifest target matched any requested policy type "
+            f"({', '.join(target_counts)}); every policy generated here "
+            "admits nothing",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     if predicate_file:
         predicate = json.loads(predicate_file.read_text()) if predicate_file.exists() else {}
         predicate["cvm_measure_version"] = get_cvm_measure_version()
-        predicate["targets"] = predicate_targets
+        # How much each policy covers, so a policy that matched nothing is
+        # legible from the signed artifact rather than discovered later from
+        # a node failing attestation.
+        predicate["target_counts"] = target_counts
+        predicate["targets"] = [
+            predicate_targets[index] for index in sorted(predicate_targets)
+        ]
         predicate_file.write_text(json.dumps(predicate, indent=2) + "\n")
         print(f"Updated predicate: {predicate_file}")

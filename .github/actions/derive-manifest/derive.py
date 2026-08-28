@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Derive a policy manifest from a blobheart ref or local checkout.
 
-Discovers CC models, extracts initdata, derives machine_type/podvm_image_tag
-from kustomization.yaml, and looks up ram_gib from a static machine-types.yaml.
+Discovers CC models, extracts initdata, and derives machine_type/podvm_image_tag
+from kustomization.yaml. Machine types are validated against the shared
+machine-types.yaml table; their hardware facts are looked up at generation time
+rather than copied into the manifest.
 
 Hardcoded blobheart paths:
   - CC models: k8s/geofence/components/models_v2/generated/<model>-cc/
@@ -48,6 +50,13 @@ CC_LABEL = "cohere.com/confidential-compute=true"
 KATA_IMAGE_ANNOTATION = "io.katacontainers.config.hypervisor.image"
 KATA_MACHINE_ANNOTATION = "io.katacontainers.config.hypervisor.machine_type"
 INITDATA_DIR = "initdata"
+
+# The table lives in the generate-policy package so it is baked into that
+# action's Docker image. This action is composite and gets the whole repo.
+MACHINE_TYPES_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "generate-policy/generate_policy/machine-types.yaml"
+)
 
 
 def read_file(root: Path | None, ref: str | None, path: str) -> str:
@@ -183,9 +192,8 @@ def extract_gpu_label(model_yaml: str) -> str | None:
 
 
 def load_machine_types() -> dict[str, dict]:
-    """Load static machine type -> ram_gib mapping."""
-    mt_path = Path(__file__).parent / "machine-types.yaml"
-    return yaml.safe_load(mt_path.read_text())
+    """Load the shared machine type table."""
+    return yaml.safe_load(MACHINE_TYPES_PATH.read_text())
 
 
 def resolve_local_ref(root: Path) -> str:
@@ -273,12 +281,10 @@ def main() -> None:
         machine_type = label_info["machine_type"]
         podvm_image_tag = label_info["podvm_image_tag"]
 
-        mt_info = machine_types.get(machine_type)
-        if not mt_info:
+        if machine_type not in machine_types:
             print(f"  ERROR: unknown machine type '{machine_type}' -- "
                   "update machine-types.yaml", file=sys.stderr)
             sys.exit(1)
-        ram_gib = mt_info["ram_gib"]
 
         kata_path = f"{GENERATED_DIR}/{cc_name}/kata-policy-patch.yaml"
         kata_raw = read_file(root, ref, kata_path)
@@ -299,7 +305,6 @@ def main() -> None:
             "model": model,
             "machine_type": machine_type,
             "podvm_image_tag": podvm_image_tag,
-            "ram_gib": ram_gib,
             "initdata_file": initdata_file,
             "initdata_sha384": initdata_sha384,
             "added": today,
@@ -307,7 +312,7 @@ def main() -> None:
         }
         targets.append(target)
         print(f"  Derived: {machine_type}, {podvm_image_tag}, "
-              f"ram_gib={ram_gib}, initdata_sha384={initdata_sha384}")
+              f"initdata_sha384={initdata_sha384}")
 
     if not targets:
         print(
