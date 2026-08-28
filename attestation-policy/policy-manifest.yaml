@@ -83,21 +83,5 @@ targets:
   - 0c4954e7c10980ce0527e33dfaaab64ac26b1e7c
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
-# TODO temporary testing below, remove (along with initdata files) before merge
-- model: cat2508rws-l
-  machine_type: Standard_NCC40ads_H100_v5
-  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
-  initdata_file: initdata/d5e0c5f08906a99e8ddcd8b99a08d5d347a066d231da4a51df3138a7e5c38e26022b913b064b8db51a263508c5bc7c05.toml
-  initdata_sha384: d5e0c5f08906a99e8ddcd8b99a08d5d347a066d231da4a51df3138a7e5c38e26022b913b064b8db51a263508c5bc7c05
-  added: '2026-08-26'
-  sources:
-  - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
-- model: azure-snp-trustee-test
-  machine_type: Standard_NCC40ads_H100_v5
-  podvm_image_tag: podvm-ubuntu-tdx-snp-nvidia-cohere-20260714-987387
-  initdata_file: initdata/ba0d440069e11b007e6735aa14a913968798c33ef6882a5a9e0eccae9ae5d34e5ec125531ae369d7fa4a9787493bb36c.toml
-  initdata_sha384: ba0d440069e11b007e6735aa14a913968798c33ef6882a5a9e0eccae9ae5d34e5ec125531ae369d7fa4a9787493bb36c
-  added: '2026-08-27'
-  sources:
-  - 64c780b0a7c9149a0472ba0ec7c9af4b0ec65acc
+
 
