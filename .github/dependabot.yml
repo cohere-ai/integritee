@@ -7,13 +7,6 @@ updates:
     groups:
       python-dependencies:
         patterns: ["*"]
-  - package-ecosystem: pip
-    directory: "/clients/python"
-    schedule:
-      interval: weekly
-    groups:
-      python-client-dependencies:
-        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
