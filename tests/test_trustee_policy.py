@@ -142,16 +142,18 @@ def test_cpu_policy_affirms_the_node_it_was_generated_from(
 @pytest.mark.parametrize(
     "path, value, denied",
     [
-        (["tpm", "pcr04"], "0" * 64, "executables"),
-        (["tpm", "pcr05"], "0" * 64, "executables"),
-        (["tpm", "pcr09"], "0" * 64, "executables"),
-        (["tpm", "pcr11"], "0" * 64, "executables"),
-        (["measurement"], "A" * 64, "executables"),
+        (["az-snp-vtpm", "tpm", "pcr04"], "0" * 64, "executables"),
+        (["az-snp-vtpm", "tpm", "pcr05"], "0" * 64, "executables"),
+        (["az-snp-vtpm", "tpm", "pcr09"], "0" * 64, "executables"),
+        (["az-snp-vtpm", "tpm", "pcr11"], "0" * 64, "executables"),
+        (["az-snp-vtpm", "measurement"], "A" * 64, "executables"),
+        # Top level rather than under the attester, since transform_claims
+        # lifts it there before the policy ever sees it.
         (["init_data"], "0" * 64, "configuration"),
-        (["policy_debug_allowed"], "true", "configuration"),
-        (["policy_migrate_ma"], "true", "configuration"),
-        (["platform_smt_enabled"], "true", "configuration"),
-        (["reported_tcb_snp"], "26", "hardware"),
+        (["az-snp-vtpm", "policy_debug_allowed"], "true", "configuration"),
+        (["az-snp-vtpm", "policy_migrate_ma"], "true", "configuration"),
+        (["az-snp-vtpm", "platform_smt_enabled"], "true", "configuration"),
+        (["az-snp-vtpm", "reported_tcb_snp"], "26", "hardware"),
     ],
 )
 def test_cpu_policy_denies_mutated_evidence(
@@ -165,7 +167,7 @@ def test_cpu_policy_denies_mutated_evidence(
 ):
     """One mutation at a time, so each check is shown to carry its dimension."""
     mutated = copy.deepcopy(snp_claims)
-    claim = mutated["az-snp-vtpm"]
+    claim = mutated
     for key in path[:-1]:
         claim = claim[key]
     claim[path[-1]] = value
@@ -242,7 +244,7 @@ def test_any_approved_image_pairs_with_any_approved_initdata(
         [("cat2508rws-l", pcrs["pcr8"]), ("cmp-l", other_initdata)],
     )
     crossed = copy.deepcopy(snp_claims)
-    crossed["az-snp-vtpm"]["init_data"] = other_initdata
+    crossed["init_data"] = other_initdata
 
     appraised = _appraise(opa, policy, crossed, tmp_path)
 

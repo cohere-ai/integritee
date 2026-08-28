@@ -175,7 +175,7 @@ def generate_initdata_block(model: str, initdata_label: str, pcr8: str) -> str:
     return "\n".join([
         f"# Model: {model} (Initdata: {initdata_label})",
         "azsnp_initdata_ok if {",
-        f"\tazsnp.init_data == {json.dumps(pcr8)}",
+        f"\tinput.init_data == {json.dumps(pcr8)}",
         "}",
     ])
 

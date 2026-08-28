@@ -167,10 +167,10 @@ configuration := 2 if {
 ${AZSNP_IMAGE_BLOCKS}
 
 # One block per deployment initdata, which carries the Kata agent policy and
-# the KBS configuration. Read through init_data rather than tpm.pcr08: the
-# two are byte-identical here, since extend_claim overwrites init_data with
-# hex of PCR 8, but the named claim reads as an initdata binding instead of
-# an opaque register compare.
+# the KBS configuration. Read through input.init_data rather than tpm.pcr08:
+# the two are byte-identical here, since extend_claim overwrites init_data
+# with hex of PCR 8, but the named claim reads as an initdata binding instead
+# of an opaque register compare.
 #
 # The value is sha256(0x00 * 32 || initdata_digest[:32]). A digest wider than
 # the register is truncated to fit rather than re-hashed, so the usual sha384

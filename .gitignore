@@ -4,6 +4,9 @@ release-assets/
 cvm-artifacts/
 release-body.md
 
+# Where the generate-policy action writes, inside the caller's checkout
+generated-policies/
+
 # Python
 __pycache__/
 *.pyc
