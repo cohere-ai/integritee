@@ -315,23 +315,48 @@ def test_local_policy_coverage_failure_does_not_suggest_waiting():
     assert verify.RELEASE_WORKFLOW_URL not in message
 
 
-def test_workflows_use_explicit_dry_run_gates():
-    add_workflow = (
-        REPO_ROOT / ".github/workflows/add-from-blobheart.yaml"
-    ).read_text()
-    prune_workflow = (
-        REPO_ROOT / ".github/workflows/prune-from-blobheart.yaml"
-    ).read_text()
-    release_workflow = (
-        REPO_ROOT / ".github/workflows/release-policy.yaml"
-    ).read_text()
+def _load_workflow(name: str) -> dict:
+    return yaml.safe_load(
+        (REPO_ROOT / f".github/workflows/{name}.yaml").read_text()
+    )
 
-    assert "&& 'true' || 'false'" in add_workflow
-    assert "inputs.dry_run && 'true' || 'false'" in prune_workflow
-    assert "DRY_RUN:" not in release_workflow
-    assert release_workflow.count(
-        "if: github.event_name == 'push' || inputs.dry_run == false"
-    ) == 7
+
+def test_workflows_use_explicit_publish_gates():
+    """Each workflow splits generate from publish, with write credentials
+    only in the publish job, behind the release environment."""
+
+    release = _load_workflow("release-policy")
+    add = _load_workflow("add-from-blobheart")
+    prune = _load_workflow("prune-from-blobheart")
+
+    # release-policy: publish only on main, gated by the release environment.
+    release_publish = release["jobs"]["publish"]
+    assert release_publish["environment"] == "release"
+    assert "refs/heads/main" in release_publish["if"]
+    assert (
+        "push" in release_publish["if"]
+        or "inputs.publish" in release_publish["if"]
+    )
+    release_generate = release["jobs"]["generate"]
+    assert "ITA_ADMIN_API_KEY" not in str(release_generate)
+    assert "CC_POLICY_APP" not in str(release_generate)
+
+    # add-from-blobheart: generate has no write credentials, publish has
+    # the release environment and the CC_POLICY_APP token. Publish always
+    # pushes to main (no PR path) and only runs on main.
+    add_generate = add["jobs"]["generate"]
+    assert "CC_POLICY_APP" not in str(add_generate)
+    add_publish = add["jobs"]["publish"]
+    assert add_publish["environment"] == "release"
+    assert "refs/heads/main" in add_publish["if"]
+    assert "CC_POLICY_APP" in str(add_publish)
+
+    # prune-from-blobheart: same pattern.
+    prune_job = prune["jobs"]["prune"]
+    assert "CC_POLICY_APP" not in str(prune_job)
+    prune_publish = prune["jobs"]["publish"]
+    assert prune_publish["environment"] == "release"
+    assert "CC_POLICY_APP" in str(prune_publish)
 
 
 def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):

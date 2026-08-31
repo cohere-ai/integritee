@@ -1,5 +1,10 @@
 # Imports confidential-compute targets from Blobheart, merges them into the
 # policy manifest, and publishes the change so the release workflow can run.
+#
+# generate: builds the merged manifest and diff. Authenticates to read
+# blobheart and the current manifest, but does not write to integritee.
+# publish: pushes the merged manifest to main. Gated by the `release`
+# environment, so it runs from main or an allowed branch.
 name: Add from Blobheart
 run-name: Blobheart policy ${{ github.event.client_payload.correlation_id || github.run_id }}
 
@@ -12,42 +17,44 @@ on:
         description: "Space-separated blobheart commit SHAs to derive manifests from"
         required: true
         type: string
-      dry_run:
-        description: "If true, show what would change without committing"
+      publish:
+        description: "Commit the merged manifest to main (main only)"
         required: false
         type: boolean
         default: false
 
 permissions:
-  actions: read
-  contents: write
+  contents: read
 
 concurrency:
   group: add-from-blobheart
   cancel-in-progress: false
 
 jobs:
-  add-targets:
+  generate:
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
     env:
       BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
-      DRY_RUN: ${{ ((github.event_name == 'workflow_dispatch' && inputs.dry_run) || (github.event_name == 'repository_dispatch' && github.event.client_payload.dry_run)) && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
           persist-credentials: false
 
+      # Read-only token for blobheart + baselines. Cannot write to integritee.
       - name: Mint GitHub App token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
           owner: cohere-ai
-          repositories: integritee,blobheart
-          permission-contents: write
+          repositories: cohere-cc-baselines,blobheart
 
       - name: Validate Blobheart refs
         env:
@@ -55,7 +62,7 @@ jobs:
         run: >-
           python3 .github/workflows/add-from-blobheart/manage.py validate
           --blobheart-refs "$BLOBHEART_REFS"
-          --dry-run "$DRY_RUN"
+          --dry-run "true"
 
       - name: Derive manifests from blobheart sources
         id: derive
@@ -91,6 +98,7 @@ jobs:
           manifest-file: attestation-policy/policy-manifest.yaml
 
       - name: Upload merged manifest
+        if: steps.changes.outputs.changed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: merged-policy-manifest
@@ -98,11 +106,57 @@ jobs:
             attestation-policy/policy-manifest.yaml
             attestation-policy/initdata/
 
+  publish:
+    needs: generate
+    # A repository_dispatch runs publish unconditionally. A manual dispatch
+    # requires the publish flag to be selected, otherwise it stops after
+    # generate. The environment gates the CC_POLICY_APP token to main.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'repository_dispatch' || inputs.publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    permissions:
+      contents: read
+    env:
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install pyyaml
+
+      - name: Download merged manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: merged-policy-manifest
+
+      # Write token. Only available here because this job has
+      # environment: release; generate above cannot read these secrets.
+      - name: Mint Integritee write token
+        id: write-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
+
       - name: Commit and push manifest
         id: publish
-        if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
         run: >-
           python3 .github/workflows/add-from-blobheart/manage.py publish
           --manifest attestation-policy/policy-manifest.yaml
