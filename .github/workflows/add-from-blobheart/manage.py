@@ -159,7 +159,12 @@ def publish(args: argparse.Namespace) -> None:
         f"{args.blobheart_refs}",
     )
     run("gh", "auth", "setup-git")
-    run("git", "push", "origin", "HEAD")
+    # HEAD is detached because the publish job pinned checkout to the
+    # generate job's commit. Rebase onto the latest main so the push is a
+    # fast-forward even if main advanced between the two jobs.
+    run("git", "fetch", "origin", "main")
+    run("git", "rebase", "origin/main")
+    run("git", "push", "origin", "HEAD:main")
     release_sha = run(
         "git",
         "rev-parse",

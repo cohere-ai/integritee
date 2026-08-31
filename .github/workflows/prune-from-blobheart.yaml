@@ -1,9 +1,9 @@
 # Removes policy targets whose Blobheart source revisions are retired and
 # opens the resulting manifest change as a pull request.
 #
-# prune: prunes the manifest and uploads the diff.
+# prune: builds the pruned manifest and uploads the diff. No write secrets.
 # publish: creates the PR. Gated by the `release` environment; a dispatch
-# without create_pr runs only the generate phase.
+# without create_pr runs only the prune phase.
 name: Prune from Blobheart
 
 on:
@@ -89,18 +89,18 @@ jobs:
   publish:
     needs: prune
     if: >-
-      inputs.create_pr && needs.generate.outputs.changed == 'true'
+      inputs.create_pr && needs.prune.outputs.changed == 'true'
     runs-on: ubuntu-latest
     environment: release
     permissions:
       contents: read
     env:
       RETIRE_SOURCES: ${{ inputs.retire_sources }}
-      REMOVED: ${{ needs.generate.outputs.removed }}
-      TRIMMED: ${{ needs.generate.outputs.trimmed }}
-      REMAINING: ${{ needs.generate.outputs.remaining }}
+      REMOVED: ${{ needs.prune.outputs.removed }}
+      TRIMMED: ${{ needs.prune.outputs.trimmed }}
+      REMAINING: ${{ needs.prune.outputs.remaining }}
     steps:
-      # Pin to the commit generate ran against.
+      # Pin to the commit prune ran against.
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
@@ -112,7 +112,7 @@ jobs:
           name: pruned-policy-manifest
 
       # Write token. Only available here because this job has
-      # environment: release; generate above cannot read these secrets.
+      # environment: release; prune above cannot read these secrets.
       - name: Mint Integritee write token
         id: write-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
