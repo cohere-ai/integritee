@@ -1,5 +1,10 @@
 # Generates and validates the composite attestation policy, uploads it to ITA,
 # and publishes signed release assets and provenance.
+#
+# generate: builds and validates policies. It authenticates to GCP/GHCR to
+# measure images but does not upload to ITA or create a GitHub release.
+# publish: only on push to main (or explicit dispatch), gated by the `release`
+# environment, with access to ITA and Sigstore credentials.
 name: Release Policy
 
 on:
@@ -22,26 +27,31 @@ on:
         description: "Reason for this release"
         required: false
         type: string
-      dry_run:
-        description: "Skip ITA upload, Sigstore signing, and GitHub release creation"
+      publish:
+        description: "Upload to ITA and create the GitHub release (main only)"
         required: false
-        default: true
         type: boolean
+        default: false
 
 permissions:
-  id-token: write
-  contents: write
-  attestations: write
-  packages: read
+  contents: read
 
 concurrency:
   group: production-ita-policy-release
   cancel-in-progress: false
 
 jobs:
-  release:
+  generate:
     runs-on: ubuntu-latest
-    environment: release
+    permissions:
+      contents: read
+      packages: read
+      id-token: write   # GCP workload identity federation
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      ita-policy-file: ${{ steps.generate.outputs.ita-policy-file }}
+      trustee-cpu-policy-file: ${{ steps.generate.outputs.trustee-cpu-policy-file }}
+      trustee-gpu-policy-file: ${{ steps.generate.outputs.trustee-gpu-policy-file }}
     env:
       # The single managed ITA policy every deployed initdata pins. The "-a"
       # suffix is historical, from a retired blue/green slot pair; the name is
@@ -88,16 +98,6 @@ jobs:
           owner: cohere-ai
           repositories: cohere-cc-baselines,blobheart
 
-      - name: Mint Integritee release token
-        id: release-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
-          owner: cohere-ai
-          repositories: integritee
-          permission-contents: write
-
       - name: Install ORAS
         uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
 
@@ -129,63 +129,15 @@ jobs:
           predicate-file: predicate.json
 
       # ----------------------------------------------------------------
-      # Upload to ITA
+      # Validate manifest
       # ----------------------------------------------------------------
       - name: Validate policy manifest
-        if: github.event_name == 'push' || inputs.dry_run == false
         uses: ./.github/actions/validate-manifest
         with:
           manifest-file: attestation-policy/policy-manifest.yaml
 
-      - name: Upload policy to ITA
-        if: github.event_name == 'push' || inputs.dry_run == false
-        id: upload
-        uses: ./.github/actions/upload-ita-policy
-        with:
-          policy-file: ${{ steps.generate.outputs.ita-policy-file }}
-          policy-id: ${{ env.ITA_POLICY_ID }}
-          policy-name: ${{ env.ITA_POLICY_NAME }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
-          predicate-file: predicate.json
-
-      - name: Fetch uploaded policy from ITA
-        if: github.event_name == 'push' || inputs.dry_run == false
-        id: fetch
-        uses: ./.github/actions/fetch-ita-policy
-        with:
-          policy-id: ${{ steps.upload.outputs.policy-id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
-
-      - name: Verify uploaded policy
-        if: github.event_name == 'push' || inputs.dry_run == false
-        run: >-
-          diff "${{ steps.generate.outputs.ita-policy-file }}"
-          "${{ steps.fetch.outputs.policy-file }}"
-
       # ----------------------------------------------------------------
-      # Attest policy with Sigstore
-      # ----------------------------------------------------------------
-      # One bundle with several subjects, so a single Rekor entry covers every
-      # released policy. The manifest is named too: its content is already in
-      # the predicate, but a subject gives it a digest a consumer can check
-      # directly instead of diffing a download against the predicate.
-      - name: Attest policies with Sigstore
-        if: github.event_name == 'push' || inputs.dry_run == false
-        id: attest
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
-        with:
-          subject-path: |
-            ${{ steps.generate.outputs.ita-policy-file }}
-            ${{ steps.generate.outputs.trustee-cpu-policy-file }}
-            ${{ steps.generate.outputs.trustee-gpu-policy-file }}
-            attestation-policy/policy-manifest.yaml
-          predicate-type: https://cohere.com/attestation-policy/v1
-          predicate-path: predicate.json
-
-      # ----------------------------------------------------------------
-      # Upload workflow artifacts (always, for inspection)
+      # Hand off to publish, and leave the same files behind for inspection
       # ----------------------------------------------------------------
       - name: Upload workflow artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -197,19 +149,107 @@ jobs:
             ${{ steps.generate.outputs.trustee-gpu-policy-file }}
             predicate.json
 
+  publish:
+    needs: generate
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish)
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read       # the release itself is created with the App token below
+      attestations: write
+      id-token: write      # Sigstore
+    env:
+      ITA_POLICY_ID: cbeedffa-e224-4664-b6b4-573fcd4133d3
+      ITA_POLICY_NAME: integritee-policy-a
+      REASON: ${{ inputs.reason || '' }}
+    steps:
+      # Pin to the commit generate ran against, so a push landing mid-run
+      # cannot pair the downloaded policy with a different manifest.
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      - name: Download generated policy
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: attestation-release-assets
+
+      - name: Mint Integritee release token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
+
+      # ----------------------------------------------------------------
+      # Upload to ITA, then read it back to prove the stored policy is exactly
+      # what generate produced
+      # ----------------------------------------------------------------
+      - name: Upload policy to ITA
+        id: upload
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: ${{ needs.generate.outputs.ita-policy-file }}
+          policy-id: ${{ env.ITA_POLICY_ID }}
+          policy-name: ${{ env.ITA_POLICY_NAME }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+          predicate-file: predicate.json
+
+      - name: Fetch uploaded policy from ITA
+        id: fetch
+        uses: ./.github/actions/fetch-ita-policy
+        with:
+          policy-id: ${{ env.ITA_POLICY_ID }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.ITA_API_URL }}
+
+      - name: Verify uploaded policy
+        run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"
+
+      # ----------------------------------------------------------------
+      # Attest policies with Sigstore
+      # ----------------------------------------------------------------
+      # One bundle with several subjects, so a single Rekor entry covers every
+      # released policy. The manifest is named too: its content is already in
+      # the predicate, but a subject gives it a digest a consumer can check
+      # directly instead of diffing a download against the predicate.
+      - name: Attest policies with Sigstore
+        id: attest
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
+        with:
+          subject-path: |
+            ${{ needs.generate.outputs.ita-policy-file }}
+            ${{ needs.generate.outputs.trustee-cpu-policy-file }}
+            ${{ needs.generate.outputs.trustee-gpu-policy-file }}
+            attestation-policy/policy-manifest.yaml
+          predicate-type: https://cohere.com/attestation-policy/v1
+          predicate-path: predicate.json
+
       # ----------------------------------------------------------------
       # Create GitHub Release
       # ----------------------------------------------------------------
       - name: Prepare release assets
-        if: github.event_name == 'push' || inputs.dry_run == false
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-          POLICY_ID: ${{ steps.upload.outputs.policy-id }}
+          POLICY_ID: ${{ env.ITA_POLICY_ID }}
         run: >-
           python3 .github/workflows/release-policy/manage.py prepare-assets
-          --policy "${{ steps.generate.outputs.ita-policy-file }}"
-          "${{ steps.generate.outputs.trustee-cpu-policy-file }}"
-          "${{ steps.generate.outputs.trustee-gpu-policy-file }}"
+          --policy "${{ needs.generate.outputs.ita-policy-file }}"
+          "${{ needs.generate.outputs.trustee-cpu-policy-file }}"
+          "${{ needs.generate.outputs.trustee-gpu-policy-file }}"
           --manifest attestation-policy/policy-manifest.yaml
           --predicate predicate.json
           --bundle "$BUNDLE_PATH"
@@ -219,10 +259,9 @@ jobs:
           --reason "$REASON"
 
       - name: Create release
-        if: github.event_name == 'push' || inputs.dry_run == false
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-          VERSION: ${{ steps.version.outputs.version }}
+          VERSION: ${{ needs.generate.outputs.version }}
         run: >-
           gh release create "$VERSION"
           --title "Attestation Policy $VERSION"

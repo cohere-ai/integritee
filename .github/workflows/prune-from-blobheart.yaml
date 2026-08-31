@@ -1,5 +1,9 @@
 # Removes policy targets whose Blobheart source revisions are retired and
 # opens the resulting manifest change as a pull request.
+#
+# prune: prunes the manifest and uploads the diff.
+# publish: creates the PR. Gated by the `release` environment; a dispatch
+# without create_pr runs only the generate phase.
 name: Prune from Blobheart
 
 on:
@@ -9,36 +13,31 @@ on:
         description: "Space-separated blobheart SHAs to decommission"
         required: true
         type: string
-      dry_run:
-        description: "If true, show what would change without creating a PR"
+      create_pr:
+        description: "Create a PR with the pruned manifest"
         required: false
         type: boolean
         default: false
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   prune:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.changes.outputs.changed }}
+      removed: ${{ steps.prune.outputs.removed }}
+      trimmed: ${{ steps.prune.outputs.trimmed }}
+      remaining: ${{ steps.prune.outputs.remaining }}
+      warnings: ${{ steps.prune.outputs.warnings }}
     env:
       RETIRE_SOURCES: ${{ inputs.retire_sources }}
-      DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
-
-      - name: Mint GitHub App token
-        id: app-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
-        with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
-          owner: cohere-ai
-          repositories: integritee
-          permission-contents: write
-          permission-pull-requests: write
 
       - name: Install PyYAML
         run: pip install pyyaml
@@ -75,6 +74,9 @@ jobs:
         run: |
           echo "::warning::${{ steps.prune.outputs.warnings }}"
 
+      # ----------------------------------------------------------------
+      # Hand off to publish, and leave the same files behind for inspection
+      # ----------------------------------------------------------------
       - name: Upload pruned manifest
         if: steps.changes.outputs.changed == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
@@ -84,15 +86,52 @@ jobs:
             attestation-policy/policy-manifest.yaml
             attestation-policy/initdata/
 
+  publish:
+    needs: prune
+    if: >-
+      inputs.create_pr && needs.generate.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RETIRE_SOURCES: ${{ inputs.retire_sources }}
+      REMOVED: ${{ needs.generate.outputs.removed }}
+      TRIMMED: ${{ needs.generate.outputs.trimmed }}
+      REMAINING: ${{ needs.generate.outputs.remaining }}
+    steps:
+      # Pin to the commit generate ran against.
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Download pruned manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: pruned-policy-manifest
+
+      # Write token. Only available here because this job has
+      # environment: release; generate above cannot read these secrets.
+      - name: Mint Integritee write token
+        id: write-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Create PR
-        if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
         run: |
           SHORT_SOURCES=$(echo "$RETIRE_SOURCES" | tr ' ' '\n' | cut -c1-8 | tr '\n' ' ')
           BRANCH="prune/retire-$(echo "$SHORT_SOURCES" | tr ' ' '-' | sed 's/-$//')"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config user.name "integritee-policy-automation[bot]"
+          git config user.email "integritee-policy-automation[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
           git add -A -- attestation-policy/policy-manifest.yaml attestation-policy/initdata
           git commit -m "feat(policy): Retire blobheart sources (${SHORT_SOURCES})"
@@ -105,9 +144,9 @@ jobs:
 
           Retired blobheart sources: \`$RETIRE_SOURCES\`
 
-          - **${{ steps.prune.outputs.removed }}** targets removed (sources list became empty)
-          - **${{ steps.prune.outputs.trimmed }}** targets trimmed (still active via other sources)
-          - **${{ steps.prune.outputs.remaining }}** targets remaining
+          - **${REMOVED}** targets removed (sources list became empty)
+          - **${TRIMMED}** targets trimmed (still active via other sources)
+          - **${REMAINING}** targets remaining
 
           Please review the removed targets and merge when ready.
           EOF
