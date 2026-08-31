@@ -51,23 +51,6 @@ ATTESTERS = {
 
 AZSNP = "az-snp-vtpm"
 
-# Microsoft's paravisor launch measurements, base64 of 48 bytes. A set so a
-# firmware roll can be ridden out by adding the new value beside the old.
-#
-# Defined here rather than in the template because the release predicate
-# records the same values, and writing them twice is how the signed artifact
-# comes to disagree with the policy it describes.
-AZSNP_PARAVISOR_MEASUREMENTS = (
-    "qnydpVwThuWxZTsSWXi+2ns/laha6w+d2723g84FaijJ0CHaI5w0pYw6ZXZUJw7v",
-)
-
-AZSNP_MIN_TCB = {
-    "bootloader": 10,
-    "tee": 0,
-    "snp": 27,
-    "microcode": 88,
-}
-
 # Which registers make up an image's identity, and what az-snp-vtpm calls each
 # one. Mapped explicitly because getting it wrong yields a policy that compiles
 # and silently never matches.
@@ -83,13 +66,9 @@ IMAGE_PCRS = {
 }
 INITDATA_PCR = "pcr8"
 
-PARAVISOR_PLACEHOLDER = "${AZSNP_PARAVISOR_MEASUREMENTS}"
-MIN_TCB_PLACEHOLDER = "${AZSNP_MIN_TCB}"
 IMAGE_PLACEHOLDER = "${AZSNP_IMAGE_BLOCKS}"
 INITDATA_PLACEHOLDER = "${AZSNP_INITDATA_BLOCKS}"
 CPU_PLACEHOLDERS = (
-    PARAVISOR_PLACEHOLDER,
-    MIN_TCB_PLACEHOLDER,
     IMAGE_PLACEHOLDER,
     INITDATA_PLACEHOLDER,
 )
@@ -101,7 +80,6 @@ GPU_PLACEHOLDERS = (DRIVER_VERSIONS_PLACEHOLDER,)
 # the SNP report's launch measurement, which is base64 of 48 bytes: SEV-SNP
 # has no PCRs.
 PCR_RE = re.compile(r"^[0-9a-f]{64}$")
-LAUNCH_MEASUREMENT_RE = re.compile(r"^[A-Za-z0-9+/]{64}$")
 
 def empty_policy_header(covered: str) -> str:
     """Say so in the file itself, since an inert policy is easy to miss."""
@@ -116,37 +94,6 @@ def validate_pcr_hex(field_name: str, value: object) -> str:
     if not isinstance(value, str) or not PCR_RE.fullmatch(value):
         raise ValueError(f"invalid or missing Azure vTPM PCR: {field_name}")
     return value
-
-
-def validate_snp_launch_measurement(value: object) -> str:
-    """Check a base64-encoded 48-byte SNP launch measurement.
-
-    48 bytes encode to 64 base64 characters with no padding, so a value of any
-    other length is not a launch measurement whatever else it may be.
-    """
-    if not isinstance(value, str) or not LAUNCH_MEASUREMENT_RE.fullmatch(value):
-        raise ValueError(f"invalid SNP launch measurement: {value!r}")
-    return value
-
-
-def generate_paravisor_block() -> str:
-    """Emit the accepted launch measurements, one per line.
-
-    Every multi-value set in these templates is emitted a line at a time:
-    regorus caps a line at 1024 columns, and an inline literal that passes at
-    four entries breaches that at roughly fifteen.
-    """
-    return "\n".join(
-        f"\t{json.dumps(validate_snp_launch_measurement(measurement))},"
-        for measurement in AZSNP_PARAVISOR_MEASUREMENTS
-    )
-
-
-def generate_min_tcb_block() -> str:
-    return "\n".join(
-        f"\t{json.dumps(component)}: {int(floor)},"
-        for component, floor in AZSNP_MIN_TCB.items()
-    )
 
 
 def generate_driver_versions_block(versions: list[str]) -> str:
@@ -187,8 +134,6 @@ def render_cpu_policy(
 ) -> None:
     """Render the CPU policy, which is mandatory for every appraised peer."""
     policy = _substitute(CPU_TEMPLATE, CPU_PLACEHOLDERS, {
-        PARAVISOR_PLACEHOLDER: generate_paravisor_block(),
-        MIN_TCB_PLACEHOLDER: generate_min_tcb_block(),
         IMAGE_PLACEHOLDER: "\n\n".join(image_blocks),
         INITDATA_PLACEHOLDER: "\n\n".join(initdata_blocks),
     })
@@ -350,20 +295,14 @@ class TrusteeRenderer:
     def _describe_policies(self) -> dict:
         """What the signed predicate records about this pair of policies.
 
-        The reference values a reader cannot recover from a target entry,
-        because they are properties of the platform rather than of anything
-        we build, plus a digest per file so the predicate says which released
-        asset it is describing.
+        A digest per file so the predicate says which released asset it is
+        describing.
         """
         return {
             "policy_id": POLICY_ID,
             "files": {
                 path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                 for path in self.policy_files
-            },
-            "azure_snp": {
-                "paravisor_measurements": list(AZSNP_PARAVISOR_MEASUREMENTS),
-                "min_tcb": dict(AZSNP_MIN_TCB),
             },
         }
 

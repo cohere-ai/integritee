@@ -363,31 +363,6 @@ def test_hostile_pcr_values_cannot_reach_the_policy(value):
         trustee.validate_pcr_hex("pcr4", value)
 
 
-@pytest.mark.parametrize(
-    "value",
-    [
-        # Truncated, over-long, padded, and not base64 at all.
-        "qnydpVwThuWxZTsSWXi+2ns/laha6w+d2723g84FaijJ0CHaI5w0pYw6ZXZUJw",
-        "A" * 65,
-        "A" * 62 + "==",
-        "",
-        None,
-    ],
-)
-def test_launch_measurement_is_validated_as_base64_not_hex(value):
-    """The value family the vTPM PCR validator must never be applied to.
-
-    A launch measurement is base64 of 48 bytes, so 64 characters with no
-    padding, while an Azure vTPM PCR is 64 hex characters. They are the same
-    length, which is why each has its own validator.
-    """
-    assert trustee.validate_snp_launch_measurement(
-        trustee.AZSNP_PARAVISOR_MEASUREMENTS[0]
-    )
-    with pytest.raises(ValueError, match="SNP launch measurement"):
-        trustee.validate_snp_launch_measurement(value)
-
-
 def test_rendered_lines_stay_well_under_the_regorus_column_cap(tmp_path):
     """regorus rejects a line over 1024 columns in the lexer, before parsing.
 
@@ -512,9 +487,3 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
         path.name: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in renderer.policy_files
     }
-    # The reference values the predicate records are the ones the policy
-    # enforces, rather than a second copy that can drift from them.
-    for measurement in policies["azure_snp"]["paravisor_measurements"]:
-        assert measurement in policy
-    for component, floor in policies["azure_snp"]["min_tcb"].items():
-        assert f'"{component}": {floor},' in policy

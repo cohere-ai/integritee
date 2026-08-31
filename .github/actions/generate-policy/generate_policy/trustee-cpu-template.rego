@@ -1,4 +1,4 @@
-# Trustee CPU appraisal policy for Cohere pod VMs.
+# Trustee CPU appraisal policy.
 #
 
 package policy
@@ -16,7 +16,7 @@ default hardware := 97
 default configuration := 36
 
 # 0 is "no assertion" for the dimensions this policy does not speak to. For
-# example, with Azure SEV-SNP, the dm-verity roothash claim reaches 
+# example, with Azure SEV-SNP, the dm-verity roothash claim reaches
 # executables through PCR 9, so file-system stays silent.
 default file_system := 0
 
@@ -41,10 +41,10 @@ trust_claims := {
 
 ##### Azure SEV-SNP (az-snp-vtpm)
 #
-# Every rule in this section is guarded on the attester key, so a section for
-# another attester can be appended without two of them assigning one
-# dimension different values. Helpers are prefixed with the attester for the
-# same reason.
+# Every rule in this section is guarded on the attester key (azsnp), so a
+# section for another attester can be appended without two of them assigning
+# one dimension different values. Helpers are prefixed with the attester for
+# the same reason.
 #
 # Claim shapes (deps/verifier/src/az_snp_vtpm/mod.rs). Getting one wrong fails
 # open into a default:
@@ -56,39 +56,29 @@ trust_claims := {
 #     field of that name, and is nothing to pin: the AS has already checked it
 #     against the runtime data its caller supplied.
 #
-# An exact match here means a reboot that lets systemd-repart rewrite the
-# partition UUID moves PCR 5 and is expected to fail attestation.
-
 azsnp := input["az-snp-vtpm"]
 
-# Microsoft's paravisor (the "Virtual Firmware" / IGVM image) as launched by
-# the AMD PSP: the SNP launch measurement, base64 of 48 bytes.
+# Microsoft's paravisor as featured in the SNP launch measurement (base64
+# of 48 bytes). The vTPM emulating the PCRs below runs inside that paravisor at
+# VMPL 0, so without this pin anyone with SEV-SNP hardware could run their own
+# VMPL 0 code and quote PCRs however they like.
 #
-# THIS IS LOAD BEARING. The vTPM emulating the PCRs below runs inside that
-# paravisor at VMPL 0, so without this pin anyone with SEV-SNP hardware could
-# run their own VMPL 0 code and quote whatever PCRs they liked. It belongs in
-# executables beside them for that reason, not in hardware with the TCB.
-#
-# A set, because Azure firmware rolls change the value with no advance notice:
-# add the new measurement alongside the old to ride one out.
+# A set, so a firmware roll can be ridden out by adding the new value beside
+# the old.
 azsnp_paravisor_measurements := {
-${AZSNP_PARAVISOR_MEASUREMENTS}
+	"qnydpVwThuWxZTsSWXi+2ns/laha6w+d2723g84FaijJ0CHaI5w0pYw6ZXZUJw7v",
 }
 
 # Minimum AMD secure processor TCB. Greater or equal rather than exact, so a
-# platform TCB roll forward is accepted while a rollback is refused.
-#
-# This is a counterpart for TDX's tcb_level_not_revoked, which has no SNP
-# equivalent
+# platform TCB roll forward is accepted while rollback is refused.
 azsnp_min_tcb := {
-${AZSNP_MIN_TCB}
+	"bootloader": 10,
+	"tee": 0,
+	"snp": 27,
+	"microcode": 88,
 }
 
-# A section that matched no targets substitutes to nothing, leaving the name
-# with no definition at all, which Rego rejects as an unsafe variable instead
-# of evaluating it to false. These defaults keep that policy loadable and
-# deny-only; they never apply once a generated block is present, since each
-# block is a complete rule yielding true.
+# When no match blocks are present, we default to a valid deny-only policy.
 #
 # The static rules below need no default. They always have a definition and
 # merely evaluate to undefined when they do not match, which fails the
@@ -99,7 +89,7 @@ default azsnp_initdata_ok := false
 
 # Every claim arrives as a string, and Rego orders numbers before strings, so
 # a bare `azsnp.reported_tcb_snp >= 27` is true for any string at all and
-# fails open. to_number is what makes these floors mean anything.
+# fails open. to_number() required for correct interpretation.
 azsnp_tcb_ok if {
 	to_number(azsnp.reported_tcb_bootloader) >= azsnp_min_tcb.bootloader
 	to_number(azsnp.reported_tcb_tee) >= azsnp_min_tcb.tee
@@ -107,9 +97,7 @@ azsnp_tcb_ok if {
 	to_number(azsnp.reported_tcb_microcode) >= azsnp_min_tcb.microcode
 }
 
-# Guest policy bits set at SNP_LAUNCH_START. Debug would let the hypervisor
-# read guest memory; a migration agent could move the VM elsewhere. Both are
-# a total loss of the confidentiality this is here to provide.
+# Guest policy bits set at SNP_LAUNCH_START.
 #
 # policy_smt_allowed only permits SMT and is true on our nodes today. What
 # matters is whether the platform enables it, which azsnp_platform_ok pins.
@@ -118,9 +106,7 @@ azsnp_launch_policy_ok if {
 	azsnp.policy_migrate_ma == "false"
 }
 
-# PLATFORM_INFO, signed by the PSP along with the rest of the report. SMT
-# enabled means sibling threads, and so a cross-thread side channel into this
-# guest from whatever shares the core.
+# PLATFORM_INFO.
 azsnp_platform_ok if {
 	azsnp.platform_smt_enabled == "false"
 }
@@ -149,9 +135,8 @@ configuration := 2 if {
 }
 
 # One block per pod VM image, asserting all four registers together. They are
-# all measured from the same disk.raw, so splitting them into separate rules
-# would admit image A's UKI beside image B's partition table: a disk that has
-# never existed. Fusing them makes the tuple atomic.
+# all measured from the same image, so splitting them into separate rules
+# would admit image A's UKI beside image B's partition table.
 #
 #   PCR 4   The firmware's boot chain: EV_EFI_ACTION, a separator, then
 #           Authenticode over the whole UKI and over its .linux section
@@ -166,11 +151,11 @@ configuration := 2 if {
 #           name then content. The OS image identity.
 ${AZSNP_IMAGE_BLOCKS}
 
-# One block per deployment initdata, which carries the Kata agent policy and
-# the KBS configuration. Read through input.init_data rather than tpm.pcr08:
-# the two are byte-identical here, since extend_claim overwrites init_data
-# with hex of PCR 8, but the named claim reads as an initdata binding instead
-# of an opaque register compare.
+# One block per deployment initdata, which carries the configuration for guest
+# components such as Kata agent and the KBS. Read through input.init_data
+# rather than tpm.pcr08: the two are byte-identical here, since extend_claim
+# overwrites init_data with hex of PCR 8, but the named claim reads as an
+# initdata binding instead of an opaque register compare.
 #
 # The value is sha256(0x00 * 32 || initdata_digest[:32]). A digest wider than
 # the register is truncated to fit rather than re-hashed, so the usual sha384
@@ -178,7 +163,5 @@ ${AZSNP_IMAGE_BLOCKS}
 # sha256(toml)).
 #
 # Kept separate from the image blocks, so any approved image pairs with any
-# approved initdata. That factoring is deliberate: a model's initdata places
-# no constraint on which approved image version the host runs, and it is what
-# turns N x M blocks into N + M.
+# approved initdata.
 ${AZSNP_INITDATA_BLOCKS}
