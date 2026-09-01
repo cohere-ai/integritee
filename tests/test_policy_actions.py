@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import importlib.util
 import sys
@@ -55,7 +56,7 @@ def test_derive_fails_when_all_discovered_models_are_skipped(
         "read_file",
         lambda _root, _ref, path: (
             "resources: []\n"
-            if path == derive.KUSTOMIZATION_PATH
+            if path == derive.DEFAULT_KUSTOMIZATION_PATH
             else "kind: StatefulSet\nmetadata:\n  labels: {}\n"
         ),
     )
@@ -76,6 +77,79 @@ def test_derive_fails_when_all_discovered_models_are_skipped(
 
     assert "none produced a policy target" in capsys.readouterr().err
     assert not output.exists()
+
+
+def test_derive_honors_custom_blobheart_paths(tmp_path, monkeypatch):
+    derive = load_action(
+        "derive_manifest_custom_paths",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    generated_dir = "k8s/geofence-models/base/generated"
+    kustomization_path = "k8s/geofence-models/components/platform/kustomization.yaml"
+    model_dir = tmp_path / generated_dir / "cmp-l-cc"
+    model_dir.mkdir(parents=True)
+    (model_dir / "model.yaml").write_text(
+        "apiVersion: v1\n"
+        "kind: StatefulSet\n"
+        "metadata:\n"
+        "  name: cmp-l-cc\n"
+        "  labels:\n"
+        "    cohere.com/gpu: h100-80g\n"
+    )
+    initdata = base64.b64encode(b"policy = 'custom-paths'\n").decode()
+    (model_dir / "kata-policy-patch.yaml").write_text(
+        "apiVersion: apps/v1\n"
+        "kind: StatefulSet\n"
+        "spec:\n"
+        "  template:\n"
+        "    metadata:\n"
+        "      annotations:\n"
+        "        io.katacontainers.config.hypervisor.cc_init_data: "
+        f"'{initdata}'\n"
+    )
+    component_dir = tmp_path / "k8s/geofence-models/components/platform"
+    component_dir.mkdir(parents=True)
+    (component_dir / "kustomization.yaml").write_text(
+        "patches:\n"
+        "  - target:\n"
+        "      labelSelector: cohere.com/gpu=h100-80g,cohere.com/confidential-compute=true\n"
+        "    patch: |-\n"
+        "      apiVersion: apps/v1\n"
+        "      kind: StatefulSet\n"
+        "      spec:\n"
+        "        template:\n"
+        "          metadata:\n"
+        "            annotations:\n"
+        "              io.katacontainers.config.hypervisor.machine_type: a3-highgpu-1g\n"
+        "              io.katacontainers.config.hypervisor.image: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5\n"
+    )
+    output = tmp_path / "manifest.yaml"
+    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "derive.py",
+            "--blobheart-dir",
+            str(tmp_path),
+            "--generated-dir",
+            generated_dir,
+            "--kustomization-path",
+            kustomization_path,
+            "--output",
+            str(output),
+        ],
+    )
+
+    derive.main()
+
+    targets = yaml.safe_load(output.read_text())["targets"]
+    assert [t["model"] for t in targets] == ["cmp-l"]
+    assert targets[0]["machine_type"] == "a3-highgpu-1g"
+    assert targets[0]["podvm_image_tag"] == "podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5"
+    assert targets[0]["initdata_sha384"] == hashlib.sha384(
+        b"policy = 'custom-paths'\n"
+    ).hexdigest()
 
 
 def test_derive_preserves_empty_manifest_for_source_without_cc_models(
@@ -116,7 +190,7 @@ def test_derive_propagates_source_read_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(derive, "list_dir", lambda *_args: ["cmp-l-cc"])
 
     def read_file(_root, _ref, path):
-        if path == derive.KUSTOMIZATION_PATH:
+        if path == derive.DEFAULT_KUSTOMIZATION_PATH:
             return "resources: []\n"
         raise RuntimeError("source API unavailable")
 

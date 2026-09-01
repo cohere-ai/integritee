@@ -4,9 +4,11 @@
 Discovers CC models, extracts initdata, derives machine_type/podvm_image_tag
 from kustomization.yaml, and looks up ram_gib from a static machine-types.yaml.
 
-Hardcoded blobheart paths:
-  - CC models: k8s/geofence/components/models_v2/generated/<model>-cc/
-  - Kustomization: k8s/geofence/components/models_v2/base/kustomization.yaml
+Blobheart paths (configurable via --generated-dir/--kustomization-path):
+  - CC models: <generated-dir>/<model>-cc/
+    (default: k8s/geofence/components/models_v2/generated/)
+  - Kustomization: --kustomization-path
+    (default: k8s/geofence/components/models_v2/base/kustomization.yaml)
   - Initdata: <model>-cc/kata-policy-patch.yaml (cc_init_data annotation)
 
 Usage (remote):
@@ -38,8 +40,8 @@ from pathlib import Path
 import yaml
 
 BLOBHEART_REPO = "cohere-ai/blobheart"
-GENERATED_DIR = "k8s/geofence/components/models_v2/generated"
-KUSTOMIZATION_PATH = "k8s/geofence/components/models_v2/base/kustomization.yaml"
+DEFAULT_GENERATED_DIR = "k8s/geofence/components/models_v2/generated"
+DEFAULT_KUSTOMIZATION_PATH = "k8s/geofence/components/models_v2/base/kustomization.yaml"
 CC_SUFFIX = "-cc"
 
 GPU_LABEL_KEY = "cohere.com/gpu"
@@ -214,6 +216,18 @@ def main() -> None:
         type=Path,
         help="Directory for decoded initdata (default: <output-dir>/initdata)",
     )
+    parser.add_argument(
+        "--generated-dir",
+        default=DEFAULT_GENERATED_DIR,
+        help=f"Blobheart-relative directory holding per-model generated dirs "
+        f"(default: {DEFAULT_GENERATED_DIR})",
+    )
+    parser.add_argument(
+        "--kustomization-path",
+        default=DEFAULT_KUSTOMIZATION_PATH,
+        help=f"Blobheart-relative path to the platform patch kustomization "
+        f"(default: {DEFAULT_KUSTOMIZATION_PATH})",
+    )
     args = parser.parse_args()
 
     root = Path(args.blobheart_dir) if args.blobheart_dir else None
@@ -234,7 +248,7 @@ def main() -> None:
     machine_types = load_machine_types()
     print(f"Deriving manifest from {source_label}")
 
-    entries = list_dir(root, ref, GENERATED_DIR)
+    entries = list_dir(root, ref, args.generated_dir)
     cc_models = [e for e in entries if e.endswith(CC_SUFFIX)]
     print(f"Found {len(cc_models)} CC models: {', '.join(cc_models)}")
 
@@ -243,7 +257,7 @@ def main() -> None:
         Path(args.output).write_text(yaml.dump({"targets": []}, sort_keys=False))
         return
 
-    kustomization = read_file(root, ref, KUSTOMIZATION_PATH)
+    kustomization = read_file(root, ref, args.kustomization_path)
     label_map = build_cc_label_map(kustomization)
     print(f"CC label map: {json.dumps({k: v.get('machine_type', '?') for k, v in label_map.items()})}")
 
@@ -256,7 +270,7 @@ def main() -> None:
         model = cc_name.removesuffix(CC_SUFFIX)
         print(f"\n--- {model} ({cc_name}) ---")
 
-        model_path = f"{GENERATED_DIR}/{cc_name}/model.yaml"
+        model_path = f"{args.generated_dir}/{cc_name}/model.yaml"
         model_raw = read_file(root, ref, model_path)
         gpu_label = extract_gpu_label(model_raw)
 
@@ -280,7 +294,7 @@ def main() -> None:
             sys.exit(1)
         ram_gib = mt_info["ram_gib"]
 
-        kata_path = f"{GENERATED_DIR}/{cc_name}/kata-policy-patch.yaml"
+        kata_path = f"{args.generated_dir}/{cc_name}/kata-policy-patch.yaml"
         kata_raw = read_file(root, ref, kata_path)
         initdata = extract_initdata(kata_raw)
 

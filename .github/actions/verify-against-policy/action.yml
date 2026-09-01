@@ -20,6 +20,14 @@ inputs:
   policy-manifest:
     description: "Path to a local policy-manifest.yaml to verify against (skips fetching from latest release)"
     required: false
+  generated-dir:
+    description: "Blobheart-relative directory holding per-model generated dirs"
+    required: false
+    default: "k8s/geofence/components/models_v2/generated"
+  kustomization-path:
+    description: "Blobheart-relative path to the platform patch kustomization"
+    required: false
+    default: "k8s/geofence/components/models_v2/base/kustomization.yaml"
   retries:
     description: "Number of retries after the initial attempt (0 = no retry)"
     required: false
@@ -50,6 +58,8 @@ runs:
         BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
         BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
         POLICY_MANIFEST: ${{ inputs.policy-manifest }}
+        GENERATED_DIR: ${{ inputs.generated-dir }}
+        KUSTOMIZATION_PATH: ${{ inputs.kustomization-path }}
         RETRIES: ${{ inputs.retries }}
         RETRY_DELAY: ${{ inputs.retry-delay }}
         ACTION_PATH: ${{ github.action_path }}

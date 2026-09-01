@@ -11,6 +11,14 @@ inputs:
   github-token:
     description: "GitHub token with read access to blobheart (required when using blobheart-refs)"
     required: false
+  generated-dir:
+    description: "Blobheart-relative directory holding per-model generated dirs"
+    required: false
+    default: "k8s/geofence/components/models_v2/generated"
+  kustomization-path:
+    description: "Blobheart-relative path to the platform patch kustomization"
+    required: false
+    default: "k8s/geofence/components/models_v2/base/kustomization.yaml"
 
 outputs:
   manifest-files:
@@ -34,6 +42,8 @@ runs:
         BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
         BLOBHEART_REFS: ${{ inputs.blobheart-refs }}
         GH_TOKEN: ${{ inputs.github-token }}
+        GENERATED_DIR: ${{ inputs.generated-dir }}
+        KUSTOMIZATION_PATH: ${{ inputs.kustomization-path }}
       run: |
         MANIFEST_FILES=""
         INITDATA_DIR="${RUNNER_TEMP}/initdata"
@@ -41,6 +51,8 @@ runs:
           MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-local.yaml"
           python3 "${{ github.action_path }}/derive.py" \
             --blobheart-dir "$BLOBHEART_DIR" \
+            --generated-dir "$GENERATED_DIR" \
+            --kustomization-path "$KUSTOMIZATION_PATH" \
             --initdata-dir "$INITDATA_DIR" \
             --output "$MANIFEST_FILE"
           MANIFEST_FILES="$MANIFEST_FILE"
@@ -58,6 +70,8 @@ runs:
             MANIFEST_FILE="${RUNNER_TEMP}/derived-manifest-${REF}.yaml"
             python3 "${{ github.action_path }}/derive.py" \
               --blobheart-ref "$REF" \
+              --generated-dir "$GENERATED_DIR" \
+              --kustomization-path "$KUSTOMIZATION_PATH" \
               --initdata-dir "$INITDATA_DIR" \
               --output "$MANIFEST_FILE"
 
