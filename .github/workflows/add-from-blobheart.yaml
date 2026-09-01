@@ -63,6 +63,8 @@ jobs:
         with:
           blobheart-refs: ${{ env.BLOBHEART_REFS }}
           github-token: ${{ steps.app-token.outputs.token }}
+          generated-dir: k8s/geofence-models/base/generated
+          kustomization-path: k8s/geofence-models/components/platform/kustomization.yaml
 
       - name: Merge into policy manifest
         id: merge
