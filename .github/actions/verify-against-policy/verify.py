@@ -54,20 +54,31 @@ def run_script(script: Path, args: list[str], *,
 def derive_manifests(derive_script: Path, runner_temp: Path,
                      blobheart_refs: str | None, blobheart_dir: str | None,
                      token: str) -> list[str]:
-    """Call derive.py for each ref or a local dir, returning manifest file paths."""
+    """Call derive.py for each ref or a local dir, returning manifest file paths.
+
+    Optional GENERATED_DIR / KUSTOMIZATION_PATH environment variables are
+    forwarded to derive.py to point at non-default blobheart layouts.
+    """
     env = {**os.environ, "GH_TOKEN": token}
+    path_args: list[str] = []
+    if os.environ.get("GENERATED_DIR"):
+        path_args += ["--generated-dir", os.environ["GENERATED_DIR"]]
+    if os.environ.get("KUSTOMIZATION_PATH"):
+        path_args += ["--kustomization-path", os.environ["KUSTOMIZATION_PATH"]]
     manifest_files = []
 
     if blobheart_dir:
         out = runner_temp / "derived-manifest-local.yaml"
-        run_script(derive_script, ["--blobheart-dir", blobheart_dir, "--output", str(out)],
+        run_script(derive_script, ["--blobheart-dir", blobheart_dir, *path_args,
+                                   "--output", str(out)],
                    env=env)
         manifest_files.append(str(out))
     elif blobheart_refs:
         for ref in blobheart_refs.split():
             print(f"Deriving manifest from blobheart ref: {ref}", file=sys.stderr)
             out = runner_temp / f"derived-manifest-{ref}.yaml"
-            run_script(derive_script, ["--blobheart-ref", ref, "--output", str(out)],
+            run_script(derive_script, ["--blobheart-ref", ref, *path_args,
+                                       "--output", str(out)],
                        env=env)
             manifest_files.append(str(out))
     else:
