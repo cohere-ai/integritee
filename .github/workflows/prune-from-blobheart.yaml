@@ -46,21 +46,28 @@ jobs:
       - name: Prune retired sources
         id: prune
         run: |
+          read -ra REFS <<< "$RETIRE_SOURCES"
+          for ref in "${REFS[@]}"; do
+            [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || {
+              echo "::error::invalid blobheart commit SHA: $ref"; exit 1;
+            }
+          done
           RESULT=$(python3 .github/workflows/prune-from-blobheart/prune.py \
             --manifest attestation-policy/policy-manifest.yaml \
-            --retire ${{ env.RETIRE_SOURCES }})
+            --retire "${REFS[@]}")
           echo "$RESULT" >> "$GITHUB_OUTPUT"
 
       - name: Check for changes
         id: changes
         run: |
-          if git diff --quiet attestation-policy/policy-manifest.yaml; then
+          if git diff --quiet -- attestation-policy; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
             echo "No changes to manifest"
           else
             echo "changed=true" >> "$GITHUB_OUTPUT"
             echo "Manifest updated: ${{ steps.prune.outputs.removed }} targets removed, ${{ steps.prune.outputs.trimmed }} trimmed"
-            git diff attestation-policy/policy-manifest.yaml
+            git diff --stat -- attestation-policy
+            git diff -- attestation-policy/policy-manifest.yaml
           fi
 
       - name: Show warnings
@@ -73,22 +80,21 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: pruned-policy-manifest
-          path: attestation-policy/policy-manifest.yaml
+          path: |
+            attestation-policy/policy-manifest.yaml
+            attestation-policy/initdata/
 
       - name: Create PR
         if: steps.changes.outputs.changed == 'true' && env.DRY_RUN == 'false'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
-          REMOVED: ${{ steps.prune.outputs.removed }}
-          TRIMMED: ${{ steps.prune.outputs.trimmed }}
-          REMAINING: ${{ steps.prune.outputs.remaining }}
         run: |
           SHORT_SOURCES=$(echo "$RETIRE_SOURCES" | tr ' ' '\n' | cut -c1-8 | tr '\n' ' ')
           BRANCH="prune/retire-$(echo "$SHORT_SOURCES" | tr ' ' '-' | sed 's/-$//')"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$BRANCH"
-          git add attestation-policy/policy-manifest.yaml
+          git add -A -- attestation-policy/policy-manifest.yaml attestation-policy/initdata
           git commit -m "feat(policy): Retire blobheart sources (${SHORT_SOURCES})"
           git push -u origin "$BRANCH"
 
@@ -99,9 +105,9 @@ jobs:
 
           Retired blobheart sources: \`$RETIRE_SOURCES\`
 
-          - **$REMOVED** targets removed (sources list became empty)
-          - **$TRIMMED** targets trimmed (still active via other sources)
-          - **$REMAINING** targets remaining
+          - **${{ steps.prune.outputs.removed }}** targets removed (sources list became empty)
+          - **${{ steps.prune.outputs.trimmed }}** targets trimmed (still active via other sources)
+          - **${{ steps.prune.outputs.remaining }}** targets remaining
 
           Please review the removed targets and merge when ready.
           EOF

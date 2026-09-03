@@ -244,6 +244,36 @@ def test_prune_refuses_to_write_empty_manifest(tmp_path, monkeypatch):
     assert manifest.read_text() == original
 
 
+def test_prune_deletes_initdata_orphaned_by_removed_targets(tmp_path, monkeypatch):
+    prune = load_action(
+        "prune_initdata",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    orphan, kept = "c" * 96, "d" * 96
+    targets = [
+        {"initdata_file": f"initdata/{digest}.toml", "initdata_sha384": digest,
+         "sources": sources}
+        for digest, sources in ((orphan, [TEST_SHA]), (kept, [TEST_SHA, "b" * 40]))
+    ]
+    initdata = tmp_path / "initdata"
+    initdata.mkdir()
+    for target in targets:
+        (initdata / Path(target["initdata_file"]).name).touch()
+    manifest = tmp_path / "policy-manifest.yaml"
+    manifest.write_text(yaml.dump({"targets": targets}))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["prune.py", "--manifest", str(manifest), "--retire", TEST_SHA],
+    )
+
+    prune.main()
+
+    survivors = yaml.safe_load(manifest.read_text())["targets"]
+    assert [target["initdata_sha384"] for target in survivors] == [kept]
+    assert [path.name for path in initdata.iterdir()] == [f"{kept}.toml"]
+
+
 @pytest.mark.parametrize("status", ["ahead", "identical"])
 def test_blobheart_ref_validation_accepts_main_ancestors(status, monkeypatch):
     manage = load_action(
