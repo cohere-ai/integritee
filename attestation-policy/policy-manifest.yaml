@@ -242,6 +242,7 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: cmp-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -253,6 +254,7 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: e4-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -264,6 +266,7 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: nmc2606-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -275,6 +278,7 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: qw3-4b-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -286,6 +290,7 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: r4f-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -297,6 +302,7 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: r4p-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -308,3 +314,4 @@ targets:
   - 5f4b31aaa78343acc6d913b705ce7e57f99f7987
   - cd9b182298832b80f4a380909f2769a0b5a8e9ea
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
+  - 50fe406ccd6727f77cfd23b38860acb393a5312f
