@@ -74,8 +74,8 @@ azsnp_paravisor_measurements := {
 azsnp_min_tcb := {
 	"bootloader": 10,
 	"tee": 0,
-	"snp": 27,
-	"microcode": 88,
+	"snp": 23,
+	"microcode": 84,
 }
 
 # When no match blocks are present, we default to a valid deny-only policy.
