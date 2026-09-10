@@ -19,15 +19,6 @@ on:
         description: "Reason for this release"
         required: false
         type: string
-      ita_slot:
-        description: "ITA policy slot"
-        required: false
-        default: "slot-a"
-        type: choice
-        options:
-          - auto
-          - slot-a
-          - slot-b
       dry_run:
         description: "Skip ITA upload, Sigstore signing, and GitHub release creation"
         required: false
@@ -49,7 +40,11 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     env:
-      ITA_SLOT: ${{ inputs.ita_slot || 'slot-a' }}
+      # The single managed ITA policy every deployed initdata pins. The "-a"
+      # suffix is historical, from a retired blue/green slot pair; the name is
+      # sent on every update, so changing it renames the live policy in ITA.
+      ITA_POLICY_ID: cbeedffa-e224-4664-b6b4-573fcd4133d3
+      ITA_POLICY_NAME: integritee-policy-a
       REASON: ${{ inputs.reason || '' }}
     steps:
       - name: Checkout
@@ -130,23 +125,14 @@ jobs:
           predicate-file: predicate.json
 
       # ----------------------------------------------------------------
-      # Upload to ITA (blue/green slot selection)
+      # Upload to ITA
       # ----------------------------------------------------------------
-      - name: Select ITA slot
-        id: slot
-        env:
-          GH_TOKEN: ${{ github.token }}
-          ITA_SLOT_OVERRIDE: ${{ env.ITA_SLOT }}
-        run: >-
-          python3 .github/workflows/release-policy/manage.py select-slot
-          --override "$ITA_SLOT_OVERRIDE" >> "$GITHUB_OUTPUT"
-
-      - name: Verify manifest targets use selected ITA slot
+      - name: Verify manifest targets use the managed ITA policy
         if: github.event_name == 'push' || inputs.dry_run == false
         uses: ./.github/actions/validate-manifest
         with:
           manifest-file: attestation-policy/policy-manifest.yaml
-          policy-id: ${{ steps.slot.outputs.policy_id }}
+          policy-id: ${{ env.ITA_POLICY_ID }}
 
       - name: Upload policy to ITA
         if: github.event_name == 'push' || inputs.dry_run == false
@@ -154,8 +140,8 @@ jobs:
         uses: ./.github/actions/upload-ita-policy
         with:
           policy-file: attestation-policy.rego
-          policy-id: ${{ steps.slot.outputs.policy_id }}
-          policy-name: ${{ steps.slot.outputs.policy_name }}
+          policy-id: ${{ env.ITA_POLICY_ID }}
+          policy-name: ${{ env.ITA_POLICY_NAME }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ secrets.ITA_API_URL }}
           predicate-file: predicate.json
@@ -203,8 +189,7 @@ jobs:
         if: github.event_name == 'push' || inputs.dry_run == false
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-          POLICY_ID: ${{ steps.slot.outputs.policy_id }}
-          POLICY_SLOT: ${{ steps.slot.outputs.policy_slot }}
+          POLICY_ID: ${{ steps.upload.outputs.policy-id }}
         run: >-
           python3 .github/workflows/release-policy/manage.py prepare-assets
           --policy attestation-policy.rego
@@ -214,7 +199,6 @@ jobs:
           --output-dir release-assets
           --release-notes release-body.md
           --policy-id "$POLICY_ID"
-          --policy-slot "$POLICY_SLOT"
           --reason "$REASON"
 
       - name: Create release
