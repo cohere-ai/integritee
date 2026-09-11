@@ -153,7 +153,7 @@ def test_cpu_policy_affirms_the_node_it_was_generated_from(
         (["az-snp-vtpm", "policy_debug_allowed"], "true", "configuration"),
         (["az-snp-vtpm", "policy_migrate_ma"], "true", "configuration"),
         (["az-snp-vtpm", "platform_smt_enabled"], "true", "configuration"),
-        (["az-snp-vtpm", "reported_tcb_snp"], "26", "hardware"),
+        (["az-snp-vtpm", "reported_tcb_snp"], "22", "hardware"),
     ],
 )
 def test_cpu_policy_denies_mutated_evidence(
