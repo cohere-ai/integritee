@@ -88,7 +88,7 @@ default azsnp_image_ok := false
 default azsnp_initdata_ok := false
 
 # Every claim arrives as a string, and Rego orders numbers before strings, so
-# a bare `azsnp.reported_tcb_snp >= 27` is true for any string at all and
+# a bare `azsnp.reported_tcb_snp >= 23` is true for any string at all and
 # fails open. to_number() required for correct interpretation.
 azsnp_tcb_ok if {
 	to_number(azsnp.reported_tcb_bootloader) >= azsnp_min_tcb.bootloader
