@@ -13,10 +13,7 @@ on:
     paths:
       - "attestation-policy/policy-manifest.yaml"
       - "attestation-policy/initdata/**"
-      - ".github/actions/generate-policy/generate_policy/ita-template.rego"
-      - ".github/actions/generate-policy/generate_policy/trustee-cpu-template.rego"
-      - ".github/actions/generate-policy/generate_policy/trustee-gpu-template.rego"
-      - ".github/actions/generate-policy/generate_policy/machine-types.yaml"
+      - ".github/actions/generate-policy/**"
   workflow_dispatch:
     inputs:
       version:
