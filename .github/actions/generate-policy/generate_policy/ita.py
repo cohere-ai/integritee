@@ -46,10 +46,10 @@ PLACEHOLDERS = (
 PLATFORM_FIELDS = ["mrtd", "rtmr0", "rtmr1", "rtmr2"]
 MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
 
-# The TEEs ITA can appraise. A target on any other one produces evidence ITA
-# cannot read and has no baseline to look up, so it is skipped rather than
-# measured.
-SUPPORTED_TEES = frozenset({"tdx"})
+# The platforms ITA can appraise with this renderer. Its firmware and baseline
+# inputs describe GCP TDX guests specifically, so another platform using TDX
+# must not be measured through this path.
+SUPPORTED_PLATFORMS = frozenset({("gcp", "tdx")})
 
 EMPTY_POLICY_HEADER = """\
 # WARNING: this policy matched no TDX target in the manifest. Every generated
@@ -253,31 +253,36 @@ class ItaRenderer:
         return [self.policy_file]
 
     def cannot_appraise(self, machine: dict) -> str | None:
-        if machine["tee"] in SUPPORTED_TEES:
+        platform = (machine["platform"], machine["tee"])
+        if platform in SUPPORTED_PLATFORMS:
             return None
-        supported = ", ".join(sorted(SUPPORTED_TEES))
-        return f"ITA appraises {supported} evidence, not {machine['tee']}"
+        return (
+            "ITA appraises GCP TDX evidence, not "
+            f"{machine['platform']} {machine['tee']}"
+        )
 
     def render(
         self,
         targets: list[ResolvedTarget],
         context: GenerationContext,
     ) -> RenderResult:
-        predicate_targets = {
+        measured_targets = {
             resolved.index: self._measure_target(resolved, context)
             for resolved in targets
         }
-        manifest_targets = [resolved.target for resolved in targets]
+        policy_targets = [
+            measured_targets[resolved.index] for resolved in targets
+        ]
         render_policy(
-            manifest_targets,
+            policy_targets,
             resolve_nvidia_driver_versions(
-                manifest_targets, context.artifacts_dir
+                policy_targets, context.artifacts_dir
             ),
             self.policy_file,
         )
         return RenderResult(
             outputs={"ita-policy-file": str(self.policy_file)},
-            predicate_targets=predicate_targets,
+            predicate_targets=measured_targets,
         )
 
     def _get_firmware(
@@ -439,10 +444,10 @@ class ItaRenderer:
             })
 
         primary_variant = measured_variants[0]
-        target["measurements"] = primary_variant["measurements"]
-        target["baseline_variants"] = measured_variants
         return {
             **target,
+            "measurements": primary_variant["measurements"],
+            "baseline_variants": measured_variants,
             **resolved.machine,
             "podvm_image": podvm.ref,
             "podvm_digest": podvm.digest,
