@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir pyyaml
 # every generated policy are a function of it.
 # TODO Switch to ref on a main branch
 ARG CVM_MEASURE_REPO=https://github.com/cohere-ai/cvm-measure.git
-ARG CVM_MEASURE_REF=350faa569c63b8a59202b36a1d413119c405440b
+ARG CVM_MEASURE_REF=dc2104357f55277413c086f8092d14db679fce5e
 
 RUN git init /tmp/cvm-measure && \
     git -C /tmp/cvm-measure remote add origin "${CVM_MEASURE_REPO}" && \
