@@ -1,11 +1,10 @@
-# Always-on lint/test gate for main. Path-filtered action suites stay in test-actions.yaml.
+# Always-on lint/test gate. Path-filtered action suites stay in test-actions.yaml.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read
