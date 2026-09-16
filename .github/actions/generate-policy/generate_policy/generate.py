@@ -64,38 +64,6 @@ def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
     return machine
 
 
-def load_machine_types() -> dict[str, dict]:
-    """Load the shared machine type table."""
-    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
-
-
-def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
-    """Return the machine-types entry backing a target."""
-    machine_type = target["machine_type"]
-    machine = machine_types.get(machine_type)
-    if machine is None:
-        raise ValueError(
-            f"unknown machine type '{machine_type}' -- update machine-types.yaml"
-        )
-    return machine
-
-
-def load_machine_types() -> dict[str, dict]:
-    """Load the shared machine type table."""
-    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
-
-
-def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
-    """Return the machine-types entry backing a target."""
-    machine_type = target["machine_type"]
-    machine = machine_types.get(machine_type)
-    if machine is None:
-        raise ValueError(
-            f"unknown machine type '{machine_type}' -- update machine-types.yaml"
-        )
-    return machine
-
-
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
     version = apt_pkg_version.split("-", 1)[0]
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", version):
