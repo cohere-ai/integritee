@@ -87,6 +87,20 @@ def test_nras_v3_gcp_mismatch_workaround_is_narrow():
     assert policy.count("gpu.secboot == true") == 2
 
 
+def test_policy_template_uses_csp_rim_for_mrtd():
+    """MRTD must be checked via the ITA CSP RIM catalog, not pinned values."""
+    policy = TEMPLATE.read_text()
+
+    assert "import data.public.intel.ita.tdxutils" in policy
+    assert (
+        "import data.public.google.gcp.tdx.rims.mrtd as gcpmrtds"
+        in policy
+    )
+    assert "tdxutils.is_mrtd(input.tdx, gcpmrtds.measurements)" in policy
+    assert "tdx.tdx_mrtd ==" not in policy
+    assert "tdx.tdx_rtmr0 ==" not in policy
+
+
 def _contents(value: dict) -> dict:
     encoded = base64.b64encode(json.dumps(value).encode()).decode()
     wrapped = "\n".join(
@@ -306,7 +320,7 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     }
     measurements_v2 = {
         **measurements_v1,
-        "rtmr0": "d" * 96,
+        "rtmr1": "f" * 96,
     }
     target = {
         "model": "cmp-l",
@@ -392,6 +406,11 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     assert "tdx.tdx_is_debuggable == false" in policy
     assert "tdx.tdx_seamsvn >= 271" in policy
 
+    # MRTD is verified via the ITA CSP RIM catalog in tdx_base_checks.
+    assert policy.count("tdxutils.is_mrtd(input.tdx, gcpmrtds.measurements)") == 1
+    assert "tdx.tdx_mrtd ==" not in policy
+    assert "tdx.tdx_rtmr0 ==" not in policy
+
     # Fields constant across every target belong to tdx_base_checks alone. A
     # second occurrence means a generated per-target block re-asserted one,
     # which silently makes it a per-target value instead.
@@ -452,6 +471,14 @@ def test_renders_an_inert_policy_when_nothing_matched(tmp_path, capsys):
     assert "::warning::" in capsys.readouterr().out
 
 
+FIXTURES = Path(__file__).parent / "fixtures"
+
+# ITA supplies data.public.intel.ita.tdxutils and the CSP RIM catalogs on the
+# server only; loading them locally as a bundle lets opa check/eval exercise
+# the rest of the policy.
+RIM_STUBS = [FIXTURES / "ita-rim-stub.rego", FIXTURES / "gcp-mrtd-rims.json"]
+
+
 def _render_module(tmp_path: Path, targets: list[dict]) -> Path:
     """Render a policy and wrap it in a package for opa to load standalone.
 
@@ -479,7 +506,7 @@ def test_rendered_policy_compiles(tmp_path, opa, targets):
     check that the template's defaults hold that off.
     """
     result = subprocess.run(
-        [opa, "check", str(_render_module(tmp_path, targets))],
+        [opa, "check", *RIM_STUBS, str(_render_module(tmp_path, targets))],
         capture_output=True,
         text=True,
     )
@@ -494,7 +521,10 @@ def _opa_eval(
     input_file: Path | None = None,
 ):
     """Evaluate a query, returning None where the rule is undefined."""
-    command = [opa, "eval", "--data", str(module), query]
+    command = [opa, "eval"]
+    for stub in RIM_STUBS:
+        command += ["--data", str(stub)]
+    command += ["--data", str(module), query]
     if input_file:
         command += ["--input", str(input_file)]
     result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -650,9 +680,9 @@ def test_measurement_values_cannot_inject_rego():
         field: "a" * 96
         for field in ita.PLATFORM_FIELDS
     }
-    measurements["mrtd"] = injected
+    measurements["rtmr1"] = injected
 
-    with pytest.raises(ValueError, match="TDX measurement: mrtd"):
+    with pytest.raises(ValueError, match="TDX measurement: rtmr1"):
         ita.generate_platform_match_block("baseline", measurements)
     with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
         ita.generate_workload_match_block("model", "initdata", injected)
@@ -731,7 +761,7 @@ def test_generate_policy_measures_and_records_each_baseline(
         return {
             "mrtd": "1" * 96,
             "rtmr0": ("2" if version == "v1" else "3") * 96,
-            "rtmr1": "4" * 96,
+            "rtmr1": ("4" if version == "v1" else "7") * 96,
             "rtmr2": "5" * 96,
         }
 
