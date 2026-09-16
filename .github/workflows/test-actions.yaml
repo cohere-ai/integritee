@@ -159,13 +159,19 @@ jobs:
                   f"{service} count disagrees with targets"
               )
 
-          # Every register the signed predicate advertises has to be one the
-          # released policy actually pins. Only registers: azure_snp also carries
-          # the dm-verity roothash, which no rule names because PCR 9 measures
-          # the kernel command line it lives on.
+          # ITA CSP RIM appraises MRTD from its catalog. The generated policy
+          # embeds only RTMR1/RTMR2 platform pins and RTMR3 workload pins.
+          # azure_snp also carries the dm-verity roothash, which no rule names
+          # because PCR 9 measures the kernel command line it lives on.
+          ita_pinned_fields = {"rtmr1", "rtmr2", "rtmr3"}
           for target in predicate["targets"]:
               variants = target.get("baseline_variants", [])
-              values = [v for m in variants for v in m["measurements"].values()]
+              values = [
+                  value
+                  for variant in variants
+                  for field, value in variant["measurements"].items()
+                  if field in ita_pinned_fields
+              ]
               snp = target.get("azure_snp", {})
               values += [v for k, v in snp.items() if k.startswith("pcr")]
               for value in values:

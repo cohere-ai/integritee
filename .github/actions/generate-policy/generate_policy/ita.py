@@ -43,9 +43,9 @@ PLACEHOLDERS = (
     DRIVER_VERSIONS_PLACEHOLDER,
 )
 
-# MRTD is verified against the ITA CSP RIM catalog by the template's
-# mrtd_matches_csp_rim rule; RTMR0 is not pinned (covered by the CSP RIM
-# check). Only RTMR1/RTMR2 remain as per-baseline platform pins.
+# ITA's CSP RIM catalog currently provides MRTD values only. MRTD is verified
+# by the template's mrtd_matches_csp_rim rule; RTMR0 is no longer pinned.
+# RTMR1/RTMR2 remain as per-baseline platform pins.
 PLATFORM_FIELDS = ["rtmr1", "rtmr2"]
 MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
 
