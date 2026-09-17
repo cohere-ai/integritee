@@ -64,6 +64,22 @@ def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
     return machine
 
 
+def load_machine_types() -> dict[str, dict]:
+    """Load the shared machine type table."""
+    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
+
+
+def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
+    """Return the machine-types entry backing a target."""
+    machine_type = target["machine_type"]
+    machine = machine_types.get(machine_type)
+    if machine is None:
+        raise ValueError(
+            f"unknown machine type '{machine_type}' -- update machine-types.yaml"
+        )
+    return machine
+
+
 def to_nvat_driver_version(apt_pkg_version: str) -> str:
     version = apt_pkg_version.split("-", 1)[0]
     if not re.fullmatch(r"[0-9]+(?:\.[0-9]+){1,3}", version):
@@ -148,6 +164,10 @@ class RenderResult:
 
     outputs: dict[str, str]
     predicate_targets: dict[int, dict]
+
+    # Top-level predicate keys, for whatever a service's policies assert that
+    # is not a property of any one target. A renderer namespaces its own key.
+    predicate_metadata: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -334,6 +354,7 @@ def generate_policy(
         resolved.append(ResolvedTarget(index, target, machine))
 
     predicate_targets: dict[int, dict] = {}
+    predicate_metadata: dict = {}
     target_counts: dict[str, int] = {}
     for renderer in renderers:
         selected: list[ResolvedTarget] = []
@@ -354,6 +375,7 @@ def generate_policy(
             sys.exit(1)
         for index, entry in result.predicate_targets.items():
             predicate_targets.setdefault(index, {}).update(entry)
+        predicate_metadata.update(result.predicate_metadata)
         target_counts[renderer.name] = len(selected)
         write_outputs({
             **result.outputs,
@@ -382,6 +404,7 @@ def generate_policy(
         # legible from the signed artifact rather than discovered later from
         # a node failing attestation.
         predicate["target_counts"] = target_counts
+        predicate.update(predicate_metadata)
         predicate["targets"] = [
             predicate_targets[index] for index in sorted(predicate_targets)
         ]

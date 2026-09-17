@@ -9,6 +9,8 @@ on:
       - "attestation-policy/policy-manifest.yaml"
       - "attestation-policy/initdata/**"
       - ".github/actions/generate-policy/generate_policy/ita-template.rego"
+      - ".github/actions/generate-policy/generate_policy/trustee-cpu-template.rego"
+      - ".github/actions/generate-policy/generate_policy/trustee-gpu-template.rego"
       - ".github/actions/generate-policy/generate_policy/machine-types.yaml"
   workflow_dispatch:
     inputs:
@@ -123,7 +125,7 @@ jobs:
           manifest-file: attestation-policy/policy-manifest.yaml
           github-token: ${{ steps.app-token.outputs.token }}
           output-artifacts-dir: artifacts
-          policy-types: ita
+          policy-types: ita trustee
           predicate-file: predicate.json
 
       # ----------------------------------------------------------------
@@ -165,12 +167,20 @@ jobs:
       # ----------------------------------------------------------------
       # Attest policy with Sigstore
       # ----------------------------------------------------------------
-      - name: Attest policy with Sigstore
+      # One bundle with several subjects, so a single Rekor entry covers every
+      # released policy. The manifest is named too: its content is already in
+      # the predicate, but a subject gives it a digest a consumer can check
+      # directly instead of diffing a download against the predicate.
+      - name: Attest policies with Sigstore
         if: github.event_name == 'push' || inputs.dry_run == false
         id: attest
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
         with:
-          subject-path: ${{ steps.generate.outputs.ita-policy-file }}
+          subject-path: |
+            ${{ steps.generate.outputs.ita-policy-file }}
+            ${{ steps.generate.outputs.trustee-cpu-policy-file }}
+            ${{ steps.generate.outputs.trustee-gpu-policy-file }}
+            attestation-policy/policy-manifest.yaml
           predicate-type: https://cohere.com/attestation-policy/v1
           predicate-path: predicate.json
 
@@ -183,6 +193,8 @@ jobs:
           name: attestation-release-assets
           path: |
             ${{ steps.generate.outputs.ita-policy-file }}
+            ${{ steps.generate.outputs.trustee-cpu-policy-file }}
+            ${{ steps.generate.outputs.trustee-gpu-policy-file }}
             predicate.json
 
       # ----------------------------------------------------------------
@@ -196,6 +208,8 @@ jobs:
         run: >-
           python3 .github/workflows/release-policy/manage.py prepare-assets
           --policy "${{ steps.generate.outputs.ita-policy-file }}"
+          "${{ steps.generate.outputs.trustee-cpu-policy-file }}"
+          "${{ steps.generate.outputs.trustee-gpu-policy-file }}"
           --manifest attestation-policy/policy-manifest.yaml
           --predicate predicate.json
           --bundle "$BUNDLE_PATH"
@@ -214,6 +228,8 @@ jobs:
           --title "Attestation Policy $VERSION"
           --notes-file release-body.md
           release-assets/ita_policy.rego
+          release-assets/trustee_policy_cpu.rego
+          release-assets/trustee_policy_gpu.rego
           release-assets/policy-manifest.yaml
           release-assets/policy-manifest-bundle.tar.gz
           release-assets/predicate.json

@@ -10,8 +10,11 @@ RUN apt-get update && \
 
 RUN pip install --no-cache-dir pyyaml
 
+# One pinned toolchain serves both renderers, since the reference values in
+# every generated policy are a function of it.
+# TODO Switch to ref on a main branch
 ARG CVM_MEASURE_REPO=https://github.com/cohere-ai/cvm-measure.git
-ARG CVM_MEASURE_REF=7c2e57fd546f5f25056376e936adccf498e9ef81
+ARG CVM_MEASURE_REF=350faa569c63b8a59202b36a1d413119c405440b
 
 RUN git init /tmp/cvm-measure && \
     git -C /tmp/cvm-measure remote add origin "${CVM_MEASURE_REPO}" && \

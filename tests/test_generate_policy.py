@@ -9,7 +9,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -19,24 +18,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 ACTION_ROOT = REPO_ROOT / ".github" / "actions" / "generate-policy"
-OPA = shutil.which("opa")
 sys.path.insert(0, str(ACTION_ROOT))
-
-
-@pytest.fixture(scope="session")
-def opa() -> str:
-    """The opa binary, required rather than optional.
-
-    Compiling and evaluating the generated policy is the coverage most worth
-    having, so its absence fails instead of quietly reporting a green suite
-    that never checked a policy at all.
-    """
-    if OPA is None:
-        pytest.fail(
-            "opa is not on PATH; install it from "
-            "https://www.openpolicyagent.org/docs/#running-opa"
-        )
-    return OPA
 
 # The schema of machine-types.yaml. Changing the table's structure means
 # updating this set and the table; nothing else should need to name a field.
@@ -539,7 +521,7 @@ def test_policy_with_no_targets_denies(tmp_path, opa):
 
 def _accepting_nvgpu_input(tmp_path: Path, driver: str) -> Path:
     """Claims satisfying every NRAS check, leaving the driver the only variable."""
-    valid = {"x-nvidia-cert-status": "valid"}
+    valid = {"x-nvidia-cert-status": "valid", "x-nvidia-cert-ocsp-status": "good"}
     flags = [
         "x-nvidia-gpu-attestation-report-nonce-match",
         "x-nvidia-gpu-arch-check",
@@ -561,6 +543,7 @@ def _accepting_nvgpu_input(tmp_path: Path, driver: str) -> Path:
     gpu.update({
         "hwmodel": "GH100",
         "secboot": True,
+        "dbgstat": "disabled",
         "measres": "success",
         "x-nvidia-gpu-driver-version": driver,
         "x-nvidia-gpu-attestation-report-cert-chain": valid,
@@ -604,6 +587,46 @@ def test_gpu_driver_version_must_be_one_the_policy_lists(
         assert value is True
     else:
         assert value is None
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        {"dbgstat": "enabled"},
+        {"x-nvidia-gpu-attestation-report-cert-chain": {
+            "x-nvidia-cert-status": "valid",
+            "x-nvidia-cert-ocsp-status": "revoked",
+        }},
+        {"x-nvidia-gpu-driver-rim-cert-chain": {
+            "x-nvidia-cert-status": "valid",
+            "x-nvidia-cert-ocsp-status": "revoked",
+        }},
+        {"x-nvidia-gpu-vbios-rim-cert-chain": {
+            "x-nvidia-cert-status": "valid",
+            "x-nvidia-cert-ocsp-status": "revoked",
+        }},
+    ],
+    ids=["debug-enabled", "device-cert", "driver-rim-cert", "vbios-rim-cert"],
+)
+def test_gpu_debug_and_revocation_are_refused(tmp_path, opa, mutate):
+    """A revoked signer passes x-nvidia-cert-status, so OCSP is what catches it.
+
+    Both paths are covered: the mismatch fallback shares this rule, so neither
+    can admit a device the primary path would refuse.
+    """
+    input_file = _accepting_nvgpu_input(tmp_path, "580.159.04")
+    claims = json.loads(input_file.read_text())
+    claims["nvgpu"]["claim_details"]["GPU-0"].update(mutate)
+    input_file.write_text(json.dumps(claims))
+
+    value = _opa_eval(
+        opa,
+        _render_module(tmp_path, [_tdx_target()]),
+        "data.integritee.matches_nvgpu",
+        input_file,
+    )
+
+    assert value is None
 
 
 @pytest.mark.parametrize("missing_field", ita.PLATFORM_FIELDS)
@@ -712,7 +735,7 @@ def test_generate_policy_measures_and_records_each_baseline(
             "rtmr2": "5" * 96,
         }
 
-    monkeypatch.setattr(ita, "compute_measurements", fake_measurements)
+    monkeypatch.setattr(ita, "compute_tdx_measurements", fake_measurements)
 
     manifest = tmp_path / "manifest.yaml"
     initdata = b"test"

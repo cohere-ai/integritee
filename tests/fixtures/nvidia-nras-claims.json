@@ -1,0 +1,49 @@
+{
+  "_comment": [
+    "Claims as the remote NRAS verifier emits them: NVIDIA's EAT payload",
+    "passed through verbatim, one device per appraisal, plus the overall",
+    "result lifted from the JWT.",
+    "",
+    "Flat under input.nvidia, unlike the ITA token, which nests per-device",
+    "claims under claim_details. hwmodel is the short GH100 form remote NRAS",
+    "reports."
+  ],
+  "nvidia": {
+    "hwmodel": "GH100",
+    "ueid": "563858875034415078126",
+    "oemid": "5703",
+    "secboot": true,
+    "dbgstat": "disabled",
+    "measres": "success",
+    "x-nvidia-overall-att-result": true,
+    "x-nvidia-gpu-arch-check": true,
+    "x-nvidia-gpu-attestation-report-parsed": true,
+    "x-nvidia-gpu-attestation-report-nonce-match": true,
+    "x-nvidia-gpu-attestation-report-signature-verified": true,
+    "x-nvidia-gpu-attestation-report-cert-chain-fwid-match": true,
+    "x-nvidia-gpu-attestation-report-cert-chain": {
+      "x-nvidia-cert-status": "valid",
+      "x-nvidia-cert-ocsp-status": "good"
+    },
+    "x-nvidia-gpu-driver-version": "580.173.02",
+    "x-nvidia-gpu-driver-rim-fetched": true,
+    "x-nvidia-gpu-driver-rim-measurements-available": true,
+    "x-nvidia-gpu-driver-rim-schema-validated": true,
+    "x-nvidia-gpu-driver-rim-signature-verified": true,
+    "x-nvidia-gpu-driver-rim-version-match": true,
+    "x-nvidia-gpu-driver-rim-cert-chain": {
+      "x-nvidia-cert-status": "valid",
+      "x-nvidia-cert-ocsp-status": "good"
+    },
+    "x-nvidia-gpu-vbios-version": "96.00.9F.00.04",
+    "x-nvidia-gpu-vbios-rim-fetched": true,
+    "x-nvidia-gpu-vbios-rim-measurements-available": true,
+    "x-nvidia-gpu-vbios-rim-schema-validated": true,
+    "x-nvidia-gpu-vbios-rim-signature-verified": true,
+    "x-nvidia-gpu-vbios-rim-version-match": true,
+    "x-nvidia-gpu-vbios-rim-cert-chain": {
+      "x-nvidia-cert-status": "valid",
+      "x-nvidia-cert-ocsp-status": "good"
+    }
+  }
+}
