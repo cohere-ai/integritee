@@ -325,6 +325,7 @@ targets:
   sources:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
 - model: cmp-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -345,6 +346,7 @@ targets:
   sources:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
 - model: nmc2606-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -355,6 +357,7 @@ targets:
   sources:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
 - model: qw3-4b-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -365,6 +368,7 @@ targets:
   sources:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
 - model: r4f-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -375,6 +379,7 @@ targets:
   sources:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
 - model: r4p-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -385,3 +390,13 @@ targets:
   sources:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+- model: cmp-l
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
+  ram_gib: 234
+  initdata_file: initdata/215ce90debb12fa18f764d74fc0e6e34da8c720b36966673dbce938b6902308ca959ddcc50f6b29ae5e60006c1dac2d0.toml
+  initdata_sha384: 215ce90debb12fa18f764d74fc0e6e34da8c720b36966673dbce938b6902308ca959ddcc50f6b29ae5e60006c1dac2d0
+  added: '2026-09-17'
+  sources:
+  - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
