@@ -1,0 +1,29 @@
+# Static hardware facts, keyed by the machine_type field of a policy manifest
+# target. This table is the only place these facts are declared: they are
+# properties of the machine type, not of a target, so they are looked up at
+# generation time rather than copied onto every target in the manifest.
+#
+# All three fields are required for every entry.
+#
+# platform  Where the guest runs. Selects which firmware and attestation
+#           evidence shape to expect.
+# tee       Confidential computing technology. Decides which policy a target
+#           can appear in, since each attestation service appraises one
+#           evidence shape per section.
+# ram_gib   Guest memory as advertised for the SKU. Today only the TDX path
+#           consumes it, via `cvm-measure tdx --ram`, where MRTD covers the
+#           RAM topology through the TD Handover Block.
+#
+# Adding a machine type here does not create a policy target. Targets come
+# from the manifest; derive.py and validate_manifest.py only check that a
+# target's machine_type is defined below.
+
+a3-highgpu-1g:
+  platform: gcp
+  tee: tdx
+  ram_gib: 234
+
+Standard_NCC40ads_H100_v5:
+  platform: azure
+  tee: snp
+  ram_gib: 320

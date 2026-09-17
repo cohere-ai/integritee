@@ -19,7 +19,7 @@ from pathlib import Path
 
 import yaml
 
-CONTENT_FIELDS = ("model", "machine_type", "podvm_image_tag", "ram_gib")
+CONTENT_FIELDS = ("model", "machine_type", "podvm_image_tag")
 
 
 def initdata_sha384(target: dict) -> str:

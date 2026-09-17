@@ -64,6 +64,15 @@ tdx_base_checks if {
     tdx.tdx_seamsvn >= 271
 }
 
+# A section that matched no targets substitutes to nothing, leaving the name
+# with no definition at all, which Rego rejects as an unsafe variable instead
+# of evaluating it to false. These defaults keep that policy loadable and
+# deny-only; they never apply once a generated block is present, since each
+# block is a complete rule yielding true.
+default matches_tdx_platform := false
+
+default matches_tdx_workload := false
+
 ${TDX_PLATFORM_MATCH_BLOCKS}
 
 ${TDX_WORKLOAD_MATCH_BLOCKS}
@@ -81,7 +90,11 @@ matches_tdx if {
 
 nvgpu_device_base_checks(gpu) if {
     gpu.hwmodel == "GH100"
-    gpu["x-nvidia-gpu-driver-version"] == ${NVIDIA_DRIVER_VERSION}
+
+    # One unique entry per PodVM image in the manifest. An empty set denies,
+    # since indexing it is undefined.
+${NVIDIA_DRIVER_VERSIONS}
+    accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]
 
     gpu["x-nvidia-gpu-attestation-report-nonce-match"] == true
     gpu["x-nvidia-gpu-arch-check"] == true
