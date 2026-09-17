@@ -170,6 +170,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: cmp-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -189,6 +190,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: nmc2606-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -199,6 +201,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: qw3-4b-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -209,6 +212,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: r4f-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -219,6 +223,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: r4p-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -229,6 +234,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: cmp-l
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
@@ -237,3 +243,4 @@ targets:
   added: '2026-09-17'
   sources:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
+  - b1257acf3d8260ba655617235abfc2640fbd1d38
