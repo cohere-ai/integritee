@@ -1,9 +1,18 @@
 # ITA TDX+NVGPU appraisal policy.
 #
-# Platform baselines and model initdata measurements are listed separately.
-# The policy accepts any approved platform/workload combination.
+# Platform MRTD is verified against the ITA CSP Reference Integrity
+# Measurement (RIM) catalog for GCP TDX, which Intel maintains from
+# Google's signed endorsements (polled every 7 days). RTMR1/RTMR2
+# platform pins and RTMR3 workload pins (model initdata measurements)
+# are listed separately. The policy accepts any approved
+# platform/workload combination.
+#
+# References:
+# - https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-gcp-rim.html
 
 import rego.v1
+import data.public.intel.ita.tdxutils
+import data.public.google.gcp.tdx.rims.mrtd as gcpmrtds
 
 default match := false
 
@@ -49,9 +58,16 @@ tcb_level_not_revoked if {
     input.tdx.attester_tcb_status != "Revoked"
 }
 
+# Platform MRTD is verified via the ITA CSP RIM catalog (see header); the
+# generated matches_tdx_platform blocks pin only RTMR1/RTMR2 per baseline.
+mrtd_matches_csp_rim if {
+    tdxutils.is_mrtd(input.tdx, gcpmrtds.measurements)
+}
+
 tdx_base_checks if {
     # tcb_level_acceptable
     tcb_level_not_revoked
+    mrtd_matches_csp_rim
 
     tdx := input.tdx
     tdx.tdx_mrsignerseam == "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
