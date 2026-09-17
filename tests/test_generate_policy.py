@@ -415,7 +415,7 @@ def _unsupported_machine_type() -> str:
     return next(
         machine_type
         for machine_type, entry in generate.load_machine_types().items()
-        if entry["tee"] not in ita.SUPPORTED_TEES
+        if (entry["platform"], entry["tee"]) not in ita.SUPPORTED_PLATFORMS
     )
 
 
