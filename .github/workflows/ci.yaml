@@ -27,21 +27,14 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]" -e "./clients/python[dev]"
+          pip install -e ".[dev]"
 
       - name: Compile Python sources
         run: |
           python -m compileall -q \
             .github/actions \
             .github/workflows \
-            clients/python \
             tests
 
       - name: Test
-        # Suites that currently match the repo layout. Expand as scaffold tests catch up.
-        run: |
-          pytest \
-            tests/test_policy_actions.py \
-            tests/test_tng_client.py \
-            tests/test_versioned_baselines.py \
-            -v --tb=short
+        run: pytest -v --tb=short
