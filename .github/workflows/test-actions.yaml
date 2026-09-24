@@ -303,7 +303,7 @@ jobs:
         id: verify
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815"
           blobheart-token: ${{ steps.app-token.outputs.token }}
           policy-manifest: .github/workflows/test-actions/derive-manifest/expected-manifest.yaml
 
@@ -320,7 +320,7 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815"
           blobheart-token: ${{ steps.app-token.outputs.token }}
           policy-manifest: .github/workflows/test-actions/derive-manifest/incomplete-manifest.yaml
 
@@ -411,7 +411,7 @@ jobs:
         id: derive-single
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815"
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify single-ref manifest
@@ -429,7 +429,7 @@ jobs:
         id: derive-multi
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb 19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815 ab441934a02e2b3660a3eca91235af9f5d3e5815"
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify multi-ref produces two manifest files
@@ -447,7 +447,7 @@ jobs:
       - name: Clone blobheart at pinned ref
         run: |
           git clone --depth 1 https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/cohere-ai/blobheart.git /tmp/blobheart
-          cd /tmp/blobheart && git fetch --depth 1 origin 19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb && git checkout FETCH_HEAD
+          cd /tmp/blobheart && git fetch --depth 1 origin ab441934a02e2b3660a3eca91235af9f5d3e5815 && git checkout FETCH_HEAD
 
       - name: Derive manifest (local dir)
         id: derive-local
