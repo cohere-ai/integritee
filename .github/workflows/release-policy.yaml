@@ -158,6 +158,7 @@ jobs:
     env:
       ITA_POLICY_ID: cbeedffa-e224-4664-b6b4-573fcd4133d3
       ITA_POLICY_NAME: integritee-policy-a
+      GCS_BUCKET: cohere-attestation-policy
       REASON: ${{ inputs.reason || '' }}
     steps:
       # Pin to the commit generate ran against, so a push landing mid-run
@@ -270,3 +271,27 @@ jobs:
           release-assets/policy-manifest-bundle.tar.gz
           release-assets/predicate.json
           release-assets/attestation-bundle.sigstore.json
+
+      # ----------------------------------------------------------------
+      # Mirror release assets to a public GCS bucket. GitHub release
+      # assets are rate limited, so TNG resolves the latest release via
+      # a no-cache latest.json pointer and then fetches immutable,
+      # version-prefixed files that cache aggressively.
+      # ----------------------------------------------------------------
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Upload release assets to GCS
+        env:
+          VERSION: ${{ needs.generate.outputs.version }}
+        run: >-
+          gcloud storage cp release-assets/*
+          "gs://${GCS_BUCKET}/releases/${VERSION}/"
+          --cache-control="public, max-age=31536000, immutable"
+          && printf '{"version": "%s"}\n' "${VERSION}" > latest.json
+          && gcloud storage cp latest.json
+          "gs://${GCS_BUCKET}/latest.json"
+          --cache-control="no-cache"
