@@ -74,6 +74,13 @@ first boot is the normal case.
 The predicate includes a `previous_rekor_log_index` field that chains releases
 together, forming a linked list in the public Rekor transparency log.
 
+Every release is also mirrored to a public GCS bucket
+(`https://storage.googleapis.com/cohere-attestation-policy`) by the same
+publish job, so clients fetch policies without GitHub rate limits.
+`releases/<version>/` holds the same assets, written once and served with a
+one-year immutable cache header, while `latest.json` (`no-cache`) names the
+current version for consumers to resolve first.
+
 ## Generating Policies
 
 `.github/actions/generate-policy` reads the manifest, measures every target it
