@@ -56,8 +56,8 @@ def derive_manifests(derive_script: Path, runner_temp: Path,
                      token: str) -> list[str]:
     """Call derive.py for each ref or a local dir, returning manifest file paths.
 
-    Optional GENERATED_DIR / KUSTOMIZATION_PATH environment variables are
-    forwarded to derive.py to point at non-default blobheart layouts.
+    An optional GENERATED_DIR selects a non-default Blobheart layout. The
+    deprecated KUSTOMIZATION_PATH is forwarded so derive.py can warn callers.
     """
     env = {**os.environ, "GH_TOKEN": token}
     path_args: list[str] = []

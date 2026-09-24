@@ -1,27 +1,9 @@
 #!/usr/bin/env python3
-"""Derive a policy manifest from a blobheart ref or local checkout.
+"""Derive a policy manifest from a Blobheart ref or local checkout.
 
-Discovers CC models, extracts initdata, and derives machine_type/podvm_image_tag
-from kustomization.yaml. Machine types are validated against the shared
-machine-types.yaml table; their hardware facts are looked up at generation time
-rather than copied into the manifest.
-
-Blobheart paths (configurable via --generated-dir/--kustomization-path):
-  - CC models: <generated-dir>/<model>-cc/
-    (default: k8s/geofence/components/models_v2/generated/)
-  - Kustomization: --kustomization-path
-    (default: k8s/geofence/components/models_v2/base/kustomization.yaml)
-  - Initdata: <model>-cc/kata-policy-patch.yaml (cc_init_data annotation)
-
-Usage (remote):
-    GH_TOKEN=... python derive.py \
-        --blobheart-ref <commit-sha> \
-        --output /tmp/derived-manifest.yaml
-
-Usage (local):
-    python derive.py \
-        --blobheart-dir /path/to/blobheart \
-        --output /tmp/derived-manifest.yaml
+Confidential model IDs come from Blobheart's list-models.sh. Each listed
+generated directory is rendered with kustomize, and all target data is read
+from the single confidential StatefulSet in that rendered output.
 """
 
 from __future__ import annotations
@@ -32,25 +14,33 @@ import binascii
 import datetime
 import gzip
 import hashlib
-import json
+import io
+import os
 import re
 import subprocess
 import sys
+import tempfile
 import zlib
 from pathlib import Path
 
 import yaml
 
 BLOBHEART_REPO = "cohere-ai/blobheart"
-DEFAULT_GENERATED_DIR = "k8s/geofence/components/models_v2/generated"
-DEFAULT_KUSTOMIZATION_PATH = "k8s/geofence/components/models_v2/base/kustomization.yaml"
+BLOBHEART_MODELS_DIR = Path("k8s/geofence-models")
+LIST_MODELS_SCRIPT = BLOBHEART_MODELS_DIR / "scripts/list-models.sh"
+DEFAULT_GENERATED_DIR = "k8s/geofence-models/base/generated"
 CC_SUFFIX = "-cc"
+MAX_INITDATA_BYTES = 4 * 1024 * 1024
 
-GPU_LABEL_KEY = "cohere.com/gpu"
-CC_LABEL = "cohere.com/confidential-compute=true"
-
-KATA_IMAGE_ANNOTATION = "io.katacontainers.config.hypervisor.image"
+CC_LABEL_KEY = "cohere.com/confidential-compute"
+PROVIDER_LABEL_KEY = "cohere.com/provider"
 KATA_MACHINE_ANNOTATION = "io.katacontainers.config.hypervisor.machine_type"
+KATA_IMAGE_ANNOTATION = "io.katacontainers.config.hypervisor.image"
+KATA_INITDATA_ANNOTATION = "io.katacontainers.config.hypervisor.cc_init_data"
+SUPPORTED_PROVIDER_RUNTIMES = {
+    "gcp": "kata-remote",
+    "azure": "kata-remote-azure",
+}
 INITDATA_DIR = "initdata"
 
 # The table lives in the generate-policy package so it is baked into that
@@ -61,106 +51,132 @@ MACHINE_TYPES_PATH = (
 )
 
 
-def read_file(root: Path | None, ref: str | None, path: str) -> str:
-    """Read a file from a local dir or the GitHub API."""
-    if root:
-        return (root / path).read_text()
-    api_path = f"/repos/{BLOBHEART_REPO}/contents/{path}?ref={ref}"
-    result = subprocess.run(
-        ["gh", "api", api_path, "--jq", ".content"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"gh api {api_path}: {result.stderr.strip()}")
-    return base64.b64decode(result.stdout.strip()).decode()
-
-
-def list_dir(root: Path | None, ref: str | None, path: str) -> list[str]:
-    """List subdirectory names from a local dir or the GitHub API."""
-    if root:
-        return sorted(e.name for e in (root / path).iterdir() if e.is_dir())
-    api_path = f"/repos/{BLOBHEART_REPO}/contents/{path}?ref={ref}"
-    result = subprocess.run(
-        ["gh", "api", api_path, "--jq", ".[].name"],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"ERROR: gh api {api_path}: {result.stderr.strip()}", file=sys.stderr)
-        sys.exit(1)
-    return [name.strip() for name in result.stdout.strip().split("\n") if name.strip()]
-
-
-def build_cc_label_map(kustomization_yaml: str) -> dict[str, dict]:
-    """Build GPU label -> {machine_type, podvm_image_tag} from CC patches.
-
-    CC patches are identified by their target labelSelector containing both
-    cohere.com/gpu=<label> and cohere.com/confidential-compute=true. The
-    patch body's kata annotations provide machine_type and podvm image.
-    """
-    doc = yaml.safe_load(kustomization_yaml)
-    label_map: dict[str, dict] = {}
-
-    for patch in doc.get("patches", []):
-        selector = patch.get("target", {}).get("labelSelector", "")
-        if CC_LABEL not in selector:
-            continue
-
-        gpu_match = re.search(rf"{re.escape(GPU_LABEL_KEY)}=([^,]+)", selector)
-        if not gpu_match:
-            continue
-        gpu_label = gpu_match.group(1)
-
-        patch_content = patch.get("patch", "")
-        if not patch_content:
-            continue
-        try:
-            patch_doc = yaml.safe_load(patch_content)
-        except yaml.YAMLError:
-            continue
-        if not isinstance(patch_doc, dict):
-            continue
-
-        annotations = (
-            patch_doc.get("spec", {})
-            .get("template", {})
-            .get("metadata", {})
-            .get("annotations", {})
+def run_command(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    env: dict[str, str] | None = None,
+) -> str:
+    """Run a command and return stdout, raising with command context."""
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            capture_output=True,
+            text=True,
         )
-
-        machine_type = annotations.get(KATA_MACHINE_ANNOTATION)
-        image_ref = annotations.get(KATA_IMAGE_ANNOTATION, "")
-        podvm_image_tag = image_ref.rsplit("/", 1)[-1] if image_ref else ""
-
-        if machine_type:
-            label_map[gpu_label] = {
-                "machine_type": machine_type,
-                "podvm_image_tag": podvm_image_tag,
-            }
-
-    return label_map
+    except OSError as error:
+        raise RuntimeError(f"failed to execute {' '.join(command)}: {error}") from error
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown error"
+        raise RuntimeError(f"{' '.join(command)} failed: {detail}")
+    return result.stdout
 
 
-def extract_initdata(kata_policy_yaml: str) -> str | None:
-    """Extract cc_init_data annotation from kata-policy-patch.yaml."""
-    doc = yaml.safe_load(kata_policy_yaml)
-    if not doc:
-        return None
-    annotations = (
-        doc.get("spec", {})
-        .get("template", {})
-        .get("metadata", {})
-        .get("annotations", {})
+def git_auth_environment() -> dict[str, str]:
+    """Authenticate git through gh without changing persistent git config."""
+    env = os.environ.copy()
+    try:
+        config_index = int(env.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError:
+        config_index = 0
+    env["GIT_CONFIG_COUNT"] = str(config_index + 1)
+    env[f"GIT_CONFIG_KEY_{config_index}"] = (
+        "credential.https://github.com.helper"
     )
-    return annotations.get("io.katacontainers.config.hypervisor.cc_init_data")
+    env[f"GIT_CONFIG_VALUE_{config_index}"] = "!gh auth git-credential"
+    return env
+
+
+def checkout_remote_ref(ref: str, destination: Path) -> Path:
+    """Sparse-check out Blobheart's model tree at exactly ref."""
+    run_command(
+        [
+            "gh",
+            "repo",
+            "clone",
+            BLOBHEART_REPO,
+            str(destination),
+            "--",
+            "--filter=blob:none",
+            "--no-checkout",
+        ]
+    )
+    git_prefix = ["git", "-C", str(destination)]
+    git_env = git_auth_environment()
+    run_command(
+        git_prefix + ["sparse-checkout", "set", str(BLOBHEART_MODELS_DIR)],
+        env=git_env,
+    )
+    run_command(
+        git_prefix + ["fetch", "--depth=1", "origin", ref],
+        env=git_env,
+    )
+    run_command(git_prefix + ["checkout", "--detach", ref], env=git_env)
+    checked_out_ref = run_command(
+        git_prefix + ["rev-parse", "HEAD"],
+        env=git_env,
+    ).strip()
+    if checked_out_ref != ref:
+        raise RuntimeError(
+            f"Blobheart checkout resolved to {checked_out_ref or '<empty>'}, "
+            f"expected {ref}"
+        )
+    return destination
+
+
+def parse_model_list(output: str) -> list[str]:
+    """Validate confidential model IDs printed by list-models.sh."""
+    models: list[str] = []
+    seen: set[str] = set()
+    for raw_line in output.splitlines():
+        model_id = raw_line.strip()
+        if not model_id:
+            continue
+        if raw_line != model_id or not re.fullmatch(
+            r"[a-z0-9](?:[-a-z0-9]*[a-z0-9])?", model_id
+        ):
+            raise ValueError(
+                f"invalid model ID from {LIST_MODELS_SCRIPT}: {raw_line!r}"
+            )
+        if not model_id.endswith(CC_SUFFIX):
+            raise ValueError(
+                f"confidential model ID from {LIST_MODELS_SCRIPT} must end "
+                f"in {CC_SUFFIX!r}: {model_id!r}"
+            )
+        if model_id in seen:
+            raise ValueError(
+                f"duplicate model ID from {LIST_MODELS_SCRIPT}: {model_id}"
+            )
+        seen.add(model_id)
+        models.append(model_id)
+    return models
+
+
+def list_confidential_models(root: Path) -> list[str]:
+    """Return only the models selected by Blobheart's confidential filter."""
+    output = run_command(
+        [str(root / LIST_MODELS_SCRIPT), "--confidential"],
+        cwd=root / BLOBHEART_MODELS_DIR,
+    )
+    return parse_model_list(output)
 
 
 def decode_initdata(value: str) -> bytes:
     """Decode and decompress a cc_init_data annotation."""
     try:
         decoded = base64.b64decode(value, validate=True)
-        return gzip.decompress(decoded) if decoded[:2] == b"\x1f\x8b" else decoded
+        if decoded[:2] == b"\x1f\x8b":
+            with gzip.GzipFile(fileobj=io.BytesIO(decoded)) as stream:
+                decoded = stream.read(MAX_INITDATA_BYTES + 1)
     except (binascii.Error, gzip.BadGzipFile, EOFError, zlib.error) as error:
         raise ValueError(f"invalid cc_init_data: {error}") from error
+    if len(decoded) > MAX_INITDATA_BYTES:
+        raise ValueError(
+            f"decoded cc_init_data exceeds {MAX_INITDATA_BYTES} bytes"
+        )
+    return decoded
 
 
 def write_initdata(value: str, output_dir: Path) -> tuple[str, str]:
@@ -175,22 +191,134 @@ def write_initdata(value: str, output_dir: Path) -> tuple[str, str]:
     return f"{INITDATA_DIR}/{output_path.name}", digest
 
 
-def extract_gpu_label(model_yaml: str) -> str | None:
-    """Extract cohere.com/gpu label from a model's model.yaml.
+def _mapping(value: object) -> dict:
+    return value if isinstance(value, dict) else {}
 
-    model.yaml is a multi-document YAML file containing all K8s resources.
-    The GPU label is on the StatefulSet's metadata labels.
-    """
-    for doc in yaml.safe_load_all(model_yaml):
-        if not isinstance(doc, dict):
+
+def _required_text(
+    model_id: str,
+    values: dict,
+    key: str,
+    field_path: str,
+) -> str:
+    value = values.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"model '{model_id}': missing or invalid field '{field_path}'")
+    return value
+
+
+def _is_true(value: object) -> bool:
+    return value is True or (
+        isinstance(value, str) and value.lower() == "true"
+    )
+
+
+def extract_target_fields(
+    model_id: str,
+    built_yaml: str,
+    machine_types: dict[str, dict],
+) -> dict[str, str]:
+    """Extract and validate one target from rendered multi-document YAML."""
+    try:
+        documents = list(yaml.safe_load_all(built_yaml))
+    except yaml.YAMLError as error:
+        raise ValueError(f"model '{model_id}': invalid kustomize build YAML: {error}") from error
+
+    workloads: list[dict] = []
+    for document in documents:
+        if not isinstance(document, dict) or document.get("kind") != "StatefulSet":
             continue
-        if doc.get("kind") != "StatefulSet":
-            continue
-        labels = doc.get("metadata", {}).get("labels", {})
-        gpu = labels.get(GPU_LABEL_KEY)
-        if gpu:
-            return gpu
-    return None
+        metadata = _mapping(document.get("metadata"))
+        labels = _mapping(metadata.get("labels"))
+        if _is_true(labels.get(CC_LABEL_KEY)):
+            workloads.append(document)
+
+    if len(workloads) != 1:
+        raise ValueError(
+            f"model '{model_id}': expected exactly one StatefulSet with field "
+            f"'metadata.labels[{CC_LABEL_KEY}]' true, found {len(workloads)}"
+        )
+
+    workload = workloads[0]
+    metadata = _mapping(workload.get("metadata"))
+    labels = _mapping(metadata.get("labels"))
+    provider = _required_text(
+        model_id,
+        labels,
+        PROVIDER_LABEL_KEY,
+        f"metadata.labels[{PROVIDER_LABEL_KEY}]",
+    )
+
+    spec = _mapping(workload.get("spec"))
+    template = _mapping(spec.get("template"))
+    template_metadata = _mapping(template.get("metadata"))
+    annotations = _mapping(template_metadata.get("annotations"))
+    template_spec = _mapping(template.get("spec"))
+    machine_type = _required_text(
+        model_id,
+        annotations,
+        KATA_MACHINE_ANNOTATION,
+        f"spec.template.metadata.annotations[{KATA_MACHINE_ANNOTATION}]",
+    )
+    image = _required_text(
+        model_id,
+        annotations,
+        KATA_IMAGE_ANNOTATION,
+        f"spec.template.metadata.annotations[{KATA_IMAGE_ANNOTATION}]",
+    )
+    initdata = _required_text(
+        model_id,
+        annotations,
+        KATA_INITDATA_ANNOTATION,
+        f"spec.template.metadata.annotations[{KATA_INITDATA_ANNOTATION}]",
+    )
+    runtime_class = _required_text(
+        model_id,
+        template_spec,
+        "runtimeClassName",
+        "spec.template.spec.runtimeClassName",
+    )
+
+    expected_runtime = SUPPORTED_PROVIDER_RUNTIMES.get(provider)
+    if expected_runtime is None:
+        raise ValueError(
+            f"model '{model_id}': unsupported field "
+            f"'metadata.labels[{PROVIDER_LABEL_KEY}]' value '{provider}'"
+        )
+    if runtime_class != expected_runtime:
+        raise ValueError(
+            f"model '{model_id}': field 'spec.template.spec.runtimeClassName' "
+            f"is '{runtime_class}' for provider '{provider}', expected "
+            f"'{expected_runtime}'"
+        )
+
+    machine_info = machine_types.get(machine_type)
+    if not isinstance(machine_info, dict):
+        raise ValueError(
+            f"model '{model_id}': field "
+            f"'spec.template.metadata.annotations[{KATA_MACHINE_ANNOTATION}]' "
+            f"has unknown machine type '{machine_type}'"
+        )
+    machine_platform = machine_info.get("platform")
+    if machine_platform != provider:
+        raise ValueError(
+            f"model '{model_id}': machine type '{machine_type}' platform "
+            f"'{machine_platform}' does not match field "
+            f"'metadata.labels[{PROVIDER_LABEL_KEY}]' value '{provider}'"
+        )
+
+    podvm_image_tag = image.rsplit("/", 1)[-1]
+    if not podvm_image_tag:
+        raise ValueError(
+            f"model '{model_id}': field "
+            f"'spec.template.metadata.annotations[{KATA_IMAGE_ANNOTATION}]' "
+            "has no final path segment"
+        )
+    return {
+        "machine_type": machine_type,
+        "podvm_image_tag": podvm_image_tag,
+        "initdata": initdata,
+    }
 
 
 def load_machine_types() -> dict[str, dict]:
@@ -212,9 +340,82 @@ def resolve_local_ref(root: Path) -> str:
     return ref
 
 
+def _generated_path(value: str) -> Path:
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"--generated-dir must be Blobheart-relative: {value}")
+    return path
+
+
+def derive_manifest(
+    root: Path,
+    ref: str,
+    generated_dir: str,
+    output_path: Path,
+    initdata_dir: Path,
+) -> None:
+    """Derive and write a manifest from an already checked-out source."""
+    generated_path = _generated_path(generated_dir)
+    machine_types = load_machine_types()
+    model_ids = list_confidential_models(root)
+    print(f"Found {len(model_ids)} CC models: {', '.join(model_ids)}")
+
+    targets: list[dict] = []
+    for model_id in model_ids:
+        model_path = generated_path / model_id
+        model_dir = root / model_path
+        if not model_dir.is_dir():
+            raise ValueError(
+                f"model '{model_id}': generated directory does not exist: "
+                f"{model_path}"
+            )
+
+        try:
+            built_yaml = run_command(
+                ["kustomize", "build", str(model_path)],
+                cwd=root,
+            )
+        except RuntimeError as error:
+            raise RuntimeError(f"model '{model_id}': {error}") from error
+        fields = extract_target_fields(model_id, built_yaml, machine_types)
+        try:
+            initdata_file, initdata_sha384 = write_initdata(
+                fields["initdata"], initdata_dir
+            )
+        except ValueError as error:
+            raise ValueError(
+                f"model '{model_id}': field "
+                f"'spec.template.metadata.annotations[{KATA_INITDATA_ANNOTATION}]': "
+                f"{error}"
+            ) from error
+
+        target = {
+            "model": model_id.removesuffix(CC_SUFFIX),
+            "machine_type": fields["machine_type"],
+            "podvm_image_tag": fields["podvm_image_tag"],
+            "initdata_file": initdata_file,
+            "initdata_sha384": initdata_sha384,
+            "added": datetime.date.today().isoformat(),
+            "sources": [ref],
+        }
+        targets.append(target)
+        print(
+            f"Derived {model_id}: {fields['machine_type']}, "
+            f"{fields['podvm_image_tag']}, initdata_sha384={initdata_sha384}"
+        )
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        yaml.dump({"targets": targets}, default_flow_style=False, sort_keys=False)
+    )
+    print(f"Derived {len(targets)} targets -> {output_path}")
+
+
 def main() -> None:
     """Derive a policy manifest from local or remote Blobheart."""
-    parser = argparse.ArgumentParser(description="Derive manifest from blobheart ref or local checkout")
+    parser = argparse.ArgumentParser(
+        description="Derive manifest from blobheart ref or local checkout"
+    )
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument("--blobheart-ref", help="Blobheart commit SHA")
     source_group.add_argument("--blobheart-dir", help="Path to local blobheart checkout")
@@ -227,119 +428,60 @@ def main() -> None:
     parser.add_argument(
         "--generated-dir",
         default=DEFAULT_GENERATED_DIR,
-        help=f"Blobheart-relative directory holding per-model generated dirs "
-        f"(default: {DEFAULT_GENERATED_DIR})",
+        help=(
+            "Blobheart-relative directory holding per-model generated dirs "
+            f"(default: {DEFAULT_GENERATED_DIR})"
+        ),
     )
     parser.add_argument(
         "--kustomization-path",
-        default=DEFAULT_KUSTOMIZATION_PATH,
-        help=f"Blobheart-relative path to the platform patch kustomization "
-        f"(default: {DEFAULT_KUSTOMIZATION_PATH})",
+        default=None,
+        help="Deprecated compatibility argument; accepted but ignored",
     )
     args = parser.parse_args()
 
-    root = Path(args.blobheart_dir) if args.blobheart_dir else None
     ref = args.blobheart_ref
-    output_path = Path(args.output)
-    initdata_dir = args.initdata_dir or output_path.parent / INITDATA_DIR
     if ref and not re.fullmatch(r"[0-9a-f]{40}", ref):
         parser.error("--blobheart-ref must be a 40-character lowercase SHA")
-    if root and not root.is_dir():
-        parser.error(f"--blobheart-dir is not a directory: {root}")
-    if root:
-        try:
-            ref = resolve_local_ref(root)
-        except ValueError as error:
-            parser.error(str(error))
-    source_label = f"local://{root}@{ref}" if root else f"blobheart://{ref}"
-
-    machine_types = load_machine_types()
-    print(f"Deriving manifest from {source_label}")
-
-    entries = list_dir(root, ref, args.generated_dir)
-    cc_models = [e for e in entries if e.endswith(CC_SUFFIX)]
-    print(f"Found {len(cc_models)} CC models: {', '.join(cc_models)}")
-
-    if not cc_models:
-        print("No CC models found, writing empty manifest")
-        Path(args.output).write_text(yaml.dump({"targets": []}, sort_keys=False))
-        return
-
-    kustomization = read_file(root, ref, args.kustomization_path)
-    label_map = build_cc_label_map(kustomization)
-    print(f"CC label map: {json.dumps({k: v.get('machine_type', '?') for k, v in label_map.items()})}")
-
-    if not label_map:
-        print("WARNING: no CC patches found in kustomization.yaml")
-
-    targets: list[dict] = []
-
-    for cc_name in cc_models:
-        model = cc_name.removesuffix(CC_SUFFIX)
-        print(f"\n--- {model} ({cc_name}) ---")
-
-        model_path = f"{args.generated_dir}/{cc_name}/model.yaml"
-        model_raw = read_file(root, ref, model_path)
-        gpu_label = extract_gpu_label(model_raw)
-
-        if not gpu_label:
-            print(f"  WARNING: no {GPU_LABEL_KEY} label on StatefulSet, skipping")
-            continue
-        print(f"  GPU label: {gpu_label}")
-
-        label_info = label_map.get(gpu_label)
-        if not label_info:
-            print(f"  WARNING: no CC patch for {gpu_label}, skipping")
-            continue
-
-        machine_type = label_info["machine_type"]
-        podvm_image_tag = label_info["podvm_image_tag"]
-
-        if machine_type not in machine_types:
-            print(f"  ERROR: unknown machine type '{machine_type}' -- "
-                  "update machine-types.yaml", file=sys.stderr)
-            sys.exit(1)
-
-        kata_path = f"{args.generated_dir}/{cc_name}/kata-policy-patch.yaml"
-        kata_raw = read_file(root, ref, kata_path)
-        initdata = extract_initdata(kata_raw)
-
-        if not initdata:
-            print(f"  WARNING: no cc_init_data annotation, skipping")
-            continue
-
-        try:
-            initdata_file, initdata_sha384 = write_initdata(initdata, initdata_dir)
-        except ValueError as error:
-            print(f"  ERROR: {error}", file=sys.stderr)
-            sys.exit(1)
-
-        today = datetime.date.today().isoformat()
-        target = {
-            "model": model,
-            "machine_type": machine_type,
-            "podvm_image_tag": podvm_image_tag,
-            "initdata_file": initdata_file,
-            "initdata_sha384": initdata_sha384,
-            "added": today,
-            "sources": [ref],
-        }
-        targets.append(target)
-        print(f"  Derived: {machine_type}, {podvm_image_tag}, "
-              f"initdata_sha384={initdata_sha384}")
-
-    if not targets:
+    if args.kustomization_path:
         print(
-            "ERROR: CC models were discovered but none produced a policy target",
+            "WARNING: --kustomization-path is deprecated and ignored",
             file=sys.stderr,
         )
-        sys.exit(1)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(
-        yaml.dump({"targets": targets}, default_flow_style=False, sort_keys=False)
-    )
-    print(f"\nDerived {len(targets)} targets -> {args.output}")
+    output_path = Path(args.output)
+    initdata_dir = args.initdata_dir or output_path.parent / INITDATA_DIR
+    try:
+        if args.blobheart_dir:
+            root = Path(args.blobheart_dir).resolve()
+            if not root.is_dir():
+                parser.error(f"--blobheart-dir is not a directory: {root}")
+            try:
+                ref = resolve_local_ref(root)
+            except ValueError as error:
+                parser.error(str(error))
+            print(f"Deriving manifest from local://{root}@{ref}")
+            derive_manifest(
+                root,
+                ref,
+                args.generated_dir,
+                output_path,
+                initdata_dir,
+            )
+        else:
+            with tempfile.TemporaryDirectory(prefix="blobheart-") as temp_dir:
+                root = checkout_remote_ref(ref, Path(temp_dir) / "blobheart")
+                print(f"Deriving manifest from blobheart://{ref}")
+                derive_manifest(
+                    root,
+                    ref,
+                    args.generated_dir,
+                    output_path,
+                    initdata_dir,
+                )
+    except (RuntimeError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(1) from error
 
 
 if __name__ == "__main__":

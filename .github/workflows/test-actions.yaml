@@ -303,7 +303,7 @@ jobs:
         id: verify
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
+          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
           blobheart-token: ${{ steps.app-token.outputs.token }}
           policy-manifest: .github/workflows/test-actions/derive-manifest/expected-manifest.yaml
 
@@ -320,9 +320,9 @@ jobs:
         continue-on-error: true
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "8abd02c84e4764cb0e721a810588054f37bb6ca4"
+          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
           blobheart-token: ${{ steps.app-token.outputs.token }}
-          integritee-token: ${{ github.token }}
+          policy-manifest: .github/workflows/test-actions/derive-manifest/incomplete-manifest.yaml
 
       - name: Assert verification failed
         run: |
@@ -411,19 +411,25 @@ jobs:
         id: derive-single
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
+          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify single-ref manifest
         run: |
           grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-single.outputs.manifest-files }} > /tmp/actual-content.yaml
           diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
+          TARGET_COUNT=$(python3 -c "import yaml; print(len(yaml.safe_load(open('/tmp/actual-content.yaml'))['targets']))")
+          INITDATA_COUNT=$(find "${{ steps.derive-single.outputs.initdata-dir }}" -type f -name '*.toml' | wc -l)
+          if [ "$TARGET_COUNT" -ne 14 ] || [ "$INITDATA_COUNT" -ne 14 ]; then
+            echo "ERROR: expected 14 targets and initdata files, got targets=$TARGET_COUNT initdata=$INITDATA_COUNT"
+            exit 1
+          fi
 
       - name: Derive manifest (multiple refs, same ref twice)
         id: derive-multi
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58 47ded742780246155c119caa1b3f90fd8b598c58"
+          blobheart-refs: "19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb 19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb"
           github-token: ${{ steps.app-token.outputs.token }}
 
       - name: Verify multi-ref produces two manifest files
@@ -441,7 +447,7 @@ jobs:
       - name: Clone blobheart at pinned ref
         run: |
           git clone --depth 1 https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/cohere-ai/blobheart.git /tmp/blobheart
-          cd /tmp/blobheart && git fetch --depth 1 origin 47ded742780246155c119caa1b3f90fd8b598c58 && git checkout FETCH_HEAD
+          cd /tmp/blobheart && git fetch --depth 1 origin 19f3788ceaaac0e81c0fe055896ef2cf9eea2fdb && git checkout FETCH_HEAD
 
       - name: Derive manifest (local dir)
         id: derive-local

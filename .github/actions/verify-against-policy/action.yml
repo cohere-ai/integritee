@@ -23,11 +23,10 @@ inputs:
   generated-dir:
     description: "Blobheart-relative directory holding per-model generated dirs"
     required: false
-    default: "k8s/geofence/components/models_v2/generated"
+    default: "k8s/geofence-models/base/generated"
   kustomization-path:
-    description: "Blobheart-relative path to the platform patch kustomization"
+    description: "Deprecated compatibility input; accepted but ignored"
     required: false
-    default: "k8s/geofence/components/models_v2/base/kustomization.yaml"
   retries:
     description: "Number of retries after the initial attempt (0 = no retry)"
     required: false
@@ -45,6 +44,10 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Install policy derivation tools
+      shell: bash
+      run: bash "${{ github.action_path }}/../derive-manifest/install-tools.sh"
+
     - name: Install Python dependencies
       shell: bash
       run: pip install pyyaml >/dev/null 2>&1
