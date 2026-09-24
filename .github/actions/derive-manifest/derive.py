@@ -358,7 +358,7 @@ def derive_manifest(
     generated_path = _generated_path(generated_dir)
     machine_types = load_machine_types()
     model_ids = list_confidential_models(root)
-    print(f"Found {len(model_ids)} CC models: {', '.join(model_ids)}")
+    print(f"Found {len(model_ids)} CC models")
 
     targets: list[dict] = []
     for model_id in model_ids:
@@ -399,10 +399,7 @@ def derive_manifest(
             "sources": [ref],
         }
         targets.append(target)
-        print(
-            f"Derived {model_id}: {fields['machine_type']}, "
-            f"{fields['podvm_image_tag']}, initdata_sha384={initdata_sha384}"
-        )
+        print(f"Derived {len(targets)} of {len(model_ids)} CC targets")
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
