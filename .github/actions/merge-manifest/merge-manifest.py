@@ -13,13 +13,25 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from pathlib import Path
 
 import yaml
 
-CONTENT_FIELDS = ("model", "machine_type", "podvm_image_tag")
+GENERATE_POLICY_ACTION = (
+    Path(__file__).resolve().parents[1] / "generate-policy"
+)
+sys.path.insert(0, str(GENERATE_POLICY_ACTION))
+
+from generate_policy.manifest_contract import (  # noqa: E402
+    MANIFEST_TARGET_FIELDS,
+    SCHEMA_VERSION,
+    load_machine_types,
+    manifest_targets,
+    schema_errors,
+    target_content_hash,
+    target_provider,
+)
 
 
 def initdata_sha384(target: dict) -> str:
@@ -41,26 +53,48 @@ def initdata_sha384(target: dict) -> str:
 
 def target_hash(target: dict) -> str:
     """Compute a deterministic content hash for dedup."""
-    parts = [str(target.get(f, "")) for f in CONTENT_FIELDS]
-    parts.append(initdata_sha384(target))
-    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+    initdata_sha384(target)
+    return target_content_hash(target)
 
 
-def load_manifest(path: Path) -> list[dict]:
-    doc = yaml.safe_load(path.read_text()) or {}
-    targets = doc.get("targets")
-    if targets is None:
-        return []
-    if not isinstance(targets, list):
-        print(f"ERROR: 'targets' in {path} is not a list", file=sys.stderr)
+def load_manifest(path: Path, machine_types: dict[str, dict]) -> list[dict]:
+    try:
+        doc = yaml.safe_load(path.read_text()) or {}
+        version, targets = manifest_targets(doc)
+        normalized = []
+        for target in targets:
+            upgraded = {
+                **target,
+                "provider": target_provider(target, machine_types, version),
+            }
+            normalized.append({
+                field: upgraded[field]
+                for field in MANIFEST_TARGET_FIELDS
+                if field in upgraded
+            })
+        if version == 0:
+            errors = schema_errors(
+                {"schema_version": SCHEMA_VERSION, "targets": normalized}
+            )
+            if errors:
+                raise ValueError(
+                    "legacy manifest cannot be upgraded: " + "; ".join(errors)
+                )
+        return normalized
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        print(f"ERROR: invalid manifest {path}: {error}", file=sys.stderr)
         sys.exit(1)
-    return targets
 
 
 def write_manifest(path: Path, targets: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w") as f:
-        yaml.dump({"targets": targets}, f, default_flow_style=False, sort_keys=False)
+        yaml.dump(
+            {"schema_version": SCHEMA_VERSION, "targets": targets},
+            f,
+            default_flow_style=False,
+            sort_keys=False,
+        )
 
 
 def main() -> None:
@@ -79,9 +113,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    machine_types = load_machine_types()
     base_path = Path(args.base)
     if base_path.exists():
-        base_targets = load_manifest(base_path)
+        base_targets = load_manifest(base_path, machine_types)
     else:
         base_targets = []
 
@@ -97,7 +132,7 @@ def main() -> None:
 
     for new_path_str in args.new:
         new_path = Path(new_path_str)
-        new_targets = load_manifest(new_path)
+        new_targets = load_manifest(new_path, machine_types)
         print(f"Processing {new_path} ({len(new_targets)} targets)", file=sys.stderr)
 
         for target in new_targets:

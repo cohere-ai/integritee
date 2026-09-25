@@ -31,14 +31,18 @@ runs:
   steps:
     - name: Install Python dependencies
       shell: bash
-      run: pip install pyyaml >/dev/null 2>&1
+      run: pip install 'pyyaml>=6,<7' 'jsonschema>=4,<5' >/dev/null 2>&1
 
     - name: Merge manifests
       id: merge
       shell: bash
+      env:
+        BASE_MANIFEST: ${{ inputs.base }}
+        NEW_MANIFESTS: ${{ inputs.new }}
       run: |
+        read -r -a NEW_FILES <<< "$NEW_MANIFESTS"
         python3 "${{ github.action_path }}/merge-manifest.py" \
-          --base "${{ inputs.base }}" \
-          --new ${{ inputs.new }} \
+          --base "$BASE_MANIFEST" \
+          --new "${NEW_FILES[@]}" \
           --output "$RUNNER_TEMP/merged-policy-manifest.yaml" \
           >> "$GITHUB_OUTPUT"

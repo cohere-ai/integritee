@@ -24,9 +24,6 @@ inputs:
     description: "Blobheart-relative directory holding per-model generated dirs"
     required: false
     default: "k8s/geofence-models/base/generated"
-  kustomization-path:
-    description: "Deprecated compatibility input; accepted but ignored"
-    required: false
   retries:
     description: "Number of retries after the initial attempt (0 = no retry)"
     required: false
@@ -50,7 +47,7 @@ runs:
 
     - name: Install Python dependencies
       shell: bash
-      run: pip install pyyaml >/dev/null 2>&1
+      run: pip install 'pyyaml>=6,<7' 'jsonschema>=4,<5' >/dev/null 2>&1
 
     - name: Verify policy coverage
       id: verify
@@ -62,7 +59,6 @@ runs:
         BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
         POLICY_MANIFEST: ${{ inputs.policy-manifest }}
         GENERATED_DIR: ${{ inputs.generated-dir }}
-        KUSTOMIZATION_PATH: ${{ inputs.kustomization-path }}
         RETRIES: ${{ inputs.retries }}
         RETRY_DELAY: ${{ inputs.retry-delay }}
         ACTION_PATH: ${{ github.action_path }}

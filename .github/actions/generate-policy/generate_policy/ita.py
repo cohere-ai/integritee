@@ -255,13 +255,13 @@ class ItaRenderer:
     def policy_files(self) -> list[Path]:
         return [self.policy_file]
 
-    def cannot_appraise(self, machine: dict) -> str | None:
-        platform = (machine["platform"], machine["tee"])
+    def cannot_appraise(self, provider: str, machine: dict) -> str | None:
+        platform = (provider, machine["tee"])
         if platform in SUPPORTED_PLATFORMS:
             return None
         return (
             "ITA appraises GCP TDX evidence, not "
-            f"{machine['platform']} {machine['tee']}"
+            f"{provider} {machine['tee']}"
         )
 
     def render(

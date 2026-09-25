@@ -1,5 +1,7 @@
+schema_version: 1
 targets:
 - model: cat2508rws-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/d5e0c5f08906a99e8ddcd8b99a08d5d347a066d231da4a51df3138a7e5c38e26022b913b064b8db51a263508c5bc7c05.toml
@@ -12,6 +14,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: cmp-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/858eb6c40ee2fb969049d0c42186cb4cf6c2009133bb48518d6afab06c06d886af00fdc6414f5f48ad3507f308cc4dd7.toml
@@ -24,6 +27,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: e4-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/4668c765911090c0332629650fd95c2a682ce6c7ea2149f1195b110b2a20a33c7e59839992d3a71d23359c1fae397115.toml
@@ -36,6 +40,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: nmc2606-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/91d4292427a565d64985f3352381d7bfaf9b5ab8307bc173131c2a67917b9909e9e8fb222bd73b49b19b3f26a4c5ed41.toml
@@ -48,6 +53,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: qw3-4b-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/17fc266b3054ff290f6256262aa07d6bddada077efa11b8e5d312cfcd2a5baf56645123888236dd2c44f75f3dcc69a8c.toml
@@ -60,6 +66,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: r4f-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/a2974a9ec348fd0f2c0f59c720761ccf82da215313f465561a6b953bacfb1cb511305bc66eee15750f2428d5236bdf8d.toml
@@ -72,6 +79,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: r4p-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/3033064f047869c876e5e77065a017c390f1dee31e8b0f934fffb4bc56782a048558158ea7be1426057e8782cd11f7ac.toml
@@ -84,6 +92,7 @@ targets:
   - 86b79968a47d3313e83f3e7f91e350cc8c111cee
   - a487be733136adbefd71984d5ecc459e936aa5d3
 - model: cat2508rws-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/3decf268037a598eb71fb02b9ad17fae087fa0281dcf22d9c3e847d8172a65a990caef8d83e8e8e2f703c3bd7161afb2.toml
@@ -95,6 +104,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: cmp-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/d2bc27402cddefad15f12ffc039f46d0bbf9a31207b72d849dc7076cd33c35dd7512e56dc7d9c7671414a2d2fb6c9f7a.toml
@@ -106,6 +116,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: e4-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/9a63908fbb8e023e674bd6f5eafcc7c91581388039e8c004951c2aacc072f7abf627da3ef189825d93792323a25490e8.toml
@@ -117,6 +128,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: nmc2606-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/5e9b62ff336d9666d84a200beea7449e3309324d915939081c814c6142bf8ade9a836be70cddbf0d73920da490290f00.toml
@@ -128,6 +140,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: qw3-4b-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/de77dbe693a1b4549de1a9d18834b8f7aae17ec33f5967636b6afbe53fd6f9fb1f77eca0d216b42a518b511653c9b3ec.toml
@@ -139,6 +152,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: r4f-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/77e5fd1f86a95a6f24973c52c3329191951c50943cf836ff7604777a7e92e744e54acb109b60546372b7fef0a6b5756b.toml
@@ -150,6 +164,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: r4p-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/b48bd3178a0595d3a16f128d838bc8e2f0fc541fcf790a2fefb957b9c13799d6fee2ccb2b7756a982c7d43ef14871f12.toml
@@ -161,6 +176,7 @@ targets:
   - 443ce9fe010f5f33fd261717effa7b4ce1d55866
   - 50fe406ccd6727f77cfd23b38860acb393a5312f
 - model: cat2508rws-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/ff8df4a34d0970e3decbe734d37be9d0d0e4cb2bbffafde24800a90c2c01f0044dc3ab8b10affee1b8da9d5d01d35f19.toml
@@ -172,6 +188,7 @@ targets:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
   - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: cmp-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/a4b68fb4c391fae8f406e46738b5d2f91580283f1ed2ead79699aee871c119aea4ae79431bb72459c985af2f3faf7fa1.toml
@@ -181,6 +198,7 @@ targets:
   - 9fa0109b50e13951ebb13006127b0c9696bab05b
   - 92284473bcec2679b10a5b1642002c152dc52ef4
 - model: e4-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/6469f1b16d4a28b3d85c77ef524c92ecfa2eee7701a88dc83c97b371af0ce2a909e7d809c870e6c34dddbdad56f91f7b.toml
@@ -192,6 +210,7 @@ targets:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
   - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: nmc2606-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/c4cf7eb903d6d1f3cb6f99fb0e13faba5a82b88ea0e820f8f9e25538b12f64f2a8c2a4e86d4dc623a5faf0ccb0ecba67.toml
@@ -203,6 +222,7 @@ targets:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
   - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: qw3-4b-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/f203bec3b8bf39021ba86b9bdda1dc5e39bbc2efb7451e079ea35259748f6a225778b7d1295070c124ed241d4afef555.toml
@@ -214,6 +234,7 @@ targets:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
   - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: r4f-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/61dd8e7357d720309c5d5ffea8049f70750cee044b0beb1751a336a54c9386b77f1bcab9981d2c5178a1777e04a96032.toml
@@ -225,6 +246,7 @@ targets:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
   - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: r4p-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/5bbcadc0068d6d4d89e7bf51894efd3d7976f0e58b6b2fc9a532671c4c33e9032007fad031949df9c70ba7f5db170064.toml
@@ -236,6 +258,7 @@ targets:
   - b765f7adc8bb6bb0a02119a0fd27c9cbd271ba1f
   - b1257acf3d8260ba655617235abfc2640fbd1d38
 - model: cmp-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   initdata_file: initdata/215ce90debb12fa18f764d74fc0e6e34da8c720b36966673dbce938b6902308ca959ddcc50f6b29ae5e60006c1dac2d0.toml

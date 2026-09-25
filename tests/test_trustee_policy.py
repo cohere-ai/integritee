@@ -399,7 +399,7 @@ def test_only_platforms_with_a_section_are_appraised(machine, appraisable):
     cannot be inferred from the platform pair.
     """
     reason = trustee.TrusteeRenderer(output_dir=Path("/nonexistent")) \
-        .cannot_appraise(machine)
+        .cannot_appraise(machine["platform"], machine)
 
     assert (reason is None) is appraisable
 

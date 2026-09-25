@@ -224,11 +224,11 @@ class TrusteeRenderer:
     def policy_files(self) -> list[Path]:
         return [self.cpu_policy_file, self.gpu_policy_file]
 
-    def cannot_appraise(self, machine: dict) -> str | None:
-        if (machine["platform"], machine["tee"]) in ATTESTERS:
+    def cannot_appraise(self, provider: str, machine: dict) -> str | None:
+        if (provider, machine["tee"]) in ATTESTERS:
             return None
         return (
-            f"no Trustee section for ({machine['platform']}, {machine['tee']})"
+            f"no Trustee section for ({provider}, {machine['tee']})"
         )
 
     def render(
@@ -244,7 +244,7 @@ class TrusteeRenderer:
 
         for resolved in targets:
             attester = ATTESTERS[
-                (resolved.machine["platform"], resolved.machine["tee"])
+                (resolved.target["provider"], resolved.machine["tee"])
             ]
             # One attester has a section today, and a target reaching here
             # already resolved to one, so anything else is a section that was
