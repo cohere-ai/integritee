@@ -37,9 +37,12 @@ PROVIDER_LABEL_KEY = "cohere.com/provider"
 KATA_MACHINE_ANNOTATION = "io.katacontainers.config.hypervisor.machine_type"
 KATA_IMAGE_ANNOTATION = "io.katacontainers.config.hypervisor.image"
 KATA_INITDATA_ANNOTATION = "io.katacontainers.config.hypervisor.cc_init_data"
+AZURE_PROVIDER = "azure"
+# Azure gallery IDs place the image definition after this segment.
+AZURE_GALLERY_IMAGES_SEGMENT = "images"
 SUPPORTED_PROVIDER_RUNTIMES = {
     "gcp": "kata-remote",
-    "azure": "kata-remote-azure",
+    AZURE_PROVIDER: "kata-remote-azure",
 }
 INITDATA_DIR = "initdata"
 
@@ -307,18 +310,56 @@ def extract_target_fields(
             f"'metadata.labels[{PROVIDER_LABEL_KEY}]' value '{provider}'"
         )
 
-    podvm_image_tag = image.rsplit("/", 1)[-1]
-    if not podvm_image_tag:
-        raise ValueError(
-            f"model '{model_id}': field "
-            f"'spec.template.metadata.annotations[{KATA_IMAGE_ANNOTATION}]' "
-            "has no final path segment"
-        )
+    podvm_image_tag = _podvm_image_tag(model_id, provider, image)
     return {
         "machine_type": machine_type,
         "podvm_image_tag": podvm_image_tag,
         "initdata": initdata,
     }
+
+
+def _podvm_image_tag(model_id: str, provider: str, image: str) -> str:
+    """Resolve the OCI tag of the PodVM artifact a cloud image was built from.
+
+    One OCI artifact is published per PodVM build, tagged with its image name,
+    and both providers boot a copy of that artifact. Their image references
+    disagree on where the name sits:
+
+      gcp:   projects/<project>/global/images/<name>
+      azure: /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Compute
+             /galleries/<gallery>/images/<definition>/versions/<version>
+
+    A GCP reference ends in the name. An Azure gallery ID ends in the immutable
+    version and carries the name mid-path as the image definition, which the
+    publisher keys on the artifact's image_name. Reading the trailing segment
+    for both resolves GCP and fails to resolve Azure, so read the definition
+    segment for Azure.
+    """
+    field = (
+        f"model '{model_id}': field "
+        f"'spec.template.metadata.annotations[{KATA_IMAGE_ANNOTATION}]'"
+    )
+    segments = [segment for segment in image.split("/") if segment]
+
+    if provider == AZURE_PROVIDER:
+        if AZURE_GALLERY_IMAGES_SEGMENT not in segments:
+            raise ValueError(
+                f"{field} is not an Azure gallery image ID: no "
+                f"'{AZURE_GALLERY_IMAGES_SEGMENT}' segment in '{image}'"
+            )
+        definition_index = (
+            len(segments) - segments[::-1].index(AZURE_GALLERY_IMAGES_SEGMENT)
+        )
+        if definition_index >= len(segments):
+            raise ValueError(
+                f"{field} has no image definition after "
+                f"'{AZURE_GALLERY_IMAGES_SEGMENT}' in '{image}'"
+            )
+        return segments[definition_index]
+
+    if not segments:
+        raise ValueError(f"{field} has no final path segment")
+    return segments[-1]
 
 
 def load_machine_types() -> dict[str, dict]:

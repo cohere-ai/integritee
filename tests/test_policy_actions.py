@@ -46,7 +46,7 @@ def rendered_cc_model(
     provider: str | None = "gcp",
     runtime_class: str | None = "kata-remote",
     machine_type: str | None = "a3-highgpu-1g",
-    image: str | None = "registry.example/podvm-gcp",
+    image: str | None = "projects/cohere-artifacts/global/images/podvm-gcp",
     initdata: str | None = "",
     confidential: bool = True,
     workload_count: int = 1,
@@ -167,7 +167,12 @@ def test_derive_provider_specific_targets_and_plain_build_commands(
             provider="azure",
             runtime_class="kata-remote-azure",
             machine_type="Standard_NCC40ads_H100_v5",
-            image="registry.example/azure/podvm-azure",
+            image=(
+                "/subscriptions/00000000-0000-0000-0000-000000000000"
+                "/resourceGroups/RG-PODVM-IMAGES/providers/Microsoft.Compute"
+                "/galleries/cohere_podvm_gallery/images/podvm-azure"
+                "/versions/2026.924.1790266523"
+            ),
         ),
     }
 
@@ -285,6 +290,42 @@ def test_derive_requires_exactly_one_confidential_statefulset(
     assert "cmp-l-cc" in error
     assert "cohere.com/confidential-compute" in error
     assert f"found {expected_count}" in error
+
+
+def test_derive_rejects_azure_image_without_gallery_definition(
+    tmp_path, monkeypatch, capsys
+):
+    """An Azure image ref must name a gallery definition, not just a tag.
+
+    The published OCI tag is the gallery image definition, which sits mid-path.
+    Accepting a bare registry path would silently derive the wrong tag and fail
+    later, during policy generation, as an unresolvable artifact pull.
+    """
+    derive = load_action(
+        "derive_manifest_azure_image_shape",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    rendered = rendered_cc_model(
+        "cmp-l-azure-cc",
+        provider="azure",
+        runtime_class="kata-remote-azure",
+        machine_type="Standard_NCC40ads_H100_v5",
+        image="registry.example/azure/podvm-azure",
+    )
+
+    with pytest.raises(SystemExit, match="1"):
+        run_local_derive(
+            derive,
+            tmp_path,
+            tmp_path / "manifest.yaml",
+            monkeypatch,
+            listed=["cmp-l-azure-cc"],
+            builds={"cmp-l-azure-cc": rendered},
+        )
+
+    error = capsys.readouterr().err
+    assert "cmp-l-azure-cc" in error
+    assert "Azure gallery image ID" in error
 
 
 def test_derive_rejects_runtime_provider_mismatch(tmp_path, monkeypatch, capsys):
