@@ -5,39 +5,25 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-CONTENT_FIELDS = (
-    "model",
-    "machine_type",
-    "podvm_image_tag",
+GENERATE_POLICY_ACTION = (
+    Path(__file__).resolve().parents[1] / "generate-policy"
 )
-REQUIRED_FIELDS = set(CONTENT_FIELDS) | {
-    "initdata_file",
-    "initdata_sha384",
-    "sources",
-}
-SHA_RE = re.compile(r"[0-9a-f]{40}")
-SHA384_RE = re.compile(r"[0-9a-f]{96}")
+sys.path.insert(0, str(GENERATE_POLICY_ACTION))
 
-# Shared with derive.py and the generator; see the header of the table itself.
-MACHINE_TYPES_PATH = (
-    Path(__file__).resolve().parents[1]
-    / "generate-policy/generate_policy/machine-types.yaml"
+from generate_policy.manifest_contract import (  # noqa: E402
+    SCHEMA_VERSION,
+    load_machine_types,
+    schema_errors,
+    schema_version,
+    target_content_hash,
+    target_provider,
 )
-
-
-def content_hash(target: dict[str, Any], initdata_sha384: str) -> str:
-    """Hash the fields that define a policy target."""
-    values = [str(target[field]) for field in CONTENT_FIELDS]
-    values.append(initdata_sha384)
-    value = "|".join(values)
-    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def resolve_initdata(target: dict[str, Any], manifest_path: Path) -> str:
@@ -46,8 +32,6 @@ def resolve_initdata(target: dict[str, Any], manifest_path: Path) -> str:
         raise ValueError("initdata_b64 is not supported")
     relative = target["initdata_file"]
     digest = target["initdata_sha384"]
-    if not isinstance(digest, str) or not SHA384_RE.fullmatch(digest):
-        raise ValueError("initdata_sha384 must be 96 lowercase hex characters")
     expected_relative = f"initdata/{digest}.toml"
     if relative != expected_relative:
         raise ValueError(f"initdata_file must be {expected_relative}")
@@ -63,64 +47,56 @@ def resolve_initdata(target: dict[str, Any], manifest_path: Path) -> str:
     return digest
 
 
-def load_machine_types() -> dict[str, dict]:
-    """Load the shared machine type table."""
-    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
-
-
 def validate_target(
-    target: Any,
+    target: dict[str, Any],
     index: int,
     manifest_path: Path,
     machine_types: dict[str, dict],
 ) -> tuple[str | None, list[str]]:
     """Validate one manifest target."""
     label = f"target {index}"
-    if not isinstance(target, dict):
-        return None, [f"{label} must be a mapping"]
-
     errors: list[str] = []
-    missing = REQUIRED_FIELDS - set(target)
-    if missing:
-        return None, [f"{label} missing fields: {sorted(missing)}"]
-
-    for field in ("model", "machine_type", "podvm_image_tag"):
-        if not isinstance(target[field], str) or not target[field]:
-            errors.append(f"{label} has invalid {field}")
-    if target["machine_type"] not in machine_types:
-        errors.append(
-            f"{label} has unknown machine type "
-            f"'{target['machine_type']}' -- update machine-types.yaml"
-        )
-
-    sources = target["sources"]
-    if not isinstance(sources, list) or not sources:
-        errors.append(f"{label} sources must be a non-empty list")
-    else:
-        for source in sources:
-            if not isinstance(source, str) or not SHA_RE.fullmatch(source):
-                errors.append(f"{label} has invalid source ref: {source}")
 
     try:
-        initdata_digest = resolve_initdata(target, manifest_path)
+        provider = target_provider(target, machine_types, SCHEMA_VERSION)
+    except ValueError as error:
+        errors.append(f"{label} {error}")
+        provider = None
+
+    try:
+        resolve_initdata(target, manifest_path)
     except ValueError as error:
         errors.append(f"{label} {error}")
         return None, errors
 
-    return content_hash(target, initdata_digest), errors
+    if provider is None:
+        return None, errors
+    normalized = {**target, "provider": provider}
+    return target_content_hash(normalized), errors
+
+
+def validate_schema(document: object) -> list[str]:
+    """Return readable JSON Schema errors for a decoded YAML document."""
+    try:
+        schema_version(document)
+    except ValueError as error:
+        return [str(error)]
+    return schema_errors(document)
 
 
 def validate_manifest(path: Path) -> list[str]:
     """Return validation errors for a policy manifest."""
-    document = yaml.safe_load(path.read_text()) or {}
-    if not isinstance(document, dict):
-        return ["policy manifest must be a mapping"]
-    targets = document.get("targets")
-    if not isinstance(targets, list) or not targets:
-        return ["policy manifest must contain a non-empty targets list"]
+    try:
+        document = yaml.safe_load(path.read_text()) or {}
+    except yaml.YAMLError as error:
+        return [f"manifest is not valid YAML: {error}"]
+
+    errors = validate_schema(document)
+    if errors:
+        return errors
+    targets = document["targets"]
 
     machine_types = load_machine_types()
-    errors: list[str] = []
     hashes: set[str] = set()
     for index, target in enumerate(targets):
         target_hash, target_errors = validate_target(

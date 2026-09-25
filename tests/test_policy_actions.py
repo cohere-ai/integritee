@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import importlib.util
 import sys
@@ -14,6 +15,10 @@ import yaml
 
 REPO_ROOT = Path(__file__).parent.parent
 TEST_SHA = "a" * 40
+AZURE_IMAGE = (
+    "/subscriptions/test/resourceGroups/test/providers/Microsoft.Compute/"
+    "galleries/test/Images/podvm-azure/Versions/2026.924.1790266523"
+)
 
 
 def load_action(name: str, relative_path: str):
@@ -39,178 +44,502 @@ def install_http_import_stubs(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "urllib3.util.retry", retry)
 
 
-def test_derive_fails_when_all_discovered_models_are_skipped(
+def rendered_cc_model(
+    name: str,
+    *,
+    provider: str | None = "gcp",
+    runtime_class: str | None = "kata-remote",
+    machine_type: str | None = "a3-highgpu-1g",
+    image: str | None = "projects/test/global/images/podvm-gcp",
+    initdata: str | None = "",
+    confidential: bool = True,
+    workload_count: int = 1,
+    workload_name: str | None = None,
+) -> str:
+    if initdata == "":
+        initdata = base64.b64encode(f"policy = '{name}'\n".encode()).decode()
+    documents: list[dict] = [{"apiVersion": "v1", "kind": "ConfigMap"}]
+    for index in range(workload_count):
+        labels = {
+            "cohere.com/confidential-compute": "true" if confidential else "false",
+            "cohere.com/gpu": "h100-80g",
+        }
+        if provider is not None:
+            labels["cohere.com/provider"] = provider
+        annotations = {}
+        if machine_type is not None:
+            annotations[
+                "io.katacontainers.config.hypervisor.machine_type"
+            ] = machine_type
+        if image is not None:
+            annotations["io.katacontainers.config.hypervisor.image"] = image
+        if initdata is not None:
+            annotations[
+                "io.katacontainers.config.hypervisor.cc_init_data"
+            ] = initdata
+        template_spec = {}
+        if runtime_class is not None:
+            template_spec["runtimeClassName"] = runtime_class
+        documents.append(
+            {
+                "apiVersion": "apps/v1",
+                "kind": "StatefulSet",
+                "metadata": {
+                    "name": workload_name or (
+                        name if workload_count == 1 else f"{name}-{index}"
+                    ),
+                    "labels": labels,
+                },
+                "spec": {
+                    "template": {
+                        "metadata": {"annotations": annotations},
+                        "spec": template_spec,
+                    }
+                },
+            }
+        )
+    return yaml.safe_dump_all(documents, sort_keys=False)
+
+
+def run_local_derive(
+    derive,
+    root: Path,
+    output: Path,
+    monkeypatch,
+    *,
+    listed: list[str] | None = None,
+    builds: dict[str, str] | None = None,
+    existing_models: list[str] | None = None,
+    generated_dir: str | None = None,
+    calls: list | None = None,
+) -> list:
+    listed = listed or []
+    builds = builds or {}
+    generated_dir = generated_dir or derive.DEFAULT_GENERATED_DIR
+    existing_models = existing_models if existing_models is not None else list(builds)
+    calls = calls if calls is not None else []
+    catalog_path = root / derive.MODEL_CATALOG
+    catalog_path.parent.mkdir(parents=True, exist_ok=True)
+    catalog_path.write_text(
+        yaml.safe_dump({"models": [{"id": model_id} for model_id in listed]})
+    )
+    for model_id in existing_models:
+        (root / generated_dir / model_id).mkdir(parents=True, exist_ok=True)
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if command[:2] == ["kustomize", "build"]:
+            stdout = builds[Path(command[2]).name]
+        else:
+            raise AssertionError(f"unexpected command: {command}")
+        return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
+    monkeypatch.setattr(derive.subprocess, "run", fake_run)
+    argv = [
+        "derive.py",
+        "--blobheart-dir",
+        str(root),
+        "--generated-dir",
+        generated_dir,
+        "--output",
+        str(output),
+    ]
+    monkeypatch.setattr(sys, "argv", argv)
+    derive.main()
+    return calls
+
+
+def test_derive_provider_specific_targets_and_plain_build_commands(
     tmp_path,
     monkeypatch,
-    capsys,
 ):
     derive = load_action(
-        "derive_manifest",
+        "derive_manifest_provider_targets",
         ".github/actions/derive-manifest/derive.py",
     )
     output = tmp_path / "manifest.yaml"
-    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
-    monkeypatch.setattr(derive, "list_dir", lambda *_args: ["cmp-l-cc"])
-    monkeypatch.setattr(
-        derive,
-        "read_file",
-        lambda _root, _ref, path: (
-            "resources: []\n"
-            if path == derive.DEFAULT_KUSTOMIZATION_PATH
-            else "kind: StatefulSet\nmetadata:\n  labels: {}\n"
+    monkeypatch.setenv("GH_TOKEN", "must-not-reach-kustomize")
+    builds = {
+        "cmp-l-cc": rendered_cc_model("cmp-l-cc"),
+        "cmp-l-azure-cc": rendered_cc_model(
+            "cmp-l-azure-cc",
+            provider="azure",
+            runtime_class="kata-remote-azure",
+            machine_type="Standard_NCC40ads_H100_v5",
+            image=AZURE_IMAGE,
         ),
+        "unlisted-l-cc": "not: valid: yaml",
+    }
+    listed = ["cmp-l-cc", "cmp-l-azure-cc"]
+
+    calls = run_local_derive(
+        derive,
+        tmp_path,
+        output,
+        monkeypatch,
+        listed=listed,
+        builds=builds,
+        generated_dir="k8s/geofence-models/custom/generated",
     )
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "derive.py",
-            "--blobheart-dir",
-            str(tmp_path),
-            "--output",
-            str(output),
-        ],
+
+    manifest = yaml.safe_load(output.read_text())
+    assert manifest["schema_version"] == 1
+    targets = manifest["targets"]
+    assert [target["model"] for target in targets] == ["cmp-l", "cmp-l-azure"]
+    assert [target["machine_type"] for target in targets] == [
+        "a3-highgpu-1g",
+        "Standard_NCC40ads_H100_v5",
+    ]
+    assert [target["podvm_image_tag"] for target in targets] == [
+        "podvm-gcp",
+        "podvm-azure",
+    ]
+    assert [target["provider"] for target in targets] == ["gcp", "azure"]
+    assert all(target["sources"] == [TEST_SHA] for target in targets)
+    expected_initdata = b"policy = 'cmp-l-cc'\n"
+    expected_digest = hashlib.sha384(expected_initdata).hexdigest()
+    assert targets[0]["initdata_sha384"] == expected_digest
+    assert targets[0]["initdata_file"] == f"initdata/{expected_digest}.toml"
+    assert (tmp_path / targets[0]["initdata_file"]).read_bytes() == expected_initdata
+    build_calls = [call for call in calls if call[0][:2] == ["kustomize", "build"]]
+    assert [Path(call[0][2]).name for call in build_calls] == listed
+    assert all("custom/generated" in call[0][2] for call in build_calls)
+    assert all(len(call[0]) == 3 for call in build_calls)
+    assert all(call[1]["cwd"] == tmp_path for call in build_calls)
+    assert all(call[1]["env"]["GIT_ALLOW_PROTOCOL"] == "" for call in build_calls)
+    assert all("GH_TOKEN" not in call[1]["env"] for call in build_calls)
+
+
+@pytest.mark.parametrize(
+    ("rendered", "expected_count"),
+    [
+        (rendered_cc_model("cmp-l-cc", confidential=False), 0),
+        (rendered_cc_model("cmp-l-cc", workload_count=2), 2),
+    ],
+)
+def test_derive_requires_exactly_one_confidential_statefulset(
+    rendered,
+    expected_count,
+):
+    derive = load_action(
+        f"derive_manifest_workload_count_{expected_count}",
+        ".github/actions/derive-manifest/derive.py",
     )
+
+    with pytest.raises(ValueError, match=f"found {expected_count}"):
+        derive.extract_target_fields(
+            "cmp-l-cc",
+            rendered,
+            derive.load_machine_types(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("model_id", "kwargs", "message"),
+    [
+        ("cmp-l-cc", {"provider": None}, "cohere.com/provider"),
+        ("cmp-l-cc", {"machine_type": None}, "hypervisor.machine_type"),
+        ("cmp-l-cc", {"image": None}, "hypervisor.image"),
+        ("cmp-l-cc", {"initdata": None}, "hypervisor.cc_init_data"),
+        ("cmp-l-cc", {"runtime_class": None}, "runtimeClassName"),
+        ("cmp-l-cc", {"provider": "aws"}, "unsupported field"),
+        (
+            "cmp-l-azure-cc",
+            {
+                "provider": "azure",
+                "runtime_class": "kata-remote",
+                "machine_type": "Standard_NCC40ads_H100_v5",
+            },
+            "kata-remote-azure",
+        ),
+        (
+            "cmp-l-azure-cc",
+            {
+                "provider": "azure",
+                "runtime_class": "kata-remote-azure",
+                "machine_type": "a3-highgpu-1g",
+            },
+            "does not match",
+        ),
+        (
+            "cmp-l-azure-cc",
+            {
+                "provider": "azure",
+                "runtime_class": "kata-remote-azure",
+                "machine_type": "unknown-machine",
+            },
+            "unknown machine_type",
+        ),
+        (
+            "cmp-l-azure-cc",
+            {
+                "provider": "azure",
+                "runtime_class": "kata-remote-azure",
+                "machine_type": "Standard_NCC40ads_H100_v5",
+                "image": "/subscriptions/test/versions/2026.924.1790266523",
+            },
+            "Azure gallery image ID",
+        ),
+        ("cmp-l-cc", {"workload_name": "other-l-cc"}, "other-l-cc"),
+    ],
+)
+def test_derive_rejects_invalid_rendered_target(model_id, kwargs, message):
+    derive = load_action(
+        f"derive_manifest_invalid_target_{message}",
+        ".github/actions/derive-manifest/derive.py",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        derive.extract_target_fields(
+            model_id,
+            rendered_cc_model(model_id, **kwargs),
+            derive.load_machine_types(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("listed", "existing_models", "message"),
+    [
+        (["missing-l-cc"], [], "missing-l-cc"),
+        (["cmp-l"], None, "no confidential models"),
+    ],
+)
+def test_derive_rejects_invalid_catalog_layout(
+    listed, existing_models, message, tmp_path, monkeypatch, capsys
+):
+    derive = load_action(
+        f"derive_manifest_invalid_layout_{listed[0]}",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    output = tmp_path / "manifest.yaml"
 
     with pytest.raises(SystemExit, match="1"):
-        derive.main()
+        run_local_derive(
+            derive,
+            tmp_path,
+            output,
+            monkeypatch,
+            listed=listed,
+            existing_models=existing_models,
+        )
 
-    assert "none produced a policy target" in capsys.readouterr().err
+    assert message in capsys.readouterr().err
     assert not output.exists()
 
 
-def test_derive_honors_custom_blobheart_paths(tmp_path, monkeypatch):
+def test_manifest_v1_validation_boundary():
+    validator = load_action(
+        "validate_manifest_current_schema",
+        ".github/actions/validate-manifest/validate_manifest.py",
+    )
+    manifest_path = REPO_ROOT / "attestation-policy/policy-manifest.yaml"
+
+    assert yaml.safe_load(manifest_path.read_text())["schema_version"] == 1
+    assert validator.validate_manifest(manifest_path) == []
+    document = yaml.safe_load(manifest_path.read_text())
+    document["targets"][0].pop("provider")
+    assert any(
+        "'provider' is a required property" in error
+        for error in validator.validate_schema(document)
+    )
+    assert any(
+        "schema_version" in error
+        for error in validator.validate_schema({"targets": []})
+    )
+    assert any(
+        "schema_version" in error
+        for error in validator.validate_schema(
+            {"schema_version": 1.0, "targets": document["targets"]}
+        )
+    )
+
+
+def test_merge_upgrades_legacy_manifest_and_hashes_provider(tmp_path):
+    merge = load_action(
+        "merge_manifest_schema_upgrade",
+        ".github/actions/merge-manifest/merge-manifest.py",
+    )
+    digest = "a" * 96
+    target = {
+        "model": "cmp-l",
+        "machine_type": "a3-highgpu-1g",
+        "podvm_image_tag": "podvm-tag",
+        "initdata_file": f"initdata/{digest}.toml",
+        "initdata_sha384": digest,
+        "sources": [TEST_SHA],
+        "ram_gib": 234,
+    }
+    legacy_path = tmp_path / "legacy.yaml"
+    legacy_path.write_text(yaml.safe_dump({"targets": [target]}))
+
+    targets = merge.load_manifest(legacy_path, merge.load_machine_types())
+    assert targets[0]["provider"] == "gcp"
+    assert "ram_gib" not in targets[0]
+    assert merge.target_hash(targets[0]) != merge.target_hash(
+        {**targets[0], "provider": "azure"}
+    )
+
+    output = tmp_path / "merged.yaml"
+    merge.write_manifest(output, targets)
+    assert yaml.safe_load(output.read_text()) == {
+        "schema_version": 1,
+        "targets": targets,
+    }
+
+
+@pytest.mark.parametrize(
+    ("document", "message"),
+    [
+        (
+            {"models": [{"id": "cmp-l-cc"}, {"id": "cmp-l-cc"}]},
+            "duplicate model ID",
+        ),
+        ({"models": [{"id": "cmp-l-cc other"}]}, "invalid model ID"),
+        ({"models": [{"id": "../cmp-l-cc"}]}, "invalid model ID"),
+        ({"models": ["cmp-l-cc"]}, "must be a mapping"),
+        ({"not-models": []}, "expected models list"),
+    ],
+)
+def test_derive_validates_model_catalog(document, message):
     derive = load_action(
-        "derive_manifest_custom_paths",
+        f"derive_manifest_list_{message.split()[0]}",
         ".github/actions/derive-manifest/derive.py",
     )
-    generated_dir = "k8s/geofence-models/base/generated"
-    kustomization_path = "k8s/geofence-models/components/platform/kustomization.yaml"
-    model_dir = tmp_path / generated_dir / "cmp-l-cc"
-    model_dir.mkdir(parents=True)
-    (model_dir / "model.yaml").write_text(
-        "apiVersion: v1\n"
-        "kind: StatefulSet\n"
-        "metadata:\n"
-        "  name: cmp-l-cc\n"
-        "  labels:\n"
-        "    cohere.com/gpu: h100-80g\n"
-    )
-    initdata = base64.b64encode(b"policy = 'custom-paths'\n").decode()
-    (model_dir / "kata-policy-patch.yaml").write_text(
-        "apiVersion: apps/v1\n"
-        "kind: StatefulSet\n"
-        "spec:\n"
-        "  template:\n"
-        "    metadata:\n"
-        "      annotations:\n"
-        "        io.katacontainers.config.hypervisor.cc_init_data: "
-        f"'{initdata}'\n"
-    )
-    component_dir = tmp_path / "k8s/geofence-models/components/platform"
-    component_dir.mkdir(parents=True)
-    (component_dir / "kustomization.yaml").write_text(
-        "patches:\n"
-        "  - target:\n"
-        "      labelSelector: cohere.com/gpu=h100-80g,cohere.com/confidential-compute=true\n"
-        "    patch: |-\n"
-        "      apiVersion: apps/v1\n"
-        "      kind: StatefulSet\n"
-        "      spec:\n"
-        "        template:\n"
-        "          metadata:\n"
-        "            annotations:\n"
-        "              io.katacontainers.config.hypervisor.machine_type: a3-highgpu-1g\n"
-        "              io.katacontainers.config.hypervisor.image: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5\n"
-    )
-    output = tmp_path / "manifest.yaml"
-    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "derive.py",
-            "--blobheart-dir",
-            str(tmp_path),
-            "--generated-dir",
-            generated_dir,
-            "--kustomization-path",
-            kustomization_path,
-            "--output",
-            str(output),
-        ],
-    )
 
-    derive.main()
-
-    targets = yaml.safe_load(output.read_text())["targets"]
-    assert [t["model"] for t in targets] == ["cmp-l"]
-    assert targets[0]["machine_type"] == "a3-highgpu-1g"
-    assert targets[0]["podvm_image_tag"] == "podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5"
-    assert targets[0]["initdata_sha384"] == hashlib.sha384(
-        b"policy = 'custom-paths'\n"
-    ).hexdigest()
+    with pytest.raises(ValueError, match=message):
+        derive.parse_model_catalog(document)
 
 
-def test_derive_preserves_empty_manifest_for_source_without_cc_models(
+def test_derive_decodes_gzip_safely():
+    derive = load_action(
+        "derive_manifest_safe_initdata",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    content = b"x" * (derive.MAX_INITDATA_BYTES + 1)
+    encoded = base64.b64encode(gzip.compress(content)).decode()
+    with pytest.raises(ValueError, match="decoded cc_init_data exceeds"):
+        derive.decode_initdata(encoded)
+
+    encoded = base64.b64encode(
+        gzip.compress(b"first") + gzip.compress(b"second")
+    ).decode()
+    assert derive.decode_initdata(encoded) == b"firstsecond"
+
+    encoded = base64.b64encode(b"\x1f\x8bnot-gzip").decode()
+    with pytest.raises(ValueError, match="invalid cc_init_data"):
+        derive.decode_initdata(encoded)
+
+
+def test_derivation_installer_pins_kustomize():
+    installer = (
+        REPO_ROOT / ".github/actions/derive-manifest/install-tools.sh"
+    ).read_text()
+    assert 'KUSTOMIZE_VERSION="5.8.1"' in installer
+    assert installer.count("sha256sum --check --status") == 1
+
+
+@pytest.mark.parametrize(
+    "generated_dir",
+    ["../generated", "/tmp/generated", "generated", "k8s/other/generated"],
+)
+def test_derive_rejects_generated_directory_outside_model_tree(generated_dir):
+    derive = load_action(
+        "derive_manifest_generated_directory_boundary",
+        ".github/actions/derive-manifest/derive.py",
+    )
+
+    with pytest.raises(ValueError, match="must be under"):
+        derive._generated_path(generated_dir)
+
+
+def test_derive_rejects_symlinked_generated_directory(tmp_path):
+    derive = load_action(
+        "derive_manifest_generated_directory_symlink",
+        ".github/actions/derive-manifest/derive.py",
+    )
+    generated = tmp_path / derive.DEFAULT_GENERATED_DIR
+    generated.parent.mkdir(parents=True)
+    generated.symlink_to(tmp_path, target_is_directory=True)
+
+    with pytest.raises(ValueError, match="must not contain symlinks"):
+        derive.derive_manifest(
+            tmp_path,
+            TEST_SHA,
+            derive.DEFAULT_GENERATED_DIR,
+            tmp_path / "manifest.yaml",
+            tmp_path / "initdata",
+        )
+
+
+def test_derive_remote_source_uses_sparse_partial_checkout_at_exact_sha(
     tmp_path,
     monkeypatch,
 ):
     derive = load_action(
-        "derive_manifest_empty",
+        "derive_manifest_remote_checkout",
         ".github/actions/derive-manifest/derive.py",
     )
-    output = tmp_path / "manifest.yaml"
-    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
-    monkeypatch.setattr(derive, "list_dir", lambda *_args: [])
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "derive.py",
-            "--blobheart-dir",
-            str(tmp_path),
-            "--output",
-            str(output),
+    destination = tmp_path / "blobheart"
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        return f"{TEST_SHA}\n" if command[-2:] == ["rev-parse", "HEAD"] else ""
+
+    monkeypatch.setattr(derive, "run_command", fake_run)
+
+    assert derive.checkout_remote_ref(TEST_SHA, destination) == destination
+    git_prefix = ["git", "-C", str(destination)]
+    assert [call[0] for call in calls] == [
+        git_prefix + ["init", "--quiet"],
+        git_prefix
+        + [
+            "remote",
+            "add",
+            "origin",
+            f"https://github.com/{derive.BLOBHEART_REPO}.git",
         ],
+        git_prefix
+        + ["sparse-checkout", "set", str(derive.BLOBHEART_MODELS_DIR)],
+        git_prefix
+        + ["fetch", "--depth=1", "--filter=blob:none", "origin", TEST_SHA],
+        git_prefix + ["checkout", "--detach", TEST_SHA],
+        git_prefix + ["rev-parse", "HEAD"],
+    ]
+    assert all(
+        "gh auth git-credential" in " ".join(call[1]["env"].values())
+        for call in calls
     )
 
-    derive.main()
 
-    assert yaml.safe_load(output.read_text()) == {"targets": []}
-
-
-def test_derive_propagates_source_read_failures(tmp_path, monkeypatch):
+def test_derive_remote_source_rejects_unexpected_checked_out_sha(
+    tmp_path,
+    monkeypatch,
+):
     derive = load_action(
-        "derive_manifest_read_failure",
+        "derive_manifest_remote_checkout_mismatch",
         ".github/actions/derive-manifest/derive.py",
     )
-    output = tmp_path / "manifest.yaml"
-    monkeypatch.setattr(derive, "resolve_local_ref", lambda _root: TEST_SHA)
-    monkeypatch.setattr(derive, "list_dir", lambda *_args: ["cmp-l-cc"])
 
-    def read_file(_root, _ref, path):
-        if path == derive.DEFAULT_KUSTOMIZATION_PATH:
-            return "resources: []\n"
-        raise RuntimeError("source API unavailable")
+    def fake_run(command, **_kwargs):
+        return f"{'b' * 40}\n" if command[-2:] == ["rev-parse", "HEAD"] else ""
 
-    monkeypatch.setattr(derive, "read_file", read_file)
-    monkeypatch.setattr(
-        sys,
-        "argv",
-        [
-            "derive.py",
-            "--blobheart-dir",
-            str(tmp_path),
-            "--output",
-            str(output),
-        ],
+    monkeypatch.setattr(derive, "run_command", fake_run)
+
+    with pytest.raises(RuntimeError, match=f"expected {TEST_SHA}"):
+        derive.checkout_remote_ref(TEST_SHA, tmp_path / "blobheart")
+
+
+def test_local_derivation_uses_checkout_commit(monkeypatch, tmp_path):
+    derive = load_action(
+        "derive_manifest_local_ref",
+        ".github/actions/derive-manifest/derive.py",
     )
+    run = Mock(returncode=0, stdout=f"{TEST_SHA}\n", stderr="")
+    monkeypatch.setattr(derive.subprocess, "run", Mock(return_value=run))
 
-    with pytest.raises(RuntimeError, match="source API unavailable"):
-        derive.main()
-
-    assert not output.exists()
+    assert derive.resolve_local_ref(tmp_path) == TEST_SHA
 
 
 def test_prune_refuses_to_write_empty_manifest(tmp_path, monkeypatch):
@@ -310,17 +639,6 @@ def test_blobheart_ref_validation_rejects_feature_commit(monkeypatch):
                 dry_run="false",
             )
         )
-
-
-def test_local_derivation_uses_checkout_commit(monkeypatch, tmp_path):
-    derive = load_action(
-        "derive_manifest_local_ref",
-        ".github/actions/derive-manifest/derive.py",
-    )
-    run = Mock(returncode=0, stdout=f"{TEST_SHA}\n", stderr="")
-    monkeypatch.setattr(derive.subprocess, "run", Mock(return_value=run))
-
-    assert derive.resolve_local_ref(tmp_path) == TEST_SHA
 
 
 def test_release_manifest_downloads_into_directory(tmp_path, monkeypatch):
@@ -550,3 +868,96 @@ def test_ita_upload_requests_have_timeouts(
 
     request = getattr(session, request_method)
     assert request.call_args.kwargs["timeout"] == 30
+
+
+@pytest.mark.parametrize(
+    ("provider", "image", "expected"),
+    [
+        ("azure", AZURE_IMAGE, "podvm-azure"),
+        ("azure", AZURE_IMAGE + "/extra", None),
+        ("gcp", "projects/p/global/images/podvm-gcp", "podvm-gcp"),
+        ("gcp", "projects/p/global/images/family/podvm-gcp", None),
+        ("gcp", "podvm-gcp", None),
+    ],
+)
+def test_derive_podvm_image_tag_requires_exact_image_path(
+    provider,
+    image,
+    expected,
+):
+    derive = load_action(
+        "derive_manifest_podvm_image_tag",
+        ".github/actions/derive-manifest/derive.py",
+    )
+
+    if expected is None:
+        with pytest.raises(ValueError, match="image"):
+            derive._podvm_image_tag("cmp-l-cc", provider, image)
+    else:
+        assert derive._podvm_image_tag("cmp-l-cc", provider, image) == expected
+
+
+def _legacy_target(**overrides) -> dict:
+    digest = "a" * 96
+    return {
+        "model": "cmp-l",
+        "machine_type": "a3-highgpu-1g",
+        "podvm_image_tag": "podvm-tag",
+        "initdata_file": f"initdata/{digest}.toml",
+        "initdata_sha384": digest,
+        "sources": [TEST_SHA],
+        **overrides,
+    }
+
+
+def test_merge_rejects_legacy_initdata_b64_before_normalizing(tmp_path, capsys):
+    merge = load_action(
+        "merge_manifest_rejects_initdata_b64",
+        ".github/actions/merge-manifest/merge-manifest.py",
+    )
+    legacy_path = tmp_path / "legacy.yaml"
+    legacy_path.write_text(
+        yaml.safe_dump({"targets": [_legacy_target(initdata_b64="dGVzdA==")]})
+    )
+
+    with pytest.raises(SystemExit):
+        merge.load_manifest(legacy_path, merge.load_machine_types())
+    assert "initdata_b64 is not supported" in capsys.readouterr().err
+
+
+def test_generate_applies_legacy_upgrade_check(tmp_path, capsys):
+    from generate_policy import generate
+
+    manifest = tmp_path / "manifest.yaml"
+    target = _legacy_target()
+    del target["sources"]
+    manifest.write_text(yaml.safe_dump({"targets": [target]}))
+
+    with pytest.raises(SystemExit):
+        generate.load_targets(manifest, generate.load_machine_types())
+    assert "legacy manifest cannot be upgraded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "new_input",
+    ["a.yaml b.yaml", "a.yaml\nb.yaml\n", "  a.yaml\n\n\tb.yaml  "],
+)
+def test_merge_action_splits_new_input_on_any_whitespace(tmp_path, new_input):
+    import subprocess
+
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github/actions/merge-manifest/action.yml").read_text()
+    )
+    script = next(
+        step["run"] for step in action["runs"]["steps"]
+        if step.get("id") == "merge"
+    )
+    split = script.split("python3", 1)[0]
+    result = subprocess.run(
+        ["bash", "-c", split + 'printf "%s\\n" "${NEW_FILES[@]}"'],
+        env={"NEW_MANIFESTS": new_input, "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["a.yaml", "b.yaml"]

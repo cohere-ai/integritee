@@ -24,9 +24,11 @@ from typing import Protocol
 import yaml
 
 from .fetch import fetch_oci_digest, fetch_uki
+from .manifest_contract import (
+    load_machine_types as load_contract_machine_types,
+    load_manifest_targets,
+)
 from .measure import resolve_initdata
-
-MACHINE_TYPES_PATH = Path(__file__).parent / "machine-types.yaml"
 
 # Where every renderer writes its Rego. The action owns this location rather
 # than taking it as an input, so a filename that carries meaning -- Trustee
@@ -50,7 +52,7 @@ def policy_output_dir() -> Path:
 
 def load_machine_types() -> dict[str, dict]:
     """Load the shared machine type table."""
-    return yaml.safe_load(MACHINE_TYPES_PATH.read_text()) or {}
+    return load_contract_machine_types()
 
 
 def resolve_machine(target: dict, machine_types: dict[str, dict]) -> dict:
@@ -220,8 +222,8 @@ class Renderer(Protocol):
         run the renderer that would overwrite it.
         """
 
-    def cannot_appraise(self, machine: dict) -> str | None:
-        """Why this renderer cannot appraise the machine, or None if it can.
+    def cannot_appraise(self, provider: str, machine: dict) -> str | None:
+        """Why this renderer cannot appraise the target, or None if it can.
 
         The reason names the service, since it reaches the log as the
         explanation for a skipped target.
@@ -292,13 +294,22 @@ def write_outputs(outputs: dict[str, str]) -> None:
             handle.write(f"{name}={value}\n")
 
 
-def load_targets(manifest_file: Path) -> list[dict]:
+def load_targets(
+    manifest_file: Path,
+    machine_types: dict[str, dict],
+) -> list[dict]:
     if not manifest_file.exists():
         print(f"ERROR: manifest file not found: {manifest_file}", file=sys.stderr)
         sys.exit(1)
 
-    doc = yaml.safe_load(manifest_file.read_text()) or {}
-    targets = doc.get("targets", [])
+    try:
+        targets = load_manifest_targets(
+            yaml.safe_load(manifest_file.read_text()) or {},
+            machine_types,
+        )
+    except (OSError, ValueError, yaml.YAMLError) as error:
+        print(f"ERROR: invalid manifest: {error}", file=sys.stderr)
+        sys.exit(1)
     if not targets:
         print("ERROR: no targets in manifest", file=sys.stderr)
         sys.exit(1)
@@ -319,8 +330,8 @@ def generate_policy(
     If predicate_file is provided and exists, it is read, updated in place
     with cvm_measure_version and per-target data, and written back.
     """
-    targets = load_targets(manifest_file)
     machine_types = load_machine_types()
+    targets = load_targets(manifest_file, machine_types)
     artifacts_dir.mkdir(parents=True, exist_ok=True)
     context = GenerationContext(
         manifest_file=manifest_file,
@@ -343,7 +354,9 @@ def generate_policy(
     for renderer in renderers:
         selected: list[ResolvedTarget] = []
         for candidate in resolved:
-            reason = renderer.cannot_appraise(candidate.machine)
+            reason = renderer.cannot_appraise(
+                candidate.target["provider"], candidate.machine
+            )
             if reason:
                 print(f"::notice::Skipping {candidate.target['model']}: {reason}")
                 continue

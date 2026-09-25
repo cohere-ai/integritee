@@ -23,11 +23,7 @@ inputs:
   generated-dir:
     description: "Blobheart-relative directory holding per-model generated dirs"
     required: false
-    default: "k8s/geofence/components/models_v2/generated"
-  kustomization-path:
-    description: "Blobheart-relative path to the platform patch kustomization"
-    required: false
-    default: "k8s/geofence/components/models_v2/base/kustomization.yaml"
+    default: "k8s/geofence-models/base/generated"
   retries:
     description: "Number of retries after the initial attempt (0 = no retry)"
     required: false
@@ -45,9 +41,13 @@ outputs:
 runs:
   using: "composite"
   steps:
+    - name: Install policy derivation tools
+      shell: bash
+      run: bash "${{ github.action_path }}/../derive-manifest/install-tools.sh"
+
     - name: Install Python dependencies
       shell: bash
-      run: pip install pyyaml >/dev/null 2>&1
+      run: pip install 'pyyaml>=6,<7' 'jsonschema>=4,<5' >/dev/null 2>&1
 
     - name: Verify policy coverage
       id: verify
@@ -59,7 +59,6 @@ runs:
         BLOBHEART_DIR: ${{ inputs.blobheart-dir }}
         POLICY_MANIFEST: ${{ inputs.policy-manifest }}
         GENERATED_DIR: ${{ inputs.generated-dir }}
-        KUSTOMIZATION_PATH: ${{ inputs.kustomization-path }}
         RETRIES: ${{ inputs.retries }}
         RETRY_DELAY: ${{ inputs.retry-delay }}
         ACTION_PATH: ${{ github.action_path }}

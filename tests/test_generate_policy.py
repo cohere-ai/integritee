@@ -27,6 +27,7 @@ MACHINE_TYPE_FIELDS = {"platform", "tee", "ram_gib"}
 from generate_policy import fetch  # noqa: E402
 from generate_policy import generate  # noqa: E402
 from generate_policy import ita  # noqa: E402
+from generate_policy import manifest_contract  # noqa: E402
 from generate_policy import measure  # noqa: E402
 
 TEMPLATE = ita.TEMPLATE
@@ -58,6 +59,36 @@ def test_every_machine_type_declares_the_expected_fields():
         f"machine-types.yaml entries disagree with the expected schema "
         f"{sorted(MACHINE_TYPE_FIELDS)}: {mismatched}"
     )
+
+
+def test_manifest_contract_v0_v1_boundary():
+    assert manifest_contract.SCHEMA_VERSION == 1
+    for version in (None, 2):
+        with pytest.raises(ValueError, match="unsupported manifest schema_version"):
+            manifest_contract.schema_version(
+                {"schema_version": version, "targets": []}
+            )
+    with pytest.raises(ValueError, match="'sources' is a required property"):
+        manifest_contract.manifest_targets(
+            {"schema_version": 1, "targets": [{"model": "cmp-l"}]}
+        )
+
+    machine_types = manifest_contract.load_machine_types()
+    legacy_target = {"machine_type": "a3-highgpu-1g"}
+
+    assert manifest_contract.target_provider(
+        legacy_target, machine_types, 0
+    ) == "gcp"
+    with pytest.raises(ValueError, match="provider is required"):
+        manifest_contract.target_provider(
+            legacy_target, machine_types, manifest_contract.SCHEMA_VERSION
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        manifest_contract.target_provider(
+            {**legacy_target, "provider": "azure"},
+            machine_types,
+            manifest_contract.SCHEMA_VERSION,
+        )
 
 
 def test_policy_template_uses_nras_v3_gpu_claims():
@@ -783,16 +814,19 @@ def test_generate_policy_measures_and_records_each_baseline(
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
+        f"    sources: [{'b' * 40}]\n"
         "  - model: cmp-l-old\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{second_sha384}.toml\n"
         f"    initdata_sha384: {second_sha384}\n"
+        f"    sources: [{'b' * 40}]\n"
         "  - model: cmp-l-snp\n"
         f"    machine_type: {_unsupported_machine_type()}\n"
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
+        f"    sources: [{'b' * 40}]\n"
     )
     predicate = tmp_path / "predicate.json"
     predicate.write_text("{}")
@@ -852,12 +886,14 @@ class _StubRenderer:
         self.tee = tee
         self.output_dir = output_dir
         self.seen: list[str] = []
+        self.considered_providers: list[str] = []
 
     @property
     def policy_files(self) -> list[Path]:
         return [self.output_dir / f"{self.name}.rego"]
 
-    def cannot_appraise(self, machine: dict) -> str | None:
+    def cannot_appraise(self, provider: str, machine: dict) -> str | None:
+        self.considered_providers.append(provider)
         if self.tee is None or machine["tee"] == self.tee:
             return None
         return f"{self.name} appraises {self.tee}, not {machine['tee']}"
@@ -884,13 +920,26 @@ def test_each_renderer_sees_only_what_it_appraises(
     one accumulates into a single predicate entry rather than appearing once
     per renderer, and every path and count reaches the workflow.
     """
+    digest = "a" * 96
+    source = "b" * 40
     manifest = tmp_path / "manifest.yaml"
     manifest.write_text(
+        "schema_version: 1\n"
         "targets:\n"
         "  - model: cmp-l\n"
+        "    provider: gcp\n"
         "    machine_type: a3-highgpu-1g\n"
+        "    podvm_image_tag: test\n"
+        f"    initdata_file: initdata/{digest}.toml\n"
+        f"    initdata_sha384: {digest}\n"
+        f"    sources: [{source}]\n"
         "  - model: cmp-l-snp\n"
+        "    provider: azure\n"
         f"    machine_type: {_unsupported_machine_type()}\n"
+        "    podvm_image_tag: test\n"
+        f"    initdata_file: initdata/{digest}.toml\n"
+        f"    initdata_sha384: {digest}\n"
+        f"    sources: [{source}]\n"
     )
     predicate = tmp_path / "predicate.json"
     github_output = tmp_path / "github-output"
@@ -908,6 +957,8 @@ def test_each_renderer_sees_only_what_it_appraises(
 
     assert tdx.seen == ["cmp-l"]
     assert every.seen == ["cmp-l", "cmp-l-snp"]
+    assert tdx.considered_providers == ["gcp", "azure"]
+    assert every.considered_providers == ["gcp", "azure"]
     written = json.loads(predicate.read_text())
     # Manifest order, and one entry per target rather than per renderer.
     assert written["targets"] == [
@@ -935,10 +986,15 @@ def test_a_run_covering_nothing_fails(tmp_path, capsys):
     produced could admit a node.
     """
     manifest = tmp_path / "manifest.yaml"
+    digest = "a" * 96
     manifest.write_text(
         "targets:\n"
         "  - model: cmp-l-snp\n"
         f"    machine_type: {_unsupported_machine_type()}\n"
+        "    podvm_image_tag: test\n"
+        f"    initdata_file: initdata/{digest}.toml\n"
+        f"    initdata_sha384: {digest}\n"
+        f"    sources: [{'b' * 40}]\n"
     )
 
     with pytest.raises(SystemExit) as failure:

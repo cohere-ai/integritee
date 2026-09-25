@@ -1,5 +1,7 @@
+schema_version: 1
 targets:
 - model: cmp-l
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   added: '2026-06-24'
@@ -8,6 +10,7 @@ targets:
   initdata_file: initdata/5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13.toml
   initdata_sha384: 5af6ec69a7d2660e263b22c2370ebcb6ce5086af2bbc1fa81a6357f3748f6288ed1ecfad08dabd557c18a701373d4c13
 - model: cmp-l
+  provider: azure
   machine_type: Standard_NCC40ads_H100_v5
   podvm_image_tag: podvm-ubuntu-tdx-nvidia-release-v0-2-0-cohere-5
   added: '2026-08-26'

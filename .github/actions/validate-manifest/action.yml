@@ -11,7 +11,7 @@ runs:
   steps:
     - name: Install Python dependencies
       shell: bash
-      run: pip install pyyaml >/dev/null 2>&1
+      run: pip install 'pyyaml>=6,<7' 'jsonschema>=4,<5' >/dev/null 2>&1
 
     - name: Validate manifest
       shell: bash

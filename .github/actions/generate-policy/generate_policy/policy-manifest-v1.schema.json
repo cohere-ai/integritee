@@ -1,0 +1,72 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Integritee policy manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "targets"],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "targets": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/target"
+      }
+    }
+  },
+  "$defs": {
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model",
+        "provider",
+        "machine_type",
+        "podvm_image_tag",
+        "initdata_file",
+        "initdata_sha384",
+        "sources"
+      ],
+      "properties": {
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provider": {
+          "enum": ["gcp", "azure"]
+        },
+        "machine_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "podvm_image_tag": {
+          "type": "string",
+          "minLength": 1
+        },
+        "initdata_file": {
+          "type": "string",
+          "pattern": "^initdata/[0-9a-f]{96}\\.toml$"
+        },
+        "initdata_sha384": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{96}$"
+        },
+        "added": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
+      }
+    }
+  }
+}

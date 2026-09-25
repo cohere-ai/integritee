@@ -299,30 +299,50 @@ jobs:
           owner: cohere-ai
           repositories: blobheart
 
+      - name: Derive complete policy manifest
+        id: policy-manifest
+        uses: ./.github/actions/derive-manifest
+        with:
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815"
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Prepare complete and incomplete policies
+        env:
+          DERIVED_MANIFEST: ${{ steps.policy-manifest.outputs.manifest-files }}
+        run: |
+          cp "$DERIVED_MANIFEST" "$RUNNER_TEMP/test-policy-manifest.yaml"
+          python3 - <<'PY'
+          import os, yaml
+          path = os.path.join(os.environ["RUNNER_TEMP"], "test-policy-manifest.yaml")
+          manifest = yaml.safe_load(open(path))
+          manifest["targets"] = manifest["targets"][:1]
+          with open(os.path.join(os.environ["RUNNER_TEMP"], "incomplete-manifest.yaml"), "w") as output:
+              yaml.safe_dump(manifest, output, sort_keys=False)
+          PY
+
       - name: Verify known ref against policy (should pass)
         id: verify
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815"
           blobheart-token: ${{ steps.app-token.outputs.token }}
-          policy-manifest: .github/workflows/test-actions/derive-manifest/expected-manifest.yaml
+          policy-manifest: ${{ runner.temp }}/test-policy-manifest.yaml
 
-      - name: Assert release tag is set
+      - name: Assert local policy result
         run: |
-          if [ -z "${{ steps.verify.outputs.release-tag }}" ]; then
-            echo "ERROR: release-tag output is empty"
+          if [ "${{ steps.verify.outputs.release-tag }}" != "local" ]; then
+            echo "ERROR: expected local policy result"
             exit 1
           fi
-          echo "Verified against release: ${{ steps.verify.outputs.release-tag }}"
 
       - name: Verify uncovered ref against policy (should fail)
         id: verify-fail
         continue-on-error: true
         uses: ./.github/actions/verify-against-policy
         with:
-          blobheart-refs: "8abd02c84e4764cb0e721a810588054f37bb6ca4"
+          blobheart-refs: "ab441934a02e2b3660a3eca91235af9f5d3e5815"
           blobheart-token: ${{ steps.app-token.outputs.token }}
-          integritee-token: ${{ github.token }}
+          policy-manifest: ${{ runner.temp }}/incomplete-manifest.yaml
 
       - name: Assert verification failed
         run: |
@@ -407,49 +427,43 @@ jobs:
           owner: cohere-ai
           repositories: blobheart
 
-      - name: Derive manifest (single ref)
-        id: derive-single
+      - name: Derive manifests (multiple refs)
+        id: derive-remote
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58"
+          blobheart-refs: >-
+            ab441934a02e2b3660a3eca91235af9f5d3e5815
+            5cf2f005f4ed60a3d35dd49f3681baa6ba9285dc
           github-token: ${{ steps.app-token.outputs.token }}
 
-      - name: Verify single-ref manifest
+      - name: Verify remote manifests
+        env:
+          MANIFEST_FILES: ${{ steps.derive-remote.outputs.manifest-files }}
         run: |
-          grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-single.outputs.manifest-files }} > /tmp/actual-content.yaml
-          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
-
-      - name: Derive manifest (multiple refs, same ref twice)
-        id: derive-multi
-        uses: ./.github/actions/derive-manifest
-        with:
-          blobheart-refs: "47ded742780246155c119caa1b3f90fd8b598c58 47ded742780246155c119caa1b3f90fd8b598c58"
-          github-token: ${{ steps.app-token.outputs.token }}
-
-      - name: Verify multi-ref produces two manifest files
-        run: |
-          FILE_COUNT=$(echo "${{ steps.derive-multi.outputs.manifest-files }}" | wc -w)
-          if [ "$FILE_COUNT" -ne 2 ]; then
-            echo "ERROR: expected 2 manifest files, got $FILE_COUNT"
+          read -r FIRST_MANIFEST SECOND_MANIFEST EXTRA <<< "$MANIFEST_FILES"
+          if [ -z "$SECOND_MANIFEST" ] || [ -n "$EXTRA" ] || [ "$FIRST_MANIFEST" = "$SECOND_MANIFEST" ]; then
+            echo "ERROR: expected two distinct manifest files"
             exit 1
           fi
-          for f in ${{ steps.derive-multi.outputs.manifest-files }}; do
-            grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' "$f" > /tmp/actual-content.yaml
-            diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
-          done
+          grep -v -E '^\s*(schema_version:|added:|sources:|- [a-f0-9]+$|- local$)' "$FIRST_MANIFEST" > /tmp/actual-content.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-targets.yaml /tmp/actual-content.yaml
 
       - name: Clone blobheart at pinned ref
-        run: |
-          git clone --depth 1 https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/cohere-ai/blobheart.git /tmp/blobheart
-          cd /tmp/blobheart && git fetch --depth 1 origin 47ded742780246155c119caa1b3f90fd8b598c58 && git checkout FETCH_HEAD
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          repository: cohere-ai/blobheart
+          ref: ab441934a02e2b3660a3eca91235af9f5d3e5815
+          token: ${{ steps.app-token.outputs.token }}
+          path: blobheart
+          persist-credentials: false
 
       - name: Derive manifest (local dir)
         id: derive-local
         uses: ./.github/actions/derive-manifest
         with:
-          blobheart-dir: /tmp/blobheart
+          blobheart-dir: ${{ github.workspace }}/blobheart
 
       - name: Verify local-dir manifest (ignoring dynamic fields)
         run: |
-          grep -v -E '^\s*(added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-content.yaml
-          diff .github/workflows/test-actions/derive-manifest/expected-manifest.yaml /tmp/actual-content.yaml
+          grep -v -E '^\s*(schema_version:|added:|sources:|- [a-f0-9]+$|- local$)' ${{ steps.derive-local.outputs.manifest-files }} > /tmp/actual-content.yaml
+          diff .github/workflows/test-actions/derive-manifest/expected-targets.yaml /tmp/actual-content.yaml

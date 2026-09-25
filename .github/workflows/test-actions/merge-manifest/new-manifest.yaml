@@ -1,5 +1,7 @@
+schema_version: 1
 targets:
 - model: new-model
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-v1
   initdata_file: initdata/fb03a7b8323c67bbc0725152bd483d1792df2ad232358bc2e2f21bd7a59be557c11eb03e7b71f71307a71e04a1ba03b3.toml
@@ -8,6 +10,7 @@ targets:
   sources:
     - 112233aa112233aa112233aa112233aa112233aa
 - model: existing-model
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-v1
   initdata_file: initdata/a433c422fd62176bc0f430550d959c57e1bfa10214084f3752895452231a4044a4c25158ea6274b9bf7b8ab81fb8ceec.toml

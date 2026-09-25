@@ -6,7 +6,7 @@ inputs:
     description: "Path to the base manifest file"
     required: true
   new:
-    description: "Space-separated paths to new manifest file(s)"
+    description: "Whitespace-separated (spaces or newlines) paths to new manifest file(s)"
     required: true
 
 outputs:
@@ -31,14 +31,25 @@ runs:
   steps:
     - name: Install Python dependencies
       shell: bash
-      run: pip install pyyaml >/dev/null 2>&1
+      run: pip install 'pyyaml>=6,<7' 'jsonschema>=4,<5' >/dev/null 2>&1
 
     - name: Merge manifests
       id: merge
       shell: bash
+      env:
+        BASE_MANIFEST: ${{ inputs.base }}
+        NEW_MANIFESTS: ${{ inputs.new }}
       run: |
+        # Split on any whitespace, including newlines from a `new: |` block.
+        # Plain `read -a` stops at the first newline and drops later
+        # manifests; `-d ''` reads to EOF (and returns 1 there, hence `|| true`).
+        read -r -d '' -a NEW_FILES <<< "$NEW_MANIFESTS" || true
+        if [[ ${#NEW_FILES[@]} -eq 0 ]]; then
+          echo "ERROR: no new manifests provided" >&2
+          exit 1
+        fi
         python3 "${{ github.action_path }}/merge-manifest.py" \
-          --base "${{ inputs.base }}" \
-          --new ${{ inputs.new }} \
+          --base "$BASE_MANIFEST" \
+          --new "${NEW_FILES[@]}" \
           --output "$RUNNER_TEMP/merged-policy-manifest.yaml" \
           >> "$GITHUB_OUTPUT"

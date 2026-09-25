@@ -1,5 +1,7 @@
+schema_version: 1
 targets:
 - model: existing-model
+  provider: gcp
   machine_type: a3-highgpu-1g
   podvm_image_tag: podvm-v1
   initdata_file: initdata/a433c422fd62176bc0f430550d959c57e1bfa10214084f3752895452231a4044a4c25158ea6274b9bf7b8ab81fb8ceec.toml

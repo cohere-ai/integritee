@@ -8,7 +8,7 @@ RUN apt-get update && \
     curl -fSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
       | tar -xz --strip-components=1 -C /usr/local gh_${GH_VERSION}_linux_amd64/bin/gh
 
-RUN pip install --no-cache-dir pyyaml
+RUN pip install --no-cache-dir 'pyyaml>=6,<7' 'jsonschema>=4,<5'
 
 ARG CVM_MEASURE_REPO=https://github.com/cohere-ai/cvm-measure.git
 ARG CVM_MEASURE_REF=4f1303e281986dee98e7e098db594779f040a190

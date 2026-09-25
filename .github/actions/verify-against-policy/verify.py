@@ -56,15 +56,12 @@ def derive_manifests(derive_script: Path, runner_temp: Path,
                      token: str) -> list[str]:
     """Call derive.py for each ref or a local dir, returning manifest file paths.
 
-    Optional GENERATED_DIR / KUSTOMIZATION_PATH environment variables are
-    forwarded to derive.py to point at non-default blobheart layouts.
+    An optional GENERATED_DIR selects a non-default Blobheart layout.
     """
     env = {**os.environ, "GH_TOKEN": token}
     path_args: list[str] = []
     if os.environ.get("GENERATED_DIR"):
         path_args += ["--generated-dir", os.environ["GENERATED_DIR"]]
-    if os.environ.get("KUSTOMIZATION_PATH"):
-        path_args += ["--kustomization-path", os.environ["KUSTOMIZATION_PATH"]]
     manifest_files = []
 
     if blobheart_dir:
@@ -151,6 +148,13 @@ def main() -> None:
     retries = int(os.environ.get("RETRIES", "0"))
     retry_delay = int(os.environ.get("RETRY_DELAY", "30"))
     runner_temp = Path(os.environ.get("RUNNER_TEMP", "/tmp"))
+
+    if bool(blobheart_refs) == bool(blobheart_dir):
+        print(
+            "ERROR: exactly one of BLOBHEART_REFS or BLOBHEART_DIR must be set",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     action_path = Path(os.environ.get("ACTION_PATH", str(Path(__file__).parent)))
     derive_script = action_path / ".." / "derive-manifest" / "derive.py"

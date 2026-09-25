@@ -7,6 +7,15 @@
 #
 # platform  Where the guest runs. Selects which firmware and attestation
 #           evidence shape to expect.
+#
+#           Manifest schema v1 also records `provider` on every target, and
+#           manifest_contract.target_provider() requires it to equal this
+#           field. Today that makes it derivable, and that is deliberate:
+#           each target states where it runs without a lookup here, and the
+#           manifest format already fits a machine type offered by more than
+#           one provider. Supporting that means making `platform` a list and
+#           relaxing the equality check to membership; the manifest does not
+#           change.
 # tee       Confidential computing technology. Decides which policy a target
 #           can appear in, since each attestation service appraises one
 #           evidence shape per section.
