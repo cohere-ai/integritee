@@ -41,6 +41,10 @@ BLOBHEART_REPO = "cohere-ai/blobheart"
 BLOBHEART_MODELS_DIR = Path("k8s/geofence-models")
 MODEL_CATALOG = BLOBHEART_MODELS_DIR / "base/models.yaml"
 DEFAULT_GENERATED_DIR = "k8s/geofence-models/base/generated"
+# Naming contract: a catalog model is confidential if and only if its ID ends
+# in CC_SUFFIX. Models without the suffix are never rendered, so a confidential
+# workload under a non-suffixed ID gets no policy target and fails closed at
+# attestation rather than here.
 CC_SUFFIX = "-cc"
 MAX_INITDATA_BYTES = 4 * 1024 * 1024
 INITDATA_DIR = "initdata"
@@ -118,26 +122,24 @@ def git_auth_environment() -> dict[str, str]:
 
 def checkout_remote_ref(ref: str, destination: Path) -> Path:
     """Sparse-check out Blobheart's model tree at exactly ref."""
-    run_command(
-        [
-            "gh",
-            "repo",
-            "clone",
-            BLOBHEART_REPO,
-            str(destination),
-            "--",
-            "--filter=blob:none",
-            "--no-checkout",
-        ]
-    )
+    # Fetch only the requested commit's trees; a `clone` would first pull
+    # every commit and tree in Blobheart's history before the shallow fetch.
+    destination.mkdir(parents=True, exist_ok=True)
     git_prefix = ["git", "-C", str(destination)]
     git_env = git_auth_environment()
+    run_command(git_prefix + ["init", "--quiet"], env=git_env)
+    run_command(
+        git_prefix
+        + ["remote", "add", "origin", f"https://github.com/{BLOBHEART_REPO}.git"],
+        env=git_env,
+    )
     run_command(
         git_prefix + ["sparse-checkout", "set", str(BLOBHEART_MODELS_DIR)],
         env=git_env,
     )
     run_command(
-        git_prefix + ["fetch", "--depth=1", "origin", ref],
+        git_prefix
+        + ["fetch", "--depth=1", "--filter=blob:none", "origin", ref],
         env=git_env,
     )
     run_command(git_prefix + ["checkout", "--detach", ref], env=git_env)
@@ -283,9 +285,10 @@ def _podvm_image_tag(model_id: str, provider: str, image: str) -> str:
             if segment == "images"
         ]
         index = image_segments[-1] if image_segments else -1
+        # .../images/<definition>/versions/<version> with nothing after it.
         if (
             index < 0
-            or index + 3 >= len(segments)
+            or index + 4 != len(segments)
             or normalized_segments[index + 2] != "versions"
         ):
             raise ValueError(
@@ -294,11 +297,12 @@ def _podvm_image_tag(model_id: str, provider: str, image: str) -> str:
                 f"is not an Azure gallery image ID: '{image}'"
             )
         return segments[index + 1]
-    if not segments:
+    # .../images/<name>; rejects e.g. .../images/family/<family>.
+    if len(segments) < 2 or segments[-2] != "images":
         raise ValueError(
             f"model '{model_id}': field "
             f"'{'.'.join(RENDERED_PATHS['podvm_image'])}' "
-            "has no final path segment"
+            f"is not a GCP image path ending in images/<name>: '{image}'"
         )
     return segments[-1]
 

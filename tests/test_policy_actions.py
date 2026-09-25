@@ -50,7 +50,7 @@ def rendered_cc_model(
     provider: str | None = "gcp",
     runtime_class: str | None = "kata-remote",
     machine_type: str | None = "a3-highgpu-1g",
-    image: str | None = "registry.example/podvm-gcp",
+    image: str | None = "projects/test/global/images/podvm-gcp",
     initdata: str | None = "",
     confidential: bool = True,
     workload_count: int = 1,
@@ -490,27 +490,26 @@ def test_derive_remote_source_uses_sparse_partial_checkout_at_exact_sha(
     monkeypatch.setattr(derive, "run_command", fake_run)
 
     assert derive.checkout_remote_ref(TEST_SHA, destination) == destination
-    assert calls[0][0] == [
-        "gh",
-        "repo",
-        "clone",
-        derive.BLOBHEART_REPO,
-        str(destination),
-        "--",
-        "--filter=blob:none",
-        "--no-checkout",
-    ]
     git_prefix = ["git", "-C", str(destination)]
-    assert [call[0] for call in calls[1:]] == [
+    assert [call[0] for call in calls] == [
+        git_prefix + ["init", "--quiet"],
+        git_prefix
+        + [
+            "remote",
+            "add",
+            "origin",
+            f"https://github.com/{derive.BLOBHEART_REPO}.git",
+        ],
         git_prefix
         + ["sparse-checkout", "set", str(derive.BLOBHEART_MODELS_DIR)],
-        git_prefix + ["fetch", "--depth=1", "origin", TEST_SHA],
+        git_prefix
+        + ["fetch", "--depth=1", "--filter=blob:none", "origin", TEST_SHA],
         git_prefix + ["checkout", "--detach", TEST_SHA],
         git_prefix + ["rev-parse", "HEAD"],
     ]
     assert all(
         "gh auth git-credential" in " ".join(call[1]["env"].values())
-        for call in calls[1:]
+        for call in calls
     )
 
 
@@ -869,3 +868,96 @@ def test_ita_upload_requests_have_timeouts(
 
     request = getattr(session, request_method)
     assert request.call_args.kwargs["timeout"] == 30
+
+
+@pytest.mark.parametrize(
+    ("provider", "image", "expected"),
+    [
+        ("azure", AZURE_IMAGE, "podvm-azure"),
+        ("azure", AZURE_IMAGE + "/extra", None),
+        ("gcp", "projects/p/global/images/podvm-gcp", "podvm-gcp"),
+        ("gcp", "projects/p/global/images/family/podvm-gcp", None),
+        ("gcp", "podvm-gcp", None),
+    ],
+)
+def test_derive_podvm_image_tag_requires_exact_image_path(
+    provider,
+    image,
+    expected,
+):
+    derive = load_action(
+        "derive_manifest_podvm_image_tag",
+        ".github/actions/derive-manifest/derive.py",
+    )
+
+    if expected is None:
+        with pytest.raises(ValueError, match="image"):
+            derive._podvm_image_tag("cmp-l-cc", provider, image)
+    else:
+        assert derive._podvm_image_tag("cmp-l-cc", provider, image) == expected
+
+
+def _legacy_target(**overrides) -> dict:
+    digest = "a" * 96
+    return {
+        "model": "cmp-l",
+        "machine_type": "a3-highgpu-1g",
+        "podvm_image_tag": "podvm-tag",
+        "initdata_file": f"initdata/{digest}.toml",
+        "initdata_sha384": digest,
+        "sources": [TEST_SHA],
+        **overrides,
+    }
+
+
+def test_merge_rejects_legacy_initdata_b64_before_normalizing(tmp_path, capsys):
+    merge = load_action(
+        "merge_manifest_rejects_initdata_b64",
+        ".github/actions/merge-manifest/merge-manifest.py",
+    )
+    legacy_path = tmp_path / "legacy.yaml"
+    legacy_path.write_text(
+        yaml.safe_dump({"targets": [_legacy_target(initdata_b64="dGVzdA==")]})
+    )
+
+    with pytest.raises(SystemExit):
+        merge.load_manifest(legacy_path, merge.load_machine_types())
+    assert "initdata_b64 is not supported" in capsys.readouterr().err
+
+
+def test_generate_applies_legacy_upgrade_check(tmp_path, capsys):
+    from generate_policy import generate
+
+    manifest = tmp_path / "manifest.yaml"
+    target = _legacy_target()
+    del target["sources"]
+    manifest.write_text(yaml.safe_dump({"targets": [target]}))
+
+    with pytest.raises(SystemExit):
+        generate.load_targets(manifest, generate.load_machine_types())
+    assert "legacy manifest cannot be upgraded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "new_input",
+    ["a.yaml b.yaml", "a.yaml\nb.yaml\n", "  a.yaml\n\n\tb.yaml  "],
+)
+def test_merge_action_splits_new_input_on_any_whitespace(tmp_path, new_input):
+    import subprocess
+
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github/actions/merge-manifest/action.yml").read_text()
+    )
+    script = next(
+        step["run"] for step in action["runs"]["steps"]
+        if step.get("id") == "merge"
+    )
+    split = script.split("python3", 1)[0]
+    result = subprocess.run(
+        ["bash", "-c", split + 'printf "%s\\n" "${NEW_FILES[@]}"'],
+        env={"NEW_MANIFESTS": new_input, "PATH": "/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["a.yaml", "b.yaml"]

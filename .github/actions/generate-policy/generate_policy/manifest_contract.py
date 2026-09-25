@@ -120,3 +120,42 @@ def target_provider(
             f"{machine_type!r} platform {machine['platform']!r}"
         )
     return provider
+
+
+def load_manifest_targets(
+    document: object,
+    machine_types: dict[str, dict],
+) -> list[dict]:
+    """Return a manifest's targets upgraded to, and validated as, schema v1.
+
+    Every manifest reader goes through here so a legacy (v0) manifest is held
+    to the same contract as a current one. Legacy-only fields are dropped by
+    the upgrade, so fields that must be rejected rather than dropped are
+    checked before normalizing.
+    """
+    version, targets = manifest_targets(document)
+    upgraded: list[dict] = []
+    for index, target in enumerate(targets):
+        if "initdata_b64" in target:
+            raise ValueError(
+                f"targets[{index}]: initdata_b64 is not supported"
+            )
+        try:
+            provider = target_provider(target, machine_types, version)
+        except ValueError as error:
+            raise ValueError(f"targets[{index}]: {error}") from error
+        with_provider = {**target, "provider": provider}
+        upgraded.append({
+            field: with_provider[field]
+            for field in MANIFEST_TARGET_FIELDS
+            if field in with_provider
+        })
+    if version != SCHEMA_VERSION:
+        errors = schema_errors(
+            {"schema_version": SCHEMA_VERSION, "targets": upgraded}
+        )
+        if errors:
+            raise ValueError(
+                "legacy manifest cannot be upgraded: " + "; ".join(errors)
+            )
+    return upgraded

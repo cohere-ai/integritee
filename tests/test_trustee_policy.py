@@ -447,6 +447,7 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{digest}.toml\n"
         f"    initdata_sha384: {digest}\n"
+        f"    sources: [{'b' * 40}]\n"
         for model, machine_type, digest in [
             ("cat2508rws-l", "Standard_NCC40ads_H100_v5", digests[0]),
             ("cmp-l", "Standard_NCC40ads_H100_v5", digests[1]),

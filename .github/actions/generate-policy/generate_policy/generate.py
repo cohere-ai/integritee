@@ -26,8 +26,7 @@ import yaml
 from .fetch import fetch_oci_digest, fetch_uki
 from .manifest_contract import (
     load_machine_types as load_contract_machine_types,
-    manifest_targets,
-    target_provider,
+    load_manifest_targets,
 )
 from .measure import resolve_initdata
 
@@ -304,16 +303,10 @@ def load_targets(
         sys.exit(1)
 
     try:
-        version, targets = manifest_targets(
-            yaml.safe_load(manifest_file.read_text()) or {}
+        targets = load_manifest_targets(
+            yaml.safe_load(manifest_file.read_text()) or {},
+            machine_types,
         )
-        targets = [
-            {
-                **target,
-                "provider": target_provider(target, machine_types, version),
-            }
-            for target in targets
-        ]
     except (OSError, ValueError, yaml.YAMLError) as error:
         print(f"ERROR: invalid manifest: {error}", file=sys.stderr)
         sys.exit(1)

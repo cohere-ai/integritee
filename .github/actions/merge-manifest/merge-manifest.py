@@ -24,13 +24,10 @@ GENERATE_POLICY_ACTION = (
 sys.path.insert(0, str(GENERATE_POLICY_ACTION))
 
 from generate_policy.manifest_contract import (  # noqa: E402
-    MANIFEST_TARGET_FIELDS,
     SCHEMA_VERSION,
     load_machine_types,
-    manifest_targets,
-    schema_errors,
+    load_manifest_targets,
     target_content_hash,
-    target_provider,
 )
 
 
@@ -60,27 +57,7 @@ def target_hash(target: dict) -> str:
 def load_manifest(path: Path, machine_types: dict[str, dict]) -> list[dict]:
     try:
         doc = yaml.safe_load(path.read_text()) or {}
-        version, targets = manifest_targets(doc)
-        normalized = []
-        for target in targets:
-            upgraded = {
-                **target,
-                "provider": target_provider(target, machine_types, version),
-            }
-            normalized.append({
-                field: upgraded[field]
-                for field in MANIFEST_TARGET_FIELDS
-                if field in upgraded
-            })
-        if version == 0:
-            errors = schema_errors(
-                {"schema_version": SCHEMA_VERSION, "targets": normalized}
-            )
-            if errors:
-                raise ValueError(
-                    "legacy manifest cannot be upgraded: " + "; ".join(errors)
-                )
-        return normalized
+        return load_manifest_targets(doc, machine_types)
     except (OSError, ValueError, yaml.YAMLError) as error:
         print(f"ERROR: invalid manifest {path}: {error}", file=sys.stderr)
         sys.exit(1)

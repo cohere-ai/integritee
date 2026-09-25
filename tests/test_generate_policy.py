@@ -814,16 +814,19 @@ def test_generate_policy_measures_and_records_each_baseline(
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
+        f"    sources: [{'b' * 40}]\n"
         "  - model: cmp-l-old\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{second_sha384}.toml\n"
         f"    initdata_sha384: {second_sha384}\n"
+        f"    sources: [{'b' * 40}]\n"
         "  - model: cmp-l-snp\n"
         f"    machine_type: {_unsupported_machine_type()}\n"
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
+        f"    sources: [{'b' * 40}]\n"
     )
     predicate = tmp_path / "predicate.json"
     predicate.write_text("{}")
@@ -983,10 +986,15 @@ def test_a_run_covering_nothing_fails(tmp_path, capsys):
     produced could admit a node.
     """
     manifest = tmp_path / "manifest.yaml"
+    digest = "a" * 96
     manifest.write_text(
         "targets:\n"
         "  - model: cmp-l-snp\n"
         f"    machine_type: {_unsupported_machine_type()}\n"
+        "    podvm_image_tag: test\n"
+        f"    initdata_file: initdata/{digest}.toml\n"
+        f"    initdata_sha384: {digest}\n"
+        f"    sources: [{'b' * 40}]\n"
     )
 
     with pytest.raises(SystemExit) as failure:
