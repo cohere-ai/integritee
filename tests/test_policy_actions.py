@@ -1066,7 +1066,10 @@ def test_release_archive_is_published_create_only_then_latest(tmp_path):
     assert "--if-generation-match=0" in versioned
     assert "/v1/releases/${VERSION}/" in versioned
     assert "verify-archive" in steps["Verify published release archive"]["run"]
-    assert "/v1/latest/" in steps["Publish latest release archive"]["run"]
+    latest = steps["Publish latest release archive"]["run"]
+    assert "/v1/latest/" in latest
+    assert 'max-age=60"' in latest
+    assert "immutable" in versioned
     assert (
         order.index("Create release")
         < order.index("Publish versioned release archive")

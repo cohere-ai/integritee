@@ -290,6 +290,7 @@ jobs:
           VERSION: ${{ needs.generate.outputs.version }}
         run: >-
           gcloud storage cp --if-generation-match=0
+          --cache-control="public, max-age=86400, immutable"
           "release-assets/${RELEASE_ARCHIVE}"
           "gs://${GCS_BUCKET}/v1/releases/${VERSION}/${RELEASE_ARCHIVE}"
 
@@ -314,5 +315,6 @@ jobs:
       - name: Publish latest release archive
         run: >-
           gcloud storage cp
+          --cache-control="public, max-age=60"
           published.tar.gz
           "gs://${GCS_BUCKET}/v1/latest/${RELEASE_ARCHIVE}"
