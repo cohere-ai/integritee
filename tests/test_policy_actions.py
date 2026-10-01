@@ -5,6 +5,8 @@ import base64
 import gzip
 import hashlib
 import importlib.util
+import io
+import json
 import sys
 import types
 from pathlib import Path
@@ -961,3 +963,118 @@ def test_merge_action_splits_new_input_on_any_whitespace(tmp_path, new_input):
         check=True,
     )
     assert result.stdout.splitlines() == ["a.yaml", "b.yaml"]
+
+
+def release_archive_inputs(tmp_path, *, extra_subject=None):
+    files = {
+        "ita_policy.rego": b"package ita\n",
+        "trustee_policy_cpu.rego": b"package cpu\n",
+        "trustee_policy_gpu.rego": b"package gpu\n",
+        "policy-manifest.yaml": b"targets: []\n",
+    }
+    subjects = [
+        {"name": name, "digest": {"sha256": hashlib.sha256(data).hexdigest()}}
+        for name, data in files.items()
+    ]
+    if extra_subject:
+        subjects.append({"name": extra_subject, "digest": {"sha256": "0" * 64}})
+    statement = {"subject": subjects, "predicate": {"version": "v1.2.3"}}
+    payload = base64.b64encode(json.dumps(statement).encode()).decode()
+    files["attestation-bundle.sigstore.json"] = json.dumps(
+        {"dsseEnvelope": {"payload": payload}}
+    ).encode()
+    for name, data in files.items():
+        (tmp_path / name).write_bytes(data)
+    return sorted(files)
+
+
+def test_release_archive_is_reproducible_and_round_trips(tmp_path):
+    manage = load_action(
+        "release_manage",
+        ".github/workflows/release-policy/manage.py",
+    )
+    names = release_archive_inputs(tmp_path)
+    first, second = tmp_path / "a.tar.gz", tmp_path / "b.tar.gz"
+    manage.write_release_archive(first, tmp_path, names)
+    manage.write_release_archive(second, tmp_path, list(reversed(names)))
+
+    assert first.read_bytes() == second.read_bytes()
+    subjects = manage.extract_release_archive(first, tmp_path / "out")
+    assert subjects == sorted(set(names) - {manage.BUNDLE_NAME})
+    for name in names:
+        assert (tmp_path / "out" / name).read_bytes() == (tmp_path / name).read_bytes()
+
+
+def _write_tar(path, members):
+    import tarfile
+
+    with tarfile.open(path, "w:gz") as archive:
+        for info, data in members:
+            archive.addfile(info, io.BytesIO(data) if data is not None else None)
+
+
+@pytest.mark.parametrize("kind", ["symlink", "nested", "parent", "extra", "missing"])
+def test_release_archive_rejects_unexpected_members(tmp_path, kind):
+    import tarfile
+
+    manage = load_action(
+        "release_manage",
+        ".github/workflows/release-policy/manage.py",
+    )
+    names = release_archive_inputs(tmp_path)
+    members = []
+    for name in names:
+        if kind == "missing" and name == "ita_policy.rego":
+            continue
+        data = (tmp_path / name).read_bytes()
+        info = tarfile.TarInfo(name)
+        info.size = len(data)
+        members.append((info, data))
+
+    if kind == "symlink":
+        info = tarfile.TarInfo("link")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "/etc/passwd"
+        members.append((info, None))
+    elif kind in {"nested", "parent", "extra"}:
+        name = {"nested": "dir/x.rego", "parent": "../x.rego", "extra": "x.rego"}[kind]
+        info = tarfile.TarInfo(name)
+        info.size = 1
+        members.append((info, b"x"))
+
+    archive = tmp_path / "bad.tar.gz"
+    _write_tar(archive, members)
+    with pytest.raises(SystemExit):
+        manage.extract_release_archive(archive, tmp_path / "out")
+    assert not (tmp_path / "out").exists()
+
+
+def test_release_archive_is_published_create_only_then_latest(tmp_path):
+    manage = load_action(
+        "release_manage",
+        ".github/workflows/release-policy/manage.py",
+    )
+    workflow = yaml.safe_load(
+        (REPO_ROOT / ".github/workflows/release-policy.yaml").read_text()
+    )
+    publish = workflow["jobs"]["publish"]
+    assert publish["env"]["RELEASE_ARCHIVE"] == manage.RELEASE_ARCHIVE
+    steps = {step.get("name"): step for step in publish["steps"]}
+    order = [step.get("name") for step in publish["steps"]]
+
+    versioned = steps["Publish versioned release archive"]["run"]
+    assert "--if-generation-match=0" in versioned
+    assert "/v1/releases/${VERSION}/" in versioned
+    assert "verify-archive" in steps["Verify published release archive"]["run"]
+    latest = steps["Publish latest release archive"]["run"]
+    assert "/v1/latest/" in latest
+    assert 'max-age=60"' in latest
+    assert "immutable" in versioned
+    assert (
+        order.index("Create release")
+        < order.index("Publish versioned release archive")
+        < order.index("Verify published release archive")
+        < order.index("Publish latest release archive")
+    )
+    assert f"release-assets/{manage.RELEASE_ARCHIVE}" in steps["Create release"]["run"]
+    assert "latest.json" not in yaml.safe_dump(workflow)
