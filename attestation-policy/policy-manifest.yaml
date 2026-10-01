@@ -276,6 +276,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: e4-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -285,6 +286,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: r4f-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -294,6 +296,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: r4f-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -303,6 +306,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: r4p-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -312,6 +316,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: r4p-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -321,6 +326,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: cat2508rws-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -330,6 +336,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: cat2508rws-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -339,6 +346,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: cmp-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -348,6 +356,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: cmp-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -357,6 +366,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: nmc2606-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -366,6 +376,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: nmc2606-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -375,6 +386,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: qw3-4b-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -384,6 +396,7 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
 - model: qw3-4b-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -393,3 +406,4 @@ targets:
   added: '2026-09-28'
   sources:
   - bf1b1a0e0e8a89eacac9ff23cfbe2edd4858c790
+  - 40d0cbcdb651a9f9833636ef0918544af0766784
