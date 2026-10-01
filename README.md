@@ -74,12 +74,36 @@ first boot is the normal case.
 The predicate includes a `previous_rekor_log_index` field that chains releases
 together, forming a linked list in the public Rekor transparency log.
 
-Every release is also mirrored to a public GCS bucket
-(`https://storage.googleapis.com/cohere-attestation-policy`) by the same
-publish job, so clients fetch policies without GitHub rate limits.
-`releases/<version>/` holds the same assets, written once and served with a
-one-year immutable cache header, while `latest.json` (`no-cache`) names the
-current version for consumers to resolve first.
+### Fetching policies
+
+Every release is also published as one archive, `policy-release.tar.gz`,
+holding `attestation-bundle.sigstore.json` and exactly the files it signs
+(`ita_policy.rego`, `trustee_policy_cpu.rego`, `trustee_policy_gpu.rego`,
+`policy-manifest.yaml`). It is attached to the GitHub release and mirrored to a
+CDN so clients are not subject to GitHub rate limits:
+
+- `https://attestation-policy.cohere.com/v1/releases/<version>/policy-release.tar.gz`
+  is written once and never changes.
+- `https://attestation-policy.cohere.com/v1/latest/policy-release.tar.gz` is
+  replaced by each release and may lag it by up to a minute.
+
+The CDN and the archive are untrusted transport. A consumer must, in order:
+
+1. Extract only flat regular files, rejecting links, paths and anything other
+   than the bundle and its subjects.
+2. Verify the bundle against the issuer
+   `https://token.actions.githubusercontent.com`, the signer
+   `https://github.com/cohere-ai/integritee/.github/workflows/release-policy.yaml@refs/heads/main`
+   and predicate type `https://cohere.com/attestation-policy/v1`, requiring a
+   Rekor entry.
+3. Require each extracted file's SHA-256 to equal its bundle subject digest.
+4. Require `predicate.version` to equal the requested version, or, for latest,
+   to be no older than the last version it accepted.
+
+If the CDN fails, the same archive is at
+`https://github.com/cohere-ai/integritee/releases/download/<version>/policy-release.tar.gz`
+and verifies the same way. `manage.py verify-archive` runs these checks with
+`gh attestation verify`; the publish job uses it before moving latest.
 
 ## Generating Policies
 

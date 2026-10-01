@@ -159,6 +159,8 @@ jobs:
       ITA_POLICY_ID: cbeedffa-e224-4664-b6b4-573fcd4133d3
       ITA_POLICY_NAME: integritee-policy-a
       GCS_BUCKET: cohere-attestation-policy
+      CDN_URL: https://attestation-policy.cohere.com
+      RELEASE_ARCHIVE: policy-release.tar.gz
       REASON: ${{ inputs.reason || '' }}
     steps:
       # Pin to the commit generate ran against, so a push landing mid-run
@@ -271,12 +273,11 @@ jobs:
           release-assets/policy-manifest-bundle.tar.gz
           release-assets/predicate.json
           release-assets/attestation-bundle.sigstore.json
+          release-assets/policy-release.tar.gz
 
       # ----------------------------------------------------------------
-      # Mirror release assets to a public GCS bucket. GitHub release
-      # assets are rate limited, so TNG resolves the latest release via
-      # a no-cache latest.json pointer and then fetches immutable,
-      # version-prefixed files that cache aggressively.
+      # Mirror the release archive to the attestation policy CDN, which
+      # serves v1/releases/<version>/ (create-only) and v1/latest/
       # ----------------------------------------------------------------
       - name: Authenticate to GCP
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
@@ -284,14 +285,34 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: integritee-release@cohere-confidential-computing.iam.gserviceaccount.com
 
-      - name: Upload release assets to GCS
+      - name: Publish versioned release archive
         env:
           VERSION: ${{ needs.generate.outputs.version }}
         run: >-
-          gcloud storage cp release-assets/*
-          "gs://${GCS_BUCKET}/releases/${VERSION}/"
-          --cache-control="public, max-age=31536000, immutable"
-          && printf '{"version": "%s"}\n' "${VERSION}" > latest.json
-          && gcloud storage cp latest.json
-          "gs://${GCS_BUCKET}/latest.json"
-          --cache-control="no-cache"
+          gcloud storage cp --if-generation-match=0
+          "release-assets/${RELEASE_ARCHIVE}"
+          "gs://${GCS_BUCKET}/v1/releases/${VERSION}/${RELEASE_ARCHIVE}"
+
+      # Read back through the CDN before moving latest, so latest only ever
+      # names an archive a consumer can fetch and verify.
+      - name: Verify published release archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.generate.outputs.version }}
+        run: >-
+          curl -fsSL --retry 6 --retry-delay 15 --retry-all-errors --connect-timeout 10 --max-time 60
+          -o published.tar.gz
+          "${CDN_URL}/v1/releases/${VERSION}/${RELEASE_ARCHIVE}"
+          && cmp published.tar.gz "release-assets/${RELEASE_ARCHIVE}"
+          && python3 .github/workflows/release-policy/manage.py verify-archive
+          --archive published.tar.gz
+          --version "$VERSION"
+          --work-dir published
+
+      # Uploaded from the verified copy: the writer is create-only under
+      # v1/releases/ and cannot read objects back for a server-side copy.
+      - name: Publish latest release archive
+        run: >-
+          gcloud storage cp
+          published.tar.gz
+          "gs://${GCS_BUCKET}/v1/latest/${RELEASE_ARCHIVE}"
