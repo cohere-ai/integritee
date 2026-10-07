@@ -16,41 +16,53 @@ every axis a consumer checks:
 from __future__ import annotations
 
 import argparse
-import hashlib
+import importlib.util
 import json
 import os
 import re
-import subprocess
 from pathlib import Path
+from types import ModuleType
+
+WORKFLOWS_DIR = Path(__file__).resolve().parents[1]
+
+
+def _load_workflow_script(directory: str) -> ModuleType:
+    """Load a sibling workflow's manage.py.
+
+    The workflow directories are hyphenated and every script is manage.py, so
+    they cannot be imported as packages. Each loads under its own name.
+    """
+    path = WORKFLOWS_DIR / directory / "manage.py"
+    spec = importlib.util.spec_from_file_location(
+        f"{directory.replace('-', '_')}_manage", path
+    )
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_release = _load_workflow_script("release-policy")
+_add_from_blobheart = _load_workflow_script("add-from-blobheart")
+
+run = _release.run
+UUID_RE = _release.UUID_RE
+SHA_RE = _add_from_blobheart.SHA_RE
+REPOSITORY_RE = _add_from_blobheart.REPOSITORY_RE
+INITDATA_FILE_RE = _add_from_blobheart.SHA384_FILE_RE
 
 STAGING_TAG_RE = re.compile(r"staging-[0-9]+-[0-9]+")
-SHA_RE = re.compile(r"[0-9a-f]{40}")
 RUN_ID_RE = re.compile(r"[0-9]+")
 ARTIFACT_NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,128}")
-INITDATA_FILE_RE = re.compile(r"[0-9a-f]{96}\.toml")
-REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-UUID_RE = re.compile(
-    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
-    r"[0-9a-f]{4}-[0-9a-f]{12}"
-)
 
-# The production ITA policy. Staging must never upload to it.
+# The production ITA policy. Staging must never upload to it. A test keeps
+# this equal to release-policy.yaml's ITA_POLICY_ID.
 PRODUCTION_ITA_POLICY_ID = "cbeedffa-e224-4664-b6b4-573fcd4133d3"
 STAGING_PREDICATE_TYPE = "https://cohere.com/attestation-policy/staging/v1"
 STAGING_SIGNER_WORKFLOW = ".github/workflows/release-policy-staging.yaml"
 STAGING_ENVIRONMENT = "staging"
 DEFAULT_KEEP = 20
-
-
-def run(*command: str, capture_output: bool = False) -> str:
-    """Run a command without invoking a shell."""
-    result = subprocess.run(
-        command,
-        check=True,
-        text=True,
-        capture_output=capture_output,
-    )
-    return result.stdout.strip() if capture_output else ""
 
 
 def github_output(**values: str) -> None:
@@ -104,12 +116,14 @@ def resolve_inputs(args: argparse.Namespace) -> None:
 
 
 def check_artifact_manifest(args: argparse.Namespace) -> None:
-    """Check a downloaded Blobheart manifest artifact before it is merged.
+    """Check a downloaded Blobheart manifest artifact's layout.
 
     The artifact is the derive-manifest action's output: a manifest whose
-    targets name ``initdata/<sha384>.toml``, plus that initdata directory.
-    Nothing else may be in it, and every initdata file must match its content
-    address, so a malformed artifact fails here rather than mid-merge.
+    targets name ``initdata/<sha384>.toml``, plus that initdata directory, and
+    nothing else. Content addresses are not checked here: the workflow's
+    install step (add-from-blobheart ``install_initdata``) and
+    validate-manifest both verify every digest. They follow symlinks, though,
+    so symlinks are rejected here.
     """
     manifest = args.artifact_dir / "policy-manifest.yaml"
     initdata = args.artifact_dir / "initdata"
@@ -136,10 +150,6 @@ def check_artifact_manifest(args: argparse.Namespace) -> None:
             or not INITDATA_FILE_RE.fullmatch(source.name)
         ):
             raise SystemExit(f"unexpected initdata file: {source.name}")
-        if hashlib.sha384(source.read_bytes()).hexdigest() != source.stem:
-            raise SystemExit(
-                f"initdata digest does not match filename: {source.name}"
-            )
 
     github_output(
         manifest_file=str(manifest),

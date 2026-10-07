@@ -170,15 +170,38 @@ def test_artifact_manifest_is_accepted_and_reported(
     assert outputs["initdata_dir"] == str(artifact / "initdata")
 
 
-def test_artifact_initdata_must_match_its_content_address(
+def test_tampered_artifact_initdata_is_rejected_on_install(
     manage, tmp_path, github_output
 ):
+    """The layout check leaves digests to the shared install step the
+    workflow runs next; pin that the step actually rejects a tampered file."""
     artifact = write_artifact(
         tmp_path / "artifact", {f"{'0' * 96}.toml": b"tampered"}
     )
+    manage.check_artifact_manifest(argparse.Namespace(artifact_dir=artifact))
 
     with pytest.raises(SystemExit, match="digest does not match"):
-        manage.check_artifact_manifest(argparse.Namespace(artifact_dir=artifact))
+        manage._add_from_blobheart.install_initdata(
+            artifact / "initdata", tmp_path / "installed"
+        )
+
+
+def test_artifact_install_step_is_the_shared_initdata_check():
+    install = next(
+        step
+        for step in workflow("release-policy-staging")["jobs"]["generate"]["steps"]
+        if step.get("name") == "Install merged manifest"
+    )
+
+    assert "add-from-blobheart/manage.py update" in install["run"]
+    assert "steps.artifact.outputs.initdata_dir" in str(install["env"])
+
+
+def test_staging_shares_helpers_with_production_scripts(manage):
+    assert manage.run is manage._release.run
+    assert manage.UUID_RE is manage._release.UUID_RE
+    assert manage.SHA_RE is manage._add_from_blobheart.SHA_RE
+    assert manage.INITDATA_FILE_RE is manage._add_from_blobheart.SHA384_FILE_RE
 
 
 def test_artifact_rejects_extra_entries(manage, tmp_path, github_output):
