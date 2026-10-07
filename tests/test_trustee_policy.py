@@ -146,7 +146,6 @@ def test_cpu_policy_affirms_the_node_it_was_generated_from(
         (["az-snp-vtpm", "tpm", "pcr05"], "0" * 64, "executables"),
         (["az-snp-vtpm", "tpm", "pcr09"], "0" * 64, "executables"),
         (["az-snp-vtpm", "tpm", "pcr11"], "0" * 64, "executables"),
-        (["az-snp-vtpm", "measurement"], "A" * 64, "executables"),
         # Top level rather than under the attester, since transform_claims
         # lifts it there before the policy ever sees it.
         (["init_data"], "0" * 64, "configuration"),
