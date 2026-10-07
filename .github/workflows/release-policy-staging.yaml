@@ -1,0 +1,453 @@
+# Publishes a staging attestation policy release, so a Blobheart change can
+# be attested end to end on dev before it merges and before production
+# Integritee runs.
+#
+# A staging release is the production manifest plus the targets derived from
+# the requested Blobheart source, so it admits everything dev already runs as
+# well as the change under test. Nothing is committed: the merged manifest
+# only exists inside this run and in the release assets.
+#
+# Staging is isolated from production on every axis a consumer checks:
+#   tag        staging-<run_id>-<attempt>, a prerelease never marked latest;
+#              production versions (v0.0.1aN) are unaffected
+#   signer     this workflow in the `staging` environment, predicate type
+#              https://cohere.com/attestation-policy/staging/v1; production
+#              TNG requires release-policy.yaml, `release` and .../v1
+#   ITA        STAGING_ITA_* secrets from the `staging` environment and a
+#              staging policy; the production policy is refused by ID
+#
+# Trigger with Blobheart commit SHAs (Azure: committed kata policies are what
+# dev renders), or with a Blobheart run whose artifact holds a manifest
+# derived after swapping in the staging ITA policy ID (GCP: the policy ID is
+# part of the initdata). The commit need not be on Blobheart main.
+#
+# generate: derives, merges, validates and builds policies; no publish
+# credentials. publish: gated by the `staging` environment; uploads to the
+# staging ITA policy, signs, and creates the prerelease.
+name: Release Policy (Staging)
+run-name: >-
+  Staging policy ${{ inputs.correlation_id || github.event.client_payload.correlation_id || github.run_id }}
+
+on:
+  repository_dispatch:
+    types: [blobheart-staging]
+  workflow_dispatch:
+    inputs:
+      blobheart_refs:
+        description: "Space-separated Blobheart commit SHAs to derive targets from (or set manifest_run_id)"
+        required: false
+        type: string
+      manifest_run_id:
+        description: "Blobheart workflow run ID whose artifact holds a derived manifest (or set blobheart_refs)"
+        required: false
+        type: string
+      manifest_artifact:
+        description: "Artifact name in that run"
+        required: false
+        type: string
+        default: "staging-policy-manifest"
+      reason:
+        description: "Reason for this staging release"
+        required: false
+        type: string
+      correlation_id:
+        description: "Caller's ID, shown in the run name so a caller can find this run"
+        required: false
+        type: string
+      publish:
+        description: "Upload to staging ITA and create the staging release (main only)"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# Releases are independent, but the staging ITA policy is a single resource:
+# serialise so two runs cannot interleave upload and read-back.
+concurrency:
+  group: staging-ita-policy-release
+  cancel-in-progress: false
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+      packages: read
+      id-token: write   # GCP workload identity federation
+    outputs:
+      version: ${{ steps.inputs.outputs.version }}
+      ita-policy-file: ${{ steps.generate.outputs.ita-policy-file }}
+      trustee-cpu-policy-file: ${{ steps.generate.outputs.trustee-cpu-policy-file }}
+      trustee-gpu-policy-file: ${{ steps.generate.outputs.trustee-gpu-policy-file }}
+      manifest-sha256: ${{ steps.manifest-digest.outputs.sha256 }}
+    env:
+      BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs || '' }}
+      MANIFEST_RUN_ID: ${{ inputs.manifest_run_id || github.event.client_payload.manifest_run_id || '' }}
+      MANIFEST_ARTIFACT: ${{ inputs.manifest_artifact || github.event.client_payload.manifest_artifact || 'staging-policy-manifest' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          persist-credentials: false
+
+      - name: Resolve inputs
+        id: inputs
+        run: >-
+          python3 .github/workflows/release-policy-staging/manage.py resolve-inputs
+          --blobheart-refs "$BLOBHEART_REFS"
+          --manifest-run-id "$MANIFEST_RUN_ID"
+          --manifest-artifact "$MANIFEST_ARTIFACT"
+          --run-id "$GITHUB_RUN_ID"
+          --run-attempt "$GITHUB_RUN_ATTEMPT"
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install pyyaml requests
+
+      - name: Authenticate to GCP
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093  # v3.0.0
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      # Read-only token for blobheart + baselines. Cannot write to integritee.
+      - name: Mint GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: cohere-cc-baselines,blobheart
+
+      # Scoped to reading Blobheart run artifacts; minted only when needed.
+      - name: Mint Blobheart artifact token
+        id: artifact-token
+        if: steps.inputs.outputs.source == 'run'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart
+          permission-actions: read
+
+      - name: Install ORAS
+        uses: oras-project/setup-oras@1d808f7d7f6995cc68b7bf507bfe5c5446e1dc9d  # v2.0.1
+
+      - name: Log in to GHCR
+        run: echo "${{ github.token }}" | oras login ghcr.io -u ${{ github.actor }} --password-stdin
+
+      # ----------------------------------------------------------------
+      # Incoming targets: derived from Blobheart SHAs, or a Blobheart run
+      # ----------------------------------------------------------------
+      - name: Derive manifests from Blobheart sources
+        id: derive
+        if: steps.inputs.outputs.source == 'refs'
+        uses: ./.github/actions/derive-manifest
+        with:
+          blobheart-refs: ${{ env.BLOBHEART_REFS }}
+          github-token: ${{ steps.app-token.outputs.token }}
+
+      - name: Download Blobheart manifest artifact
+        if: steps.inputs.outputs.source == 'run'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: ${{ env.MANIFEST_ARTIFACT }}
+          repository: cohere-ai/blobheart
+          run-id: ${{ env.MANIFEST_RUN_ID }}
+          github-token: ${{ steps.artifact-token.outputs.token }}
+          path: ${{ runner.temp }}/blobheart-manifest
+
+      - name: Check Blobheart manifest artifact
+        id: artifact
+        if: steps.inputs.outputs.source == 'run'
+        run: >-
+          python3 .github/workflows/release-policy-staging/manage.py check-artifact-manifest
+          --artifact-dir "$RUNNER_TEMP/blobheart-manifest"
+
+      - name: Validate Blobheart manifest artifact
+        if: steps.inputs.outputs.source == 'run'
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: ${{ steps.artifact.outputs.manifest_file }}
+
+      # ----------------------------------------------------------------
+      # Merge into the production manifest, in this workspace only, so the
+      # release also admits everything dev already runs
+      # ----------------------------------------------------------------
+      - name: Merge into policy manifest
+        id: merge
+        uses: ./.github/actions/merge-manifest
+        with:
+          base: attestation-policy/policy-manifest.yaml
+          new: ${{ steps.derive.outputs.manifest-files || steps.artifact.outputs.manifest_file }}
+
+      # Reuses the production import's install step: it copies the merged
+      # manifest over the checkout's and installs initdata after checking each
+      # file against its content address. Nothing here is committed.
+      - name: Install merged manifest
+        env:
+          MERGED_MANIFEST: ${{ steps.merge.outputs.manifest-file }}
+          ADDED_TARGETS: ${{ steps.merge.outputs.added }}
+          INITDATA_SOURCE: ${{ steps.derive.outputs.initdata-dir || steps.artifact.outputs.initdata_dir }}
+        run: >-
+          python3 .github/workflows/add-from-blobheart/manage.py update
+          --merged "$MERGED_MANIFEST"
+          --manifest attestation-policy/policy-manifest.yaml
+          --initdata-source "$INITDATA_SOURCE"
+          --initdata-dir attestation-policy/initdata
+          --added "$ADDED_TARGETS"
+
+      - name: Validate policy manifest
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+
+      # ----------------------------------------------------------------
+      # Generate policies
+      # ----------------------------------------------------------------
+      - name: Initialize predicate
+        env:
+          VERSION: ${{ steps.inputs.outputs.version }}
+        run: >-
+          python3 .github/workflows/release-policy/manage.py init-predicate
+          --version "$VERSION"
+          --output predicate.json
+
+      - name: Annotate predicate as staging
+        run: >-
+          python3 .github/workflows/release-policy-staging/manage.py annotate-predicate
+          --predicate predicate.json
+          --blobheart-refs "$BLOBHEART_REFS"
+          --manifest-run-id "$MANIFEST_RUN_ID"
+          --manifest-artifact "$MANIFEST_ARTIFACT"
+
+      - name: Generate policy
+        id: generate
+        uses: ./.github/actions/generate-policy
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+          github-token: ${{ steps.app-token.outputs.token }}
+          output-artifacts-dir: artifacts
+          policy-types: ita trustee
+          predicate-file: predicate.json
+
+      - name: Record merged manifest digest
+        id: manifest-digest
+        run: echo "sha256=$(sha256sum attestation-policy/policy-manifest.yaml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: staging-release-assets
+          if-no-files-found: error
+          path: |
+            ${{ steps.generate.outputs.ita-policy-file }}
+            ${{ steps.generate.outputs.trustee-cpu-policy-file }}
+            ${{ steps.generate.outputs.trustee-gpu-policy-file }}
+            predicate.json
+            attestation-policy/policy-manifest.yaml
+            attestation-policy/initdata/
+
+  publish:
+    needs: generate
+    # A repository_dispatch always publishes; a manual dispatch publishes
+    # unless the flag is cleared. Main only, so the signing identity
+    # (release-policy-staging.yaml@refs/heads/main) is fixed and consumers
+    # can pin it once.
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'repository_dispatch' || inputs.publish)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    permissions:
+      contents: read       # the release itself is created with the App token below
+      attestations: write
+      id-token: write      # Sigstore
+    env:
+      # Staging-only names, defined only in the staging environment, so a
+      # missing secret cannot fall back to the repository-level production
+      # ITA key.
+      STAGING_ITA_POLICY_ID: ${{ vars.STAGING_ITA_POLICY_ID }}
+      STAGING_ITA_POLICY_NAME: integritee-policy-staging
+      VERSION: ${{ needs.generate.outputs.version }}
+      REASON: ${{ inputs.reason || github.event.client_payload.reason || '' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      # The artifact is rooted at the workspace (the common ancestor of its
+      # paths), so this overlays the checkout: predicate.json at the root,
+      # policies in generated-policies/, and the merged manifest and initdata
+      # over attestation-policy/.
+      - name: Download generated policy
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: staging-release-assets
+
+      # The release signs and ships attestation-policy/policy-manifest.yaml, so
+      # it must be the merged staging manifest the policies were built from,
+      # not production's from the checkout.
+      - name: Check staging manifest was restored
+        env:
+          EXPECTED_SHA256: ${{ needs.generate.outputs.manifest-sha256 }}
+        run: |
+          actual="$(sha256sum attestation-policy/policy-manifest.yaml | cut -d' ' -f1)"
+          if [ "$actual" != "$EXPECTED_SHA256" ]; then
+            echo "::error::policy-manifest.yaml is not the merged staging manifest"
+            exit 1
+          fi
+
+      - name: Check staging ITA target
+        env:
+          STAGING_ITA_ADMIN_API_KEY: ${{ secrets.STAGING_ITA_ADMIN_API_KEY }}
+          STAGING_ITA_API_URL: ${{ secrets.STAGING_ITA_API_URL }}
+        run: >-
+          python3 .github/workflows/release-policy-staging/manage.py check-ita-target
+          --api-key "$STAGING_ITA_ADMIN_API_KEY"
+          --api-url "$STAGING_ITA_API_URL"
+          --policy-id "$STAGING_ITA_POLICY_ID"
+
+      - name: Mint Integritee release token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
+
+      # ----------------------------------------------------------------
+      # Upload to the staging ITA policy (created on the first run), then read
+      # it back to prove the stored policy is exactly what generate produced
+      # ----------------------------------------------------------------
+      - name: Upload policy to staging ITA
+        id: upload
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: ${{ needs.generate.outputs.ita-policy-file }}
+          policy-id: ${{ env.STAGING_ITA_POLICY_ID }}
+          policy-name: ${{ env.STAGING_ITA_POLICY_NAME }}
+          ita-api-key: ${{ secrets.STAGING_ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.STAGING_ITA_API_URL }}
+          predicate-file: predicate.json
+
+      - name: Report new staging ITA policy
+        if: env.STAGING_ITA_POLICY_ID == ''
+        env:
+          POLICY_ID: ${{ steps.upload.outputs.policy-id }}
+        run: |
+          echo "::notice title=Staging ITA policy created::Set the staging environment variable STAGING_ITA_POLICY_ID=${POLICY_ID}"
+
+      - name: Fetch uploaded policy from staging ITA
+        id: fetch
+        uses: ./.github/actions/fetch-ita-policy
+        with:
+          policy-id: ${{ steps.upload.outputs.policy-id }}
+          ita-api-key: ${{ secrets.STAGING_ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ secrets.STAGING_ITA_API_URL }}
+
+      - name: Verify uploaded policy
+        run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"
+
+      # ----------------------------------------------------------------
+      # Attest with Sigstore under the staging predicate type
+      # ----------------------------------------------------------------
+      - name: Attest policies with Sigstore
+        id: attest
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
+        with:
+          subject-path: |
+            ${{ needs.generate.outputs.ita-policy-file }}
+            ${{ needs.generate.outputs.trustee-cpu-policy-file }}
+            ${{ needs.generate.outputs.trustee-gpu-policy-file }}
+            attestation-policy/policy-manifest.yaml
+          predicate-type: https://cohere.com/attestation-policy/staging/v1
+          predicate-path: predicate.json
+
+      # ----------------------------------------------------------------
+      # Create the staging prerelease
+      # ----------------------------------------------------------------
+      - name: Prepare release assets
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+          POLICY_ID: ${{ steps.upload.outputs.policy-id }}
+        run: >-
+          python3 .github/workflows/release-policy/manage.py prepare-assets
+          --policy "${{ needs.generate.outputs.ita-policy-file }}"
+          "${{ needs.generate.outputs.trustee-cpu-policy-file }}"
+          "${{ needs.generate.outputs.trustee-gpu-policy-file }}"
+          --manifest attestation-policy/policy-manifest.yaml
+          --predicate predicate.json
+          --bundle "$BUNDLE_PATH"
+          --output-dir release-assets
+          --release-notes release-body.md
+          --policy-id "$POLICY_ID"
+          --reason "$REASON"
+
+      - name: Add staging release notes
+        run: >-
+          python3 .github/workflows/release-policy-staging/manage.py release-notes
+          --notes release-body.md
+          --version "$VERSION"
+          --repository "$GITHUB_REPOSITORY"
+
+      # --prerelease and --latest=false keep production consumers, which read
+      # releases/latest, on the production release.
+      - name: Create staging release
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: >-
+          gh release create "$VERSION"
+          --prerelease
+          --latest=false
+          --target "$GITHUB_SHA"
+          --title "Staging Attestation Policy $VERSION"
+          --notes-file release-body.md
+          release-assets/ita_policy.rego
+          release-assets/trustee_policy_cpu.rego
+          release-assets/trustee_policy_gpu.rego
+          release-assets/policy-manifest.yaml
+          release-assets/policy-manifest-bundle.tar.gz
+          release-assets/predicate.json
+          release-assets/attestation-bundle.sigstore.json
+
+      - name: Summarise staging release
+        env:
+          POLICY_ID: ${{ steps.upload.outputs.policy-id }}
+        run: |
+          {
+            echo "### Staging release \`${VERSION}\`"
+            echo
+            echo "- Staging ITA policy: \`${POLICY_ID}\`"
+            echo "- Release: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${VERSION}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Prune old staging releases
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: python3 .github/workflows/release-policy-staging/manage.py prune

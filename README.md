@@ -168,6 +168,7 @@ attestation-policy/
         machine-types.yaml        # Hardware facts per machine type
   workflows/
     release-policy.yaml           # Main attestation workflow
+    release-policy-staging.yaml   # Staging releases for unmerged Blobheart changes
 ```
 
 ## Triggering a Release
@@ -177,6 +178,96 @@ gh workflow run release-policy.yaml \
   -f version=v0.0.1 \
   -f reason="Updated container image for command-r-plus"
 ```
+
+## Staging Releases
+
+`release-policy-staging.yaml` publishes a policy for a Blobheart change that
+has not merged yet, so it can be attested end to end on dev without a
+production release. It builds the production manifest plus the targets
+derived from the requested Blobheart source, so one staging release admits
+everything dev already runs as well as the change under test. Nothing is
+committed; the merged manifest exists only in the run and its release.
+
+### Isolation from production
+
+| | Production | Staging |
+|---|---|---|
+| Tag | `v0.0.1aN`, marked latest | `staging-<run_id>-<attempt>`, prerelease, never latest |
+| Signer | `release-policy.yaml@refs/heads/main`, environment `release` | `release-policy-staging.yaml@refs/heads/main`, environment `staging` |
+| Predicate type | `https://cohere.com/attestation-policy/v1` | `https://cohere.com/attestation-policy/staging/v1` |
+| ITA | `ITA_ADMIN_API_KEY`, policy `integritee-policy-a` | `STAGING_ITA_ADMIN_API_KEY`, policy `integritee-policy-staging` |
+
+A production TNG verifier rejects a staging bundle on signer, environment and
+predicate type, and production consumers read `releases/latest`, which a
+prerelease never becomes. The workflow refuses to run against the production
+ITA policy ID, and its ITA secrets have staging-only names, so a missing one
+fails instead of falling back to the production key. The workflow keeps the
+newest 20 staging releases and deletes older ones.
+
+### Triggering
+
+Pass exactly one source.
+
+**Blobheart commit SHAs** derive targets from Blobheart's committed kata
+policies, the same way the production import does, except the commits need
+not be on Blobheart `main`:
+
+```bash
+gh workflow run release-policy-staging.yaml \
+  -f blobheart_refs="<blobheart commit SHA>" \
+  -f reason="Test hosted TNG builtin attestation"
+```
+
+This covers Azure, whose pods carry no ITA policy ID.
+
+**A Blobheart run artifact** holds a manifest derived in that run, for
+example after swapping in the staging ITA policy ID. GCP needs this, because
+the ITA policy ID is part of the pod's initdata. The artifact must contain
+exactly `policy-manifest.yaml` and `initdata/`, as written by
+`derive-manifest`:
+
+```bash
+gh workflow run release-policy-staging.yaml \
+  -f manifest_run_id="<blobheart run ID>" \
+  -f manifest_artifact="staging-policy-manifest"
+```
+
+Blobheart can also send a `blobheart-staging` `repository_dispatch` with the
+same fields (`blobheart_refs` or `manifest_run_id` and `manifest_artifact`,
+plus `reason` and `correlation_id`) in `client_payload`.
+
+### Consuming a staging release
+
+The release notes give the exact TNG `policy_source`. It pins the tag, so a
+consumer installs that one release and does not follow later ones:
+
+```json
+{
+  "url": "https://github.com/cohere-ai/integritee/releases/download/staging-<run_id>-<attempt>",
+  "version": "staging-<run_id>-<attempt>",
+  "provenance": {
+    "repo": "cohere-ai/integritee",
+    "signer_workflow": ".github/workflows/release-policy-staging.yaml",
+    "source_ref": "refs/heads/main",
+    "predicate_type": "https://cohere.com/attestation-policy/staging/v1",
+    "environment": "staging"
+  }
+}
+```
+
+GCP consumers point `POLICY_IDS` at the staging ITA policy ID, from the
+release notes or `predicate.json`. That ID does not change between staging
+releases.
+
+### One-time setup
+
+1. Create a `staging` environment with a deployment branch policy for `main`.
+2. Add the environment secrets `STAGING_ITA_ADMIN_API_KEY` and
+   `STAGING_ITA_API_URL` for the dev Intel Trust Authority account.
+3. Run the workflow once with `STAGING_ITA_POLICY_ID` unset. The run creates
+   the staging ITA policy and prints its ID; save it as the `staging`
+   environment variable `STAGING_ITA_POLICY_ID`. Later runs update that policy
+   in place.
 
 ## License
 
