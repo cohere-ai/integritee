@@ -195,7 +195,7 @@ committed; the merged manifest exists only in the run and its release.
 | Tag | `v0.0.1aN`, marked latest | `staging-<run_id>-<attempt>`, prerelease, never latest |
 | Signer | `release-policy.yaml@refs/heads/main`, environment `release` | `release-policy-staging.yaml@refs/heads/main`, environment `staging` |
 | Predicate type | `https://cohere.com/attestation-policy/v1` | `https://cohere.com/attestation-policy/staging/v1` |
-| ITA | `ITA_ADMIN_API_KEY`, policy `integritee-policy-a` | `STAGING_ITA_ADMIN_API_KEY`, policy `integritee-policy-staging` |
+| ITA | `ITA_ADMIN_API_KEY` and `ITA_API_URL` secrets, policy `integritee-policy-a` | `STAGING_ITA_ADMIN_API_KEY` secret and `STAGING_ITA_API_URL` variable, policy `integritee-policy-staging` |
 
 A production TNG verifier rejects a staging bundle on signer, environment and
 predicate type, and production consumers read `releases/latest`, which a
@@ -262,8 +262,9 @@ releases.
 ### One-time setup
 
 1. Create a `staging` environment with a deployment branch policy for `main`.
-2. Add the environment secrets `STAGING_ITA_ADMIN_API_KEY` and
-   `STAGING_ITA_API_URL` for the dev Intel Trust Authority account.
+2. For the dev Intel Trust Authority account, add the environment secret
+   `STAGING_ITA_ADMIN_API_KEY` and the environment variable
+   `STAGING_ITA_API_URL` (not sensitive, so a variable rather than a secret).
 3. Run the workflow once with `STAGING_ITA_POLICY_ID` unset. The run creates
    the staging ITA policy and prints its ID; save it as the `staging`
    environment variable `STAGING_ITA_POLICY_ID`. Later runs update that policy

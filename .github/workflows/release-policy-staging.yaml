@@ -13,8 +13,9 @@
 #   signer     this workflow in the `staging` environment, predicate type
 #              https://cohere.com/attestation-policy/staging/v1; production
 #              TNG requires release-policy.yaml, `release` and .../v1
-#   ITA        STAGING_ITA_* secrets from the `staging` environment and a
-#              staging policy; the production policy is refused by ID
+#   ITA        STAGING_ITA_* secret and variables from the `staging`
+#              environment and a staging policy; the production policy is
+#              refused by ID
 #
 # Trigger with Blobheart commit SHAs (Azure: committed kata policies are what
 # dev renders), or with a Blobheart run whose artifact holds a manifest
@@ -277,9 +278,10 @@ jobs:
       attestations: write
       id-token: write      # Sigstore
     env:
-      # Staging-only names, defined only in the staging environment, so a
-      # missing secret cannot fall back to the repository-level production
-      # ITA key.
+      # Staging-only names (STAGING_ITA_ADMIN_API_KEY secret,
+      # STAGING_ITA_API_URL and STAGING_ITA_POLICY_ID variables), defined only
+      # in the staging environment, so a missing one cannot fall back to the
+      # repository-level production ITA key.
       STAGING_ITA_POLICY_ID: ${{ vars.STAGING_ITA_POLICY_ID }}
       STAGING_ITA_POLICY_NAME: integritee-policy-staging
       VERSION: ${{ needs.generate.outputs.version }}
@@ -324,7 +326,7 @@ jobs:
       - name: Check staging ITA target
         env:
           STAGING_ITA_ADMIN_API_KEY: ${{ secrets.STAGING_ITA_ADMIN_API_KEY }}
-          STAGING_ITA_API_URL: ${{ secrets.STAGING_ITA_API_URL }}
+          STAGING_ITA_API_URL: ${{ vars.STAGING_ITA_API_URL }}
         run: >-
           python3 .github/workflows/release-policy-staging/manage.py check-ita-target
           --api-key "$STAGING_ITA_ADMIN_API_KEY"
@@ -353,7 +355,7 @@ jobs:
           policy-id: ${{ env.STAGING_ITA_POLICY_ID }}
           policy-name: ${{ env.STAGING_ITA_POLICY_NAME }}
           ita-api-key: ${{ secrets.STAGING_ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.STAGING_ITA_API_URL }}
+          ita-api-url: ${{ vars.STAGING_ITA_API_URL }}
           predicate-file: predicate.json
 
       - name: Report new staging ITA policy
@@ -369,7 +371,7 @@ jobs:
         with:
           policy-id: ${{ steps.upload.outputs.policy-id }}
           ita-api-key: ${{ secrets.STAGING_ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.STAGING_ITA_API_URL }}
+          ita-api-url: ${{ vars.STAGING_ITA_API_URL }}
 
       - name: Verify uploaded policy
         run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"

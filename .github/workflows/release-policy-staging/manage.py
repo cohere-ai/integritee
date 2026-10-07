@@ -9,7 +9,7 @@ every axis a consumer checks:
   and published as a prerelease that is never marked latest;
 - signer: release-policy-staging.yaml in the ``staging`` environment, with
   its own predicate type, so a production verifier rejects the bundle;
-- ITA: a separate account (STAGING_ITA_* secrets) and policy, so the
+- ITA: a separate account (STAGING_ITA_* environment settings) and policy, so the
   production policy is never read or written.
 """
 
@@ -160,7 +160,7 @@ def check_artifact_manifest(args: argparse.Namespace) -> None:
 def check_ita_target(args: argparse.Namespace) -> None:
     """Refuse to publish unless the ITA target is unmistakably staging.
 
-    The secrets have staging-only names, defined only in the staging
+    The settings have staging-only names, defined only in the staging
     environment, so a missing one fails here instead of falling back to the
     repository-level production key.
     """

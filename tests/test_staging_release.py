@@ -400,6 +400,11 @@ def test_staging_publish_is_isolated_from_production():
     # must never be reachable from this workflow.
     assert "secrets.ITA_ADMIN_API_KEY" not in text
     assert "secrets.ITA_API_URL" not in text
+    assert "vars.ITA_API_URL" not in text
+    # Only the staging environment defines these.
+    assert "secrets.STAGING_ITA_ADMIN_API_KEY" in text
+    assert "vars.STAGING_ITA_API_URL" in text
+    assert "secrets.STAGING_ITA_API_URL" not in text
     assert "cbeedffa-e224-4664-b6b4-573fcd4133d3" not in text
     assert "integritee-policy-a" not in text
 
