@@ -39,6 +39,10 @@ trust_claims := {
 	"sourced-data": sourced_data,
 }
 
+extensions := [
+${POLICY_VERSION_EXTENSION}
+]
+
 ##### Azure SEV-SNP (az-snp-vtpm)
 #
 # Every rule in this section is guarded on the attester key (azsnp), so a

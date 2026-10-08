@@ -81,6 +81,7 @@ jobs:
           output-artifacts-dir: artifacts
           policy-types: ita trustee
           predicate-file: predicate.json
+          version: v0.0.0-test
 
       - name: Assert the action reported what it wrote
         env:
@@ -117,8 +118,15 @@ jobs:
           # cannot go missing without the policy failing to compile anyway.
           generated = {
               "ITA_POLICY": ["matches_tdx_platform if {", "# Model: cmp-l (Initdata:"],
-              "TRUSTEE_CPU_POLICY": ["azsnp_image_ok if {", "azsnp.tpm.pcr04 =="],
-              "TRUSTEE_GPU_POLICY": ["accepted_gpu_driver_versions := {"],
+              "TRUSTEE_CPU_POLICY": [
+                  "azsnp_image_ok if {",
+                  "azsnp.tpm.pcr04 ==",
+                  '"value": "v0.0.0-test"',
+              ],
+              "TRUSTEE_GPU_POLICY": [
+                  "accepted_gpu_driver_versions := {",
+                  '"value": "v0.0.0-test"',
+              ],
           }
           for variable, snippets in generated.items():
               path = Path(os.environ[variable])

@@ -48,7 +48,8 @@ attestation.
 
 Download `trustee_policy_cpu.rego` and `trustee_policy_gpu.rego` into one
 directory and use the Trustee attestation service with
-`policy_ids: ["trustee_policy"]`.
+`policy_ids: ["trustee_policy"]`. Each appraisal in the resulting EAR token
+carries the release version as `cohere.policy-version`.
 
 ## For Auditors
 
@@ -89,6 +90,7 @@ choose which services to generate for and pass no output path:
     output-artifacts-dir: artifacts
     policy-types: ita trustee    # space- or comma-separated: ita, trustee
     predicate-file: predicate.json
+    version: v0.0.1a72           # optional, reported in Trustee appraisals
 ```
 
 The action writes to `generated-policies/` in the workspace and reports

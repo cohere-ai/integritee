@@ -124,6 +124,7 @@ jobs:
           output-artifacts-dir: artifacts
           policy-types: ita trustee
           predicate-file: predicate.json
+          version: ${{ steps.version.outputs.version }}
 
       # ----------------------------------------------------------------
       # Validate manifest

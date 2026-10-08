@@ -66,15 +66,18 @@ IMAGE_PCRS = {
 }
 INITDATA_PCR = "pcr8"
 
+POLICY_VERSION_PLACEHOLDER = "${POLICY_VERSION_EXTENSION}"
+
 IMAGE_PLACEHOLDER = "${AZSNP_IMAGE_BLOCKS}"
 INITDATA_PLACEHOLDER = "${AZSNP_INITDATA_BLOCKS}"
 CPU_PLACEHOLDERS = (
+    POLICY_VERSION_PLACEHOLDER,
     IMAGE_PLACEHOLDER,
     INITDATA_PLACEHOLDER,
 )
 
 DRIVER_VERSIONS_PLACEHOLDER = "${NVIDIA_DRIVER_VERSIONS}"
-GPU_PLACEHOLDERS = (DRIVER_VERSIONS_PLACEHOLDER,)
+GPU_PLACEHOLDERS = (POLICY_VERSION_PLACEHOLDER, DRIVER_VERSIONS_PLACEHOLDER)
 
 # Azure vTPM PCRs are SHA-256, so 64 hex characters. Never confuse these with
 # the SNP report's launch measurement, which is base64 of 48 bytes: SEV-SNP
@@ -94,6 +97,23 @@ def validate_pcr_hex(field_name: str, value: object) -> str:
     if not isinstance(value, str) or not PCR_RE.fullmatch(value):
         raise ValueError(f"invalid or missing Azure vTPM PCR: {field_name}")
     return value
+
+
+def generate_policy_version_extension(policy_version: str | None) -> str:
+    """Emit the version as an extensions entry, or nothing without one.
+
+    Left out rather than given a sentinel, so a token never carries a value
+    that looks like a version but is not one.
+    """
+    if not policy_version:
+        return ""
+    return "\n".join([
+        "\t{",
+        '\t\t"name": "cohere.policy-version",',
+        '\t\t"key": -72000,', # private use in the CWT claims registry
+        f'\t\t"value": {json.dumps(policy_version)},',
+        "\t},",
+    ])
 
 
 def generate_driver_versions_block(versions: list[str]) -> str:
@@ -130,10 +150,13 @@ def generate_initdata_block(model: str, initdata_label: str, pcr8: str) -> str:
 def render_cpu_policy(
     image_blocks: list[str],
     initdata_blocks: list[str],
+    policy_version: str | None,
     output_path: Path,
 ) -> None:
     """Render the CPU policy, which is mandatory for every appraised peer."""
     policy = _substitute(CPU_TEMPLATE, CPU_PLACEHOLDERS, {
+        POLICY_VERSION_PLACEHOLDER:
+            generate_policy_version_extension(policy_version),
         IMAGE_PLACEHOLDER: "\n\n".join(image_blocks),
         INITDATA_PLACEHOLDER: "\n\n".join(initdata_blocks),
     })
@@ -152,7 +175,11 @@ def render_cpu_policy(
     )
 
 
-def render_gpu_policy(versions: list[str], output_path: Path) -> None:
+def render_gpu_policy(
+    driver_versions: list[str],
+    policy_version: str | None,
+    output_path: Path,
+) -> None:
     """Render the GPU policy, which is consulted per TEE class.
 
     Rendered whether or not any target has a GPU: Trustee treats a missing
@@ -160,10 +187,13 @@ def render_gpu_policy(versions: list[str], output_path: Path) -> None:
     GPU being appraised rather than fail.
     """
     policy = _substitute(GPU_TEMPLATE, GPU_PLACEHOLDERS, {
-        DRIVER_VERSIONS_PLACEHOLDER: generate_driver_versions_block(versions),
+        POLICY_VERSION_PLACEHOLDER:
+            generate_policy_version_extension(policy_version),
+        DRIVER_VERSIONS_PLACEHOLDER:
+            generate_driver_versions_block(driver_versions),
     })
 
-    if not versions:
+    if not driver_versions:
         print(
             "::warning::Trustee GPU policy accepts no driver version; "
             "it admits nothing"
@@ -173,7 +203,7 @@ def render_gpu_policy(versions: list[str], output_path: Path) -> None:
     _write(output_path, policy)
     print(
         f"Generated Trustee GPU policy "
-        f"(drivers={', '.join(versions) or 'none'}) -> {output_path}"
+        f"(drivers={', '.join(driver_versions) or 'none'}) -> {output_path}"
     )
 
 
@@ -205,6 +235,7 @@ class TrusteeRenderer:
 
     # Run configuration.
     output_dir: Path
+    policy_version: str | None
 
     # Per-run cache. The registers are a function of the image and the
     # initdata, so two targets sharing both measure once.
@@ -269,12 +300,18 @@ class TrusteeRenderer:
                     pcr8,
                 ))
 
-        render_cpu_policy(image_blocks, initdata_blocks, self.cpu_policy_file)
+        render_cpu_policy(
+            image_blocks,
+            initdata_blocks,
+            self.policy_version,
+            self.cpu_policy_file,
+        )
         render_gpu_policy(
             resolve_nvidia_driver_versions(
                 [resolved.target for resolved in targets],
                 context.artifacts_dir,
             ),
+            self.policy_version,
             self.gpu_policy_file,
         )
 

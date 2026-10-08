@@ -766,12 +766,23 @@ def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):
     workflow = (
         REPO_ROOT / ".github/workflows/release-policy.yaml"
     ).read_text()
-    assert "id: version" in workflow
-    assert workflow.count("${{ steps.version.outputs.version }}") == 2
     assert not any(
         line.strip().startswith("VERSION: ${{ inputs.version")
         for line in workflow.splitlines()
     )
+
+    # The predicate and the Trustee policies both state the version, and only
+    # the resolved one may reach either. Trustee would quietly drop it from
+    # every appraisal if the generate step stopped passing it.
+    resolved = "${{ steps.version.outputs.version }}"
+    steps = {
+        step.get("id") or step.get("name"): step
+        for step in _load_workflow("release-policy")["jobs"]["generate"]["steps"]
+    }
+    assert "version" in steps
+    assert steps["Initialize predicate"]["env"]["VERSION"] == resolved
+    assert steps["generate"]["uses"] == "./.github/actions/generate-policy"
+    assert steps["generate"]["with"].get("version") == resolved
 
 
 @pytest.mark.parametrize(
