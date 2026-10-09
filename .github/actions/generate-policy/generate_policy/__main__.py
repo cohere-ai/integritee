@@ -39,7 +39,10 @@ def build_renderers(output_dir: Path) -> dict[str, Renderer]:
             baselines_repo=os.environ["BASELINES_REPO"],
             output_dir=output_dir,
         ),
-        TrusteeRenderer.name: TrusteeRenderer(output_dir=output_dir),
+        TrusteeRenderer.name: TrusteeRenderer(
+            output_dir=output_dir,
+            policy_version=os.environ.get("INPUT_VERSION", ""),
+        ),
     }
 
 

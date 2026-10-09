@@ -57,6 +57,10 @@ trust_claims := {
 	"sourced-data": sourced_data,
 }
 
+extensions := [
+${POLICY_VERSION_EXTENSION}
+]
+
 gpu := input.nvidia
 
 # One entry per distinct driver version across the manifest's PodVM images.

@@ -17,6 +17,9 @@ inputs:
   predicate-file:
     description: "Path to predicate JSON file; read and updated in place with target data (optional)"
     required: false
+  version:
+    description: "Release version the Trustee policies report in every appraisal, left out of appraisals when unset"
+    required: false
 
 # The action names and places the files it writes, so a caller passes no
 # output path and reads every path back from here.
@@ -45,3 +48,4 @@ runs:
     INPUT_OUTPUT_ARTIFACTS_DIR: ${{ inputs.output-artifacts-dir }}
     INPUT_POLICY_TYPES: ${{ inputs.policy-types }}
     INPUT_PREDICATE_FILE: ${{ inputs.predicate-file }}
+    INPUT_VERSION: ${{ inputs.version }}

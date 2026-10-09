@@ -34,6 +34,8 @@ from generate_policy import trustee  # noqa: E402
 AFFIRMING = {"executables": 3, "hardware": 2, "configuration": 2}
 DENIED = {"executables": 33, "hardware": 97, "configuration": 36}
 
+POLICY_VERSION = "v1.2.3"
+
 
 def _claims(name: str) -> dict:
     """Load a claims fixture as a verifier would emit it."""
@@ -61,6 +63,7 @@ def _cpu_policy(
     tmp_path: Path,
     images: list[tuple[str, dict]],
     initdata: list[tuple[str, str]],
+    policy_version: str | None = POLICY_VERSION,
 ) -> Path:
     path = tmp_path / trustee.CPU_POLICY_FILE
     trustee.render_cpu_policy(
@@ -69,6 +72,7 @@ def _cpu_policy(
             trustee.generate_initdata_block(model, model[:12], pcr8)
             for model, pcr8 in initdata
         ],
+        policy_version,
         path,
     )
     return path
@@ -76,18 +80,24 @@ def _cpu_policy(
 
 def _gpu_policy(tmp_path: Path, versions: list[str]) -> Path:
     path = tmp_path / trustee.GPU_POLICY_FILE
-    trustee.render_gpu_policy(versions, path)
+    trustee.render_gpu_policy(versions, POLICY_VERSION, path)
     return path
 
 
-def _appraise(opa: str, policy: Path, claims: dict, tmp_path: Path) -> dict:
-    """Evaluate trust_claims against one set of claims."""
+def _appraise(
+    opa: str,
+    policy: Path,
+    claims: dict,
+    tmp_path: Path,
+    rule: str = "trust_claims",
+):
+    """Evaluate one rule, by default trust_claims, against a set of claims."""
     input_file = tmp_path / "input.json"
     input_file.write_text(json.dumps(claims))
     result = subprocess.run(
         [
             opa, "eval", "--data", str(policy), "--input", str(input_file),
-            "data.policy.trust_claims",
+            f"data.policy.{rule}",
         ],
         capture_output=True,
         text=True,
@@ -362,6 +372,23 @@ def test_hostile_pcr_values_cannot_reach_the_policy(value):
         trustee.validate_pcr_hex("pcr4", value)
 
 
+@pytest.mark.parametrize(
+    "version", [POLICY_VERSION, None, 'v1"\n}]\ndefault hardware := 2\n#'],
+)
+def test_policy_reports_its_version_as_trustee_parses_it(opa, tmp_path, version):
+    """Trustee copies extensions into each appraisal, so the token names the release.
+
+    Omitted without a version, and quoted rather than validated, so a hostile
+    one stays a string instead of becoming Rego.
+    """
+    policy = _cpu_policy(tmp_path, [], [], version)
+
+    assert _appraise(opa, policy, {}, tmp_path, "extensions") == (
+        [{"name": "cohere.policy-version", "key": -72000, "value": version}]
+        if version else []
+    )
+
+
 def test_rendered_lines_stay_well_under_the_regorus_column_cap(tmp_path):
     """regorus rejects a line over 1024 columns in the lexer, before parsing.
 
@@ -397,8 +424,9 @@ def test_only_platforms_with_a_section_are_appraised(machine, appraisable):
     because a vTPM platform emits PCRs alongside the TD quote, so the key
     cannot be inferred from the platform pair.
     """
-    reason = trustee.TrusteeRenderer(output_dir=Path("/nonexistent")) \
-        .cannot_appraise(machine["platform"], machine)
+    reason = trustee.TrusteeRenderer(
+        output_dir=Path("/nonexistent"), policy_version=POLICY_VERSION,
+    ).cannot_appraise(machine["platform"], machine)
 
     assert (reason is None) is appraisable
 
@@ -454,7 +482,9 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
         ]
     ))
     predicate = tmp_path / "predicate.json"
-    renderer = trustee.TrusteeRenderer(output_dir=tmp_path / "policies")
+    renderer = trustee.TrusteeRenderer(
+        output_dir=tmp_path / "policies", policy_version=POLICY_VERSION,
+    )
 
     generate.generate_policy(
         manifest_file=manifest,
