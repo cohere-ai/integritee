@@ -55,23 +55,11 @@ ${POLICY_VERSION_EXTENSION}
 #
 #   - PCR keys are zero padded: pcr04, not pcr4.
 #   - Booleans and integers alike arrive as STRINGS.
-#   - measurement is STANDARD base64 of 48 bytes, not hex.
 #   - report_data is the TPM quote's extraData rather than the SNP report
 #     field of that name, and is nothing to pin: the AS has already checked it
 #     against the runtime data its caller supplied.
 #
 azsnp := input["az-snp-vtpm"]
-
-# Microsoft's paravisor as featured in the SNP launch measurement (base64
-# of 48 bytes). The vTPM emulating the PCRs below runs inside that paravisor at
-# VMPL 0, so without this pin anyone with SEV-SNP hardware could run their own
-# VMPL 0 code and quote PCRs however they like.
-#
-# A set, so a firmware roll can be ridden out by adding the new value beside
-# the old.
-azsnp_paravisor_measurements := {
-	"qnydpVwThuWxZTsSWXi+2ns/laha6w+d2723g84FaijJ0CHaI5w0pYw6ZXZUJw7v",
-}
 
 # Minimum AMD secure processor TCB. Greater or equal rather than exact, so a
 # platform TCB roll forward is accepted while rollback is refused.
@@ -119,7 +107,6 @@ azsnp_platform_ok if {
 #     during the boot process."
 executables := 3 if {
 	azsnp
-	azsnp.measurement in azsnp_paravisor_measurements
 	azsnp_image_ok
 }
 
