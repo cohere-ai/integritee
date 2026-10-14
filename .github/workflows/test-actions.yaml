@@ -12,7 +12,7 @@ on:
       - "attestation-policy/initdata/**"
 
 # Runs on pull requests, so it must not use release secrets
-# (CC_POLICY_APP_*, ITA_ADMIN_API_KEY, ITA_API_URL). Those live in the
+# (CC_POLICY_APP_*, ITA_ADMIN_API_KEY). Those live in the
 # `release` environment. Tests use the read-only CC reader app
 # (CC_POLICY_READER_APP_*) and a dev ITA tenant.
 permissions:
@@ -226,7 +226,7 @@ jobs:
           policy-file: test-policy.rego
           policy-name: ci-test-${{ github.run_id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
-          ita-api-url: ${{ vars.ITA_DEV_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Fetch created policy
         id: fetch-created
@@ -234,7 +234,7 @@ jobs:
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
-          ita-api-url: ${{ vars.ITA_DEV_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Assert created policy matches
         run: diff test-policy.rego "${{ steps.fetch-created.outputs.policy-file }}"
@@ -252,7 +252,7 @@ jobs:
           policy-id: ${{ steps.create.outputs.policy-id }}
           policy-name: ci-test-${{ github.run_id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
-          ita-api-url: ${{ vars.ITA_DEV_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Fetch updated policy
         id: fetch-updated
@@ -260,7 +260,7 @@ jobs:
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
-          ita-api-url: ${{ vars.ITA_DEV_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Assert updated policy matches
         run: diff test-policy.rego "${{ steps.fetch-updated.outputs.policy-file }}"
@@ -272,7 +272,7 @@ jobs:
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
-          ita-api-url: ${{ vars.ITA_DEV_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Delete again (idempotent, should report not found)
         id: delete-second
@@ -281,7 +281,7 @@ jobs:
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
-          ita-api-url: ${{ vars.ITA_DEV_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Assert delete outputs
         if: always()

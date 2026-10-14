@@ -200,7 +200,7 @@ jobs:
           policy-id: ${{ env.ITA_POLICY_ID }}
           policy-name: ${{ env.ITA_POLICY_NAME }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
           predicate-file: predicate.json
 
       - name: Fetch uploaded policy from ITA
@@ -209,7 +209,7 @@ jobs:
         with:
           policy-id: ${{ env.ITA_POLICY_ID }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Verify uploaded policy
         run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"
