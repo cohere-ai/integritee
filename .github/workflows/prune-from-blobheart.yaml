@@ -89,7 +89,8 @@ jobs:
   publish:
     needs: prune
     if: >-
-      inputs.create_pr && needs.prune.outputs.changed == 'true'
+      inputs.create_pr && needs.prune.outputs.changed == 'true' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: release
     permissions:
