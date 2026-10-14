@@ -3,8 +3,9 @@
 #
 # generate: builds the merged manifest and diff. Authenticates to read
 # blobheart and the current manifest, but does not write to integritee.
-# publish: pushes the merged manifest to main. Gated by the `release`
-# environment, so it runs from main or an allowed branch.
+# publish: pushes the merged manifest to main. Runs only for blobheart's
+# repository_dispatch sent by the CC policy app, and is gated by the `release`
+# environment (main only). A manual dispatch runs generate only (a dry run).
 name: Add from Blobheart
 run-name: Blobheart policy ${{ github.event.client_payload.correlation_id || github.run_id }}
 
@@ -17,11 +18,6 @@ on:
         description: "Space-separated blobheart commit SHAs to derive manifests from"
         required: true
         type: string
-      publish:
-        description: "Commit the merged manifest to main (main only)"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -47,12 +43,12 @@ jobs:
           persist-credentials: false
 
       # Read-only token for blobheart + baselines. Cannot write to integritee.
-      - name: Mint GitHub App token
+      - name: Mint CC reader app token (read-only)
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: cohere-cc-baselines,blobheart
 
@@ -108,13 +104,15 @@ jobs:
 
   publish:
     needs: generate
-    # A repository_dispatch runs publish unconditionally. A manual dispatch
-    # requires the publish flag to be selected, otherwise it stops after
-    # generate. The environment gates the CC_POLICY_APP token to main.
+    # Only blobheart's dispatch, sent with the CC policy app token, publishes.
+    # A person calling the dispatch API shows up as their own login and is
+    # skipped. repository_dispatch always runs the default-branch workflow, and
+    # the release environment hands out the app key only on main.
     if: >-
       needs.generate.outputs.changed == 'true' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'repository_dispatch' || inputs.publish)
+      github.event_name == 'repository_dispatch' &&
+      github.actor == 'cohere-cc-policy-ci[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: release
@@ -145,11 +143,11 @@ jobs:
 
       # Write token. Only available here because this job has
       # environment: release; generate above cannot read these secrets.
-      - name: Mint Integritee write token
+      - name: Mint CC policy app token (integritee write)
         id: write-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          client-id: ${{ vars.CC_POLICY_APP_CLIENT_ID }}
           private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: integritee

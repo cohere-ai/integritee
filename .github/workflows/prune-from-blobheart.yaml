@@ -89,7 +89,8 @@ jobs:
   publish:
     needs: prune
     if: >-
-      inputs.create_pr && needs.prune.outputs.changed == 'true'
+      inputs.create_pr && needs.prune.outputs.changed == 'true' &&
+      github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -116,11 +117,11 @@ jobs:
 
       # Write token. Only available here because this job has
       # environment: release; prune above cannot read these secrets.
-      - name: Mint Integritee write token
+      - name: Mint CC policy app token (integritee write)
         id: write-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          client-id: ${{ vars.CC_POLICY_APP_CLIENT_ID }}
           private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: integritee

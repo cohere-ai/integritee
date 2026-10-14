@@ -11,6 +11,10 @@ on:
       - "attestation-policy/policy-manifest.yaml"
       - "attestation-policy/initdata/**"
 
+# Runs on pull requests, so it must not use release secrets
+# (CC_POLICY_APP_*, ITA_ADMIN_API_KEY). Those live in the
+# `release` environment. Tests use the read-only CC reader app
+# (CC_POLICY_READER_APP_*) and a dev ITA tenant.
 permissions:
   contents: read
   packages: read
@@ -22,12 +26,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
-      - name: Mint GitHub App token
+      - name: Mint CC reader app token (read-only)
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: cohere-cc-baselines
 
@@ -221,16 +225,16 @@ jobs:
         with:
           policy-file: test-policy.rego
           policy-name: ci-test-${{ github.run_id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Fetch created policy
         id: fetch-created
         uses: ./.github/actions/fetch-ita-policy
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Assert created policy matches
         run: diff test-policy.rego "${{ steps.fetch-created.outputs.policy-file }}"
@@ -247,16 +251,16 @@ jobs:
           policy-file: test-policy.rego
           policy-id: ${{ steps.create.outputs.policy-id }}
           policy-name: ci-test-${{ github.run_id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Fetch updated policy
         id: fetch-updated
         uses: ./.github/actions/fetch-ita-policy
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Assert updated policy matches
         run: diff test-policy.rego "${{ steps.fetch-updated.outputs.policy-file }}"
@@ -267,8 +271,8 @@ jobs:
         uses: ./.github/actions/delete-ita-policy
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Delete again (idempotent, should report not found)
         id: delete-second
@@ -276,8 +280,8 @@ jobs:
         uses: ./.github/actions/delete-ita-policy
         with:
           policy-id: ${{ steps.create.outputs.policy-id }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Assert delete outputs
         if: always()
@@ -298,12 +302,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
-      - name: Mint GitHub App token
+      - name: Mint CC reader app token (read-only)
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: blobheart
 
@@ -426,12 +430,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
-      - name: Mint GitHub App token
+      - name: Mint CC reader app token (read-only)
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
-          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: blobheart
 

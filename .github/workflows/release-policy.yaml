@@ -3,8 +3,9 @@
 #
 # generate: builds and validates policies. It authenticates to GCP/GHCR to
 # measure images but does not upload to ITA or create a GitHub release.
-# publish: only on push to main (or explicit dispatch), gated by the `release`
-# environment, with access to ITA and Sigstore credentials.
+# publish: only on push to main, gated by the `release` environment, with
+# access to ITA. A manual dispatch runs generate only (a dry run); to publish,
+# merge the change to main.
 name: Release Policy
 
 on:
@@ -24,11 +25,6 @@ on:
         description: "Reason for this release"
         required: false
         type: string
-      publish:
-        description: "Upload to ITA and create the GitHub release (main only)"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -86,12 +82,12 @@ jobs:
       - name: Configure Docker for Artifact Registry
         run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
 
-      - name: Mint GitHub App token
+      - name: Mint CC reader app token (read-only)
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.GH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: cohere-cc-baselines,blobheart
 
@@ -149,7 +145,8 @@ jobs:
 
   publish:
     needs: generate
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish)
+    # Only a push to main publishes; the release environment is limited to main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: release
     permissions:
@@ -181,11 +178,11 @@ jobs:
         with:
           name: attestation-release-assets
 
-      - name: Mint Integritee release token
+      - name: Mint CC policy app token (integritee write)
         id: release-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
         with:
-          client-id: ${{ secrets.CC_POLICY_APP_CLIENT_ID }}
+          client-id: ${{ vars.CC_POLICY_APP_CLIENT_ID }}
           private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
           owner: cohere-ai
           repositories: integritee
@@ -203,7 +200,7 @@ jobs:
           policy-id: ${{ env.ITA_POLICY_ID }}
           policy-name: ${{ env.ITA_POLICY_NAME }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
           predicate-file: predicate.json
 
       - name: Fetch uploaded policy from ITA
@@ -212,7 +209,7 @@ jobs:
         with:
           policy-id: ${{ env.ITA_POLICY_ID }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ secrets.ITA_API_URL }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Verify uploaded policy
         run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"
