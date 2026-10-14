@@ -3,8 +3,9 @@
 #
 # generate: builds and validates policies. It authenticates to GCP/GHCR to
 # measure images but does not upload to ITA or create a GitHub release.
-# publish: only on push to main (or explicit dispatch), gated by the `release`
-# environment, with access to ITA and Sigstore credentials.
+# publish: only on push to main, gated by the `release` environment, with
+# access to ITA and Sigstore credentials. A manual dispatch runs generate only
+# (a dry run); to publish, merge the change to main.
 name: Release Policy
 
 on:
@@ -24,11 +25,6 @@ on:
         description: "Reason for this release"
         required: false
         type: string
-      publish:
-        description: "Upload to ITA and create the GitHub release (main only)"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -149,7 +145,8 @@ jobs:
 
   publish:
     needs: generate
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || inputs.publish)
+    # Only a push to main publishes; the release environment is limited to main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: release
     permissions:

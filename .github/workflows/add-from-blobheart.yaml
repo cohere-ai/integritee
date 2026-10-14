@@ -3,8 +3,9 @@
 #
 # generate: builds the merged manifest and diff. Authenticates to read
 # blobheart and the current manifest, but does not write to integritee.
-# publish: pushes the merged manifest to main. Gated by the `release`
-# environment, so it runs from main or an allowed branch.
+# publish: pushes the merged manifest to main. Runs only for blobheart's
+# repository_dispatch sent by the CC policy app, and is gated by the `release`
+# environment (main only). A manual dispatch runs generate only (a dry run).
 name: Add from Blobheart
 run-name: Blobheart policy ${{ github.event.client_payload.correlation_id || github.run_id }}
 
@@ -17,11 +18,6 @@ on:
         description: "Space-separated blobheart commit SHAs to derive manifests from"
         required: true
         type: string
-      publish:
-        description: "Commit the merged manifest to main (main only)"
-        required: false
-        type: boolean
-        default: false
 
 permissions:
   contents: read
@@ -108,13 +104,15 @@ jobs:
 
   publish:
     needs: generate
-    # A repository_dispatch runs publish unconditionally. A manual dispatch
-    # requires the publish flag to be selected, otherwise it stops after
-    # generate. The environment gates the CC_POLICY_APP token to main.
+    # Only blobheart's dispatch, sent with the CC policy app token, publishes.
+    # A person calling the dispatch API shows up as their own login and is
+    # skipped. repository_dispatch always runs the default-branch workflow, and
+    # the release environment hands out the app key only on main.
     if: >-
       needs.generate.outputs.changed == 'true' &&
       github.ref == 'refs/heads/main' &&
-      (github.event_name == 'repository_dispatch' || inputs.publish)
+      github.event_name == 'repository_dispatch' &&
+      github.actor == 'cohere-cc-policy-ci[bot]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: release
