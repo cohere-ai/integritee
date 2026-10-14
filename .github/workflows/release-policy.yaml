@@ -4,8 +4,8 @@
 # generate: builds and validates policies. It authenticates to GCP/GHCR to
 # measure images but does not upload to ITA or create a GitHub release.
 # publish: only on push to main, gated by the `release` environment, with
-# access to ITA and Sigstore credentials. A manual dispatch runs generate only
-# (a dry run); to publish, merge the change to main.
+# access to ITA. A manual dispatch runs generate only (a dry run); to publish,
+# merge the change to main.
 name: Release Policy
 
 on:
