@@ -19,6 +19,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: r4f-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -38,6 +39,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: r4p-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -57,6 +59,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: cat2508rws-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -76,6 +79,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: cmp-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -95,6 +99,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: nmc2606-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -114,6 +119,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: qw3-4b-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -190,6 +196,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: mstr3-3b-r-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -209,6 +216,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: dvs2-24b-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -228,6 +236,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: phi4m-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -247,6 +256,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: gm4-26b-a4b-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -266,6 +276,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: qw3-5-35b-a3b-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -285,6 +296,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: qw36-27b-l
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -304,6 +316,7 @@ targets:
   sources:
   - f672d2b87bb90404395fb790da135eab5b35a753
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: e4-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -313,6 +326,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: r4f-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -322,6 +336,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: r4p-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -331,6 +346,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: cat2508rws-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -340,6 +356,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: cmp-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -349,6 +366,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: nmc2606-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -358,6 +376,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: qw3-4b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -385,6 +404,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: qw36-27b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -394,6 +414,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: qw38-27b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -403,6 +424,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: mstr3-3b-r-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -412,6 +434,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: dvs2-24b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -421,6 +444,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: phi4m-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -430,6 +454,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: gm4-26b-a4b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -439,6 +464,7 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+  - 8841e07a52132566171f34305723c41bed2446b3
 - model: gptoss20b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -448,3 +474,57 @@ targets:
   added: '2026-10-14'
   sources:
   - 0a98a46e0945458eb923ba9d5982e3247e93a0b2
+- model: qw3-4b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-1
+  initdata_file: initdata/4334906a598fc17100f324c13311a0b736c8edf700aa7e2daf111c6081bb8db6eb921f7aa2e978618c3876f6d3776b3d.toml
+  initdata_sha384: 4334906a598fc17100f324c13311a0b736c8edf700aa7e2daf111c6081bb8db6eb921f7aa2e978618c3876f6d3776b3d
+  added: '2026-10-15'
+  sources:
+  - 8841e07a52132566171f34305723c41bed2446b3
+- model: qw3-4b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-1
+  initdata_file: initdata/27a309042c8d3992098269786ca8f0d5fd066d80264ea0f052ddcb42dc36770933f6d74a7799bbec7bcfe133061841de.toml
+  initdata_sha384: 27a309042c8d3992098269786ca8f0d5fd066d80264ea0f052ddcb42dc36770933f6d74a7799bbec7bcfe133061841de
+  added: '2026-10-15'
+  sources:
+  - 8841e07a52132566171f34305723c41bed2446b3
+- model: qw3-5-4b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-1
+  initdata_file: initdata/09ad5ed81c6dcfe893a3f21cb98b236f31f5e63812f53d823aae37548e11be2c1a5079cc5901a4a220c802aae89b8fef.toml
+  initdata_sha384: 09ad5ed81c6dcfe893a3f21cb98b236f31f5e63812f53d823aae37548e11be2c1a5079cc5901a4a220c802aae89b8fef
+  added: '2026-10-15'
+  sources:
+  - 8841e07a52132566171f34305723c41bed2446b3
+- model: qw3-5-4b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-1
+  initdata_file: initdata/63bd5fce4d095c043ba2ffb953f1f096c40feba59ef23206f5dc12a6dcaaa7877d0dcc70598b025963a0063c505741dc.toml
+  initdata_sha384: 63bd5fce4d095c043ba2ffb953f1f096c40feba59ef23206f5dc12a6dcaaa7877d0dcc70598b025963a0063c505741dc
+  added: '2026-10-15'
+  sources:
+  - 8841e07a52132566171f34305723c41bed2446b3
+- model: gptoss20b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-1
+  initdata_file: initdata/efd12dc1e2473cc61ac83ae099f5ba82137fc476608de74059fcf6ef127a729d3011737edc9e1500c21fa271e65c3260.toml
+  initdata_sha384: efd12dc1e2473cc61ac83ae099f5ba82137fc476608de74059fcf6ef127a729d3011737edc9e1500c21fa271e65c3260
+  added: '2026-10-15'
+  sources:
+  - 8841e07a52132566171f34305723c41bed2446b3
+- model: gptoss20b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-1
+  initdata_file: initdata/d62b289ac7eea1cbdaef2592cfeb0f46048c455769cc491f5107b53109ab270d5bc68fe0f724c24081b90d234e90fe18.toml
+  initdata_sha384: d62b289ac7eea1cbdaef2592cfeb0f46048c455769cc491f5107b53109ab270d5bc68fe0f724c24081b90d234e90fe18
+  added: '2026-10-15'
+  sources:
+  - 8841e07a52132566171f34305723c41bed2446b3
