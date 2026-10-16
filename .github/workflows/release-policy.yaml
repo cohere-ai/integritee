@@ -18,7 +18,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (empty = next v0.0.1aN)"
+        description: "Release version (empty = next patch vX.Y.Z)"
         required: false
         type: string
       reason:

@@ -90,7 +90,7 @@ choose which services to generate for and pass no output path:
     output-artifacts-dir: artifacts
     policy-types: ita trustee    # space- or comma-separated: ita, trustee
     predicate-file: predicate.json
-    version: v0.0.1a72           # optional, reported in Trustee appraisals
+    version: v0.0.2              # optional, reported in Trustee appraisals
 ```
 
 The action writes to `generated-policies/` in the workspace and reports
