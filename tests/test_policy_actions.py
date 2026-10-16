@@ -786,6 +786,25 @@ def test_resolved_release_version_is_a_step_output(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize(
+    ("tags", "expected"),
+    [
+        ([], "v0.0.1"),
+        (["v0.0.1a87", "v0.0.1a88"], "v0.0.1"),
+        (["v0.0.1a88", "v0.0.1"], "v0.0.2"),
+        (["v0.0.9", "v0.0.10", "v0.0.1a99", "actions-v9.9.9"], "v0.0.11"),
+        (["v0.1.3", "v0.0.20"], "v0.1.4"),
+    ],
+)
+def test_next_policy_release_version(tags, expected):
+    manage = load_action(
+        "release_manage_next",
+        ".github/workflows/release-policy/manage.py",
+    )
+
+    assert manage.next_version_from(tags) == expected
+
+
+@pytest.mark.parametrize(
     ("tags", "sha_tags", "expected"),
     [
         ([], [], ("actions-v1.0.0", True)),

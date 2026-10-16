@@ -10,9 +10,10 @@ import re
 import shutil
 import subprocess
 import tarfile
+from collections.abc import Iterable
 from pathlib import Path
 
-ALPHA_TAG_RE = re.compile(r"v0\.0\.1a([0-9]+)")
+RELEASE_TAG_RE = re.compile(r"v([0-9]+)\.([0-9]+)\.([0-9]+)")
 VERSION_RE = re.compile(r"v[0-9A-Za-z][0-9A-Za-z._+-]*")
 UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
@@ -31,8 +32,25 @@ def run(*command: str, capture_output: bool = False) -> str:
     return result.stdout.strip() if capture_output else ""
 
 
+def next_version_from(tags: Iterable[str]) -> str:
+    """Return the patch release after the highest vX.Y.Z tag.
+
+    The legacy v0.0.1aN alpha tags are pre-releases of v0.0.1, so with no
+    stable tag yet the first release is v0.0.1.
+    """
+    versions = [
+        tuple(map(int, match.groups()))
+        for tag in tags
+        if (match := RELEASE_TAG_RE.fullmatch(tag))
+    ]
+    if not versions:
+        return "v0.0.1"
+    major, minor, patch = max(versions)
+    return f"v{major}.{minor}.{patch + 1}"
+
+
 def next_version() -> str:
-    """Return the next v0.0.1 alpha release version."""
+    """Return the next patch release version."""
     releases = json.loads(
         run(
             "gh",
@@ -45,12 +63,7 @@ def next_version() -> str:
             capture_output=True,
         )
     )
-    versions = [
-        int(match.group(1))
-        for release in releases
-        if (match := ALPHA_TAG_RE.fullmatch(release["tagName"]))
-    ]
-    return f"v0.0.1a{max(versions, default=0) + 1}"
+    return next_version_from(release["tagName"] for release in releases)
 
 
 def resolve_version(args: argparse.Namespace) -> None:
