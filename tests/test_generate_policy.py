@@ -386,10 +386,12 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     assert policy.count("matches_tdx if {") == 1
     assert policy.count("matches_tdx_platform if {") == 2
     assert policy.count("matches_tdx_workload if {") == 1
-    assert "# Platform baseline: 111111111111/v1" in policy
-    assert "# Platform baseline: 111111111111/v2" in policy
-    assert "# Platform baseline: 111111111111/v3" not in policy
-    assert "# Model: cmp-l (Initdata: unknown)" in policy
+    # v3 repeats v2's platform values, so only two platform rules exist; the
+    # shared RTMR3 is one set entry however many baselines carry it.
+    assert policy.count('tdx.tdx_rtmr1 == "' + "c" * 96 + '"') == 1
+    assert policy.count('tdx.tdx_rtmr1 == "' + "f" * 96 + '"') == 1
+    assert policy.count('"' + "e" * 96 + '"') == 1
+    assert "accepted_rtmr3[input.tdx.tdx_rtmr3]" in policy
     assert 'accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]' in policy
     assert '        "580.159.04"\n' in policy
     assert ita.EMPTY_POLICY_HEADER not in policy
@@ -650,6 +652,76 @@ def test_gpu_driver_version_must_be_one_the_policy_lists(
         assert value is None
 
 
+def _workload_target(index: int) -> dict:
+    target = _tdx_target()
+    target["model"] = f"model-{index}"
+    target["measurements"] = {**target["measurements"], "rtmr3": f"{index:096x}"}
+    target["baseline_variants"][0]["measurements"] = target["measurements"]
+    return target
+
+
+@pytest.mark.parametrize(
+    "rtmr3, admitted",
+    [(f"{0:096x}", True), (f"{2:096x}", True), (f"{9:096x}", False)],
+    ids=["first", "last", "unlisted"],
+)
+def test_workload_admits_exactly_the_listed_rtmr3_values(
+    tmp_path, opa, rtmr3, admitted,
+):
+    """The set replaced one == rule per value, so it has to enforce both ways.
+
+    An unlisted value leaves the indexed lookup undefined, which fails the
+    body; the default then resolves the rule to false.
+    """
+    input_file = tmp_path / "input.json"
+    input_file.write_text(json.dumps({"tdx": {"tdx_rtmr3": rtmr3}}))
+
+    value = _opa_eval(
+        opa,
+        _render_module(tmp_path, [_workload_target(i) for i in range(3)]),
+        "data.integritee.matches_tdx_workload",
+        input_file,
+    )
+
+    assert value is admitted
+
+
+def test_uploaded_policy_carries_no_template_comments(tmp_path):
+    output = tmp_path / "policy.rego"
+
+    ita.render_policy([_tdx_target()], ["580.159.04"], output)
+
+    lines = output.read_text().splitlines()
+    assert lines, "policy is empty"
+    assert not [line for line in lines if line.lstrip().startswith("#")]
+    assert all(line.strip() for line in lines), "blank lines remain"
+    # The template still documents itself where it is maintained.
+    assert "# ITA TDX+NVGPU appraisal policy." in ita.TEMPLATE.read_text()
+
+
+def test_refuses_to_write_a_policy_ita_would_reject(tmp_path):
+    output = tmp_path / "policy.rego"
+    # One distinct set entry per target; enough to cross the limit.
+    targets = [_workload_target(i) for i in range(400)]
+
+    with pytest.raises(ita.PolicyTooLargeError, match="Retire older GCP"):
+        ita.render_policy(targets, ["580.159.04"], output)
+
+    assert not output.exists()
+
+
+def test_policy_has_room_for_well_over_today_s_gcp_targets(tmp_path):
+    """v0.0.1 carried 48 GCP RTMR3s in 17,846 bytes, near ITA's limit. The set
+    form has to leave room for growth, not just fit today's targets."""
+    output = tmp_path / "policy.rego"
+
+    ita.render_policy(
+        [_workload_target(i) for i in range(120)], ["580.159.04"], output,
+    )
+
+    assert len(output.read_bytes()) <= ita.MAX_POLICY_BYTES
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -702,7 +774,7 @@ def test_platform_match_requires_every_measurement(missing_field):
         ValueError,
         match=f"invalid or missing TDX measurement: {missing_field}",
     ):
-        ita.generate_platform_match_block("baseline", measurements)
+        ita.generate_platform_match_block(measurements)
 
 
 def test_measurement_values_cannot_inject_rego():
@@ -714,9 +786,9 @@ def test_measurement_values_cannot_inject_rego():
     measurements["rtmr1"] = injected
 
     with pytest.raises(ValueError, match="TDX measurement: rtmr1"):
-        ita.generate_platform_match_block("baseline", measurements)
+        ita.generate_platform_match_block(measurements)
     with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
-        ita.generate_workload_match_block("model", "initdata", injected)
+        ita.generate_workload_match_block(["a" * 96, injected])
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -873,9 +945,11 @@ def test_generate_policy_measures_and_records_each_baseline(
     policy_text = policy.read_text()
     assert policy_text.count("matches_tdx if {") == 1
     assert policy_text.count("matches_tdx_platform if {") == 2
-    assert policy_text.count("matches_tdx_workload if {") == 2
-    assert "# Model: cmp-l (Initdata:" in policy_text
-    assert "# Model: cmp-l-old (Initdata:" in policy_text
+    # Both models' RTMR3s land in the one workload rule's set.
+    assert policy_text.count("matches_tdx_workload if {") == 1
+    for item in predicate_targets:
+        rtmr3 = item["measurements"]["rtmr3"]
+        assert f'        "{rtmr3}"' in policy_text, item["model"]
 
 
 class _StubRenderer:
