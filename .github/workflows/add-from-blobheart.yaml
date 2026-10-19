@@ -74,9 +74,13 @@ jobs:
           base: attestation-policy/policy-manifest.yaml
           new: ${{ steps.derive.outputs.manifest-files }}
 
+      # Keeps only the newest three blobheart sources on GCP targets. Each one
+      # adds its targets' workload rules to the single ITA policy, which ITA
+      # rejects over 20 KB. Needs the token to order sources by blobheart main.
       - name: Update policy manifest
         id: changes
         env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           MERGED_MANIFEST: ${{ steps.merge.outputs.manifest-file }}
           ADDED_TARGETS: ${{ steps.merge.outputs.added }}
         run: >-
@@ -86,6 +90,7 @@ jobs:
           --initdata-source "${{ steps.derive.outputs.initdata-dir }}"
           --initdata-dir attestation-policy/initdata
           --added "$ADDED_TARGETS"
+          --retain gcp=3
 
       - name: Validate policy manifest update
         if: steps.changes.outputs.changed == 'true'

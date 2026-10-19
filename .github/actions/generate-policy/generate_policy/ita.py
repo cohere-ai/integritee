@@ -60,6 +60,17 @@ EMPTY_POLICY_HEADER = """\
 
 """
 
+# ITA rejects a larger policy at upload: "Policy size should not exceed 20kb".
+# Checked at render so a release fails before it reaches ITA. Each GCP
+# blobheart source the manifest keeps adds a workload rule per target, which is
+# why add-from-blobheart retains only the newest three. ITA does not say whether
+# its kb is 1000 or 1024 bytes, so this takes the stricter reading.
+MAX_POLICY_BYTES = 20_000
+
+
+class PolicyTooLargeError(ValueError):
+    pass
+
 
 def validate_measurement(field: str, value: object) -> str:
     if not isinstance(value, str) or not MEASUREMENT_RE.fullmatch(value):
@@ -202,6 +213,15 @@ def render_policy(
         print("::warning::ITA policy matched no TDX targets; it admits nothing")
         policy = EMPTY_POLICY_HEADER + policy
 
+    size = len(policy.encode())
+    if size > MAX_POLICY_BYTES:
+        raise PolicyTooLargeError(
+            f"ITA policy is {size} bytes, over ITA's {MAX_POLICY_BYTES}-byte "
+            f"limit ({len(workload_blocks)} workload rules from "
+            f"{len(targets)} target(s)). Retire older GCP blobheart sources "
+            "with prune-from-blobheart."
+        )
+
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(policy)
 
@@ -211,7 +231,7 @@ def render_policy(
         f"from {len(targets)} target(s): "
         f"{', '.join(model_names) or 'none'} "
         f"(drivers={', '.join(nv_driver_versions) or 'none'}"
-        f") -> {output_path}"
+        f") -> {output_path} ({size}/{MAX_POLICY_BYTES} bytes)"
     )
 
 
