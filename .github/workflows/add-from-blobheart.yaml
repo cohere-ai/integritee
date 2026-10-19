@@ -76,7 +76,12 @@ jobs:
 
       # Keeps only the newest three blobheart sources on GCP targets. Each one
       # adds its targets' workload rules to the single ITA policy, which ITA
-      # rejects over 20 KB. Needs the token to order sources by blobheart main.
+      # rejects over 20 KB. A source production or staging still serves, or
+      # served one geofence deploy ago, is kept beyond that, so a stalled or
+      # rolled-back deploy keeps attesting. The token orders sources by
+      # blobheart main and reads blobheart's deployments and their jobs, so the
+      # reader app needs deployments:read and actions:read on blobheart;
+      # without them this step retires nothing and says so.
       - name: Update policy manifest
         id: changes
         env:
@@ -91,6 +96,7 @@ jobs:
           --initdata-dir attestation-policy/initdata
           --added "$ADDED_TARGETS"
           --retain gcp=3
+          --protect-deployed production staging
 
       - name: Validate policy manifest update
         if: steps.changes.outputs.changed == 'true'
