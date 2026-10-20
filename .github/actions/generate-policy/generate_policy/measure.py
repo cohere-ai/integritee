@@ -20,6 +20,15 @@ def compute_initdata_rtmr3(initdata: bytes) -> str:
     return hashlib.sha384(bytes(48) + initdata_digest).hexdigest()
 
 
+def compute_initdata_pcr8(initdata: bytes) -> str:
+    """Compute the single Azure vTPM PCR 8 extend performed for CoCo initdata.
+
+    PCR 8 is SHA-256, so the sha384 digest is cut to its first 32 bytes.
+    """
+    initdata_digest = hashlib.sha384(initdata).digest()
+    return hashlib.sha256(bytes(32) + initdata_digest[:32]).hexdigest()
+
+
 def resolve_initdata(target: dict, manifest_file: Path) -> bytes:
     """Load and verify file-backed target initdata."""
     if "initdata_b64" in target:
