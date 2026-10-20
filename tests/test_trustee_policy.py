@@ -319,6 +319,63 @@ def test_gpu_policy_denies_a_revoked_certificate(
     assert _appraise(opa, policy, gpu_claims, tmp_path)[denied] == DENIED[denied]
 
 
+@pytest.fixture
+def mismatch_claims(gpu_claims) -> dict:
+    """The Azure index 9 firmware mismatch as NRAS reports it in prod."""
+    gpu = gpu_claims["nvidia"]
+    del gpu["secboot"], gpu["dbgstat"]
+    gpu["measres"] = "fail"
+    gpu["x-nvidia-overall-att-result"] = False
+    gpu["x-nvidia-mismatch-measurement-records"] = [{
+        "index": 9,
+        "measurementSource": "Firmware",
+        "goldenSize": 48,
+        "goldenValue": "059b32e712a153f490dbfb7976a9e275d789e28bd4803c357def2b6123327c430526bfaecc200f496d4e149fc5eade03",
+        "runtimeSize": 48,
+        "runtimeValue": "a88ad47656c234338b2bc2055d04d61e07f08f2deecab303f2f7309fdeae239728d4ec1fa0279eb36c6ab782a289bdbd",
+    }]
+    return gpu_claims
+
+
+def test_gpu_policy_waives_the_azure_firmware_mismatch(
+    opa,
+    tmp_path,
+    mismatch_claims,
+):
+    policy = _gpu_policy(tmp_path, ["580.173.02"])
+
+    appraised = _appraise(opa, policy, mismatch_claims, tmp_path)
+
+    assert {k: appraised[k] for k in AFFIRMING} == AFFIRMING
+
+
+@pytest.mark.parametrize(
+    "mutate, denied",
+    [
+        (lambda g: g["x-nvidia-mismatch-measurement-records"][0].update(
+            runtimeValue="0" * 96), "executables"),
+        (lambda g: g["x-nvidia-mismatch-measurement-records"][0].update(
+            index=7), "executables"),
+        (lambda g: g["x-nvidia-mismatch-measurement-records"].append(
+            dict(g["x-nvidia-mismatch-measurement-records"][0], index=10)),
+         "executables"),
+        (lambda g: g.update(dbgstat="enabled"), "configuration"),
+        (lambda g: g.update(secboot=False), "configuration"),
+    ],
+)
+def test_gpu_policy_firmware_waiver_is_narrow(
+    opa,
+    tmp_path,
+    mismatch_claims,
+    mutate,
+    denied,
+):
+    mutate(mismatch_claims["nvidia"])
+    policy = _gpu_policy(tmp_path, ["580.173.02"])
+
+    assert _appraise(opa, policy, mismatch_claims, tmp_path)[denied] == DENIED[denied]
+
+
 def test_policies_matching_nothing_still_load_and_deny(
     opa,
     tmp_path,
