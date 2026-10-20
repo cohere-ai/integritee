@@ -117,19 +117,26 @@ def install_initdata(source_dir: Path, destination_dir: Path) -> None:
 def retain_latest_sources(
     manifest: Path,
     retain: list[tuple[str, int]],
+    protect_deployed: list[str],
 ) -> None:
     """Retire all but each provider's newest blobheart sources.
 
     ITA rejects a policy over 20 KB, and every GCP source the manifest keeps
     adds its targets' workload rules to that policy. Retiring the oldest
     sources as new ones arrive keeps it bounded without a manual prune.
+
+    A source still served by a recent deploy to a protect_deployed environment
+    is kept regardless, since its pods would otherwise fail attestation.
     """
     if not retain:
         return
     prune = load_prune()
     for provider, keep in retain:
         result = prune.prune_manifest(
-            manifest, keep_latest=keep, provider=provider,
+            manifest,
+            keep_latest=keep,
+            provider=provider,
+            protect_environments=protect_deployed,
         )
         if result.retired:
             print(
@@ -145,7 +152,7 @@ def update(args: argparse.Namespace) -> None:
         raise SystemExit("GITHUB_OUTPUT is required")
     shutil.copyfile(args.merged, args.manifest)
     install_initdata(args.initdata_source, args.initdata_dir)
-    retain_latest_sources(args.manifest, args.retain)
+    retain_latest_sources(args.manifest, args.retain, args.protect_deployed)
 
     status_lines = run(
         "git",
@@ -327,6 +334,13 @@ def parser() -> argparse.ArgumentParser:
         default=[],
         metavar="PROVIDER=N",
         help="Keep only the newest N blobheart sources on PROVIDER's targets",
+    )
+    update_parser.add_argument(
+        "--protect-deployed",
+        nargs="+",
+        default=[],
+        metavar="ENV",
+        help="Never retire a source these blobheart environments still serve",
     )
     update_parser.set_defaults(handler=update)
 

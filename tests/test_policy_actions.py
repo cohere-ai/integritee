@@ -5,6 +5,7 @@ import base64
 import gzip
 import hashlib
 import importlib.util
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -700,20 +701,24 @@ def test_retire_with_provider_keeps_other_providers_sources(tmp_path):
     assert sources == {"e4-l-gcp": [NEW], "e4-l-azure": [OLD, NEW]}
 
 
-def test_sources_are_ranked_by_distance_behind_blobheart_main(monkeypatch):
+def test_sources_are_ranked_by_distance_behind_blobheart_main():
     prune = load_action(
         "prune_rank",
         ".github/workflows/prune-from-blobheart/prune.py",
     )
-    run = Mock(return_value=Mock(stdout="ahead\t19\n"))
-    monkeypatch.setattr(prune.subprocess, "run", run)
+    paths = []
 
-    assert prune.commits_behind_main(MID) == 19
-    assert f"{MID}...main" in run.call_args.args[0][2]
+    def api(path):
+        paths.append(path)
+        return {"status": status, "ahead_by": 19}
 
-    run.return_value = Mock(stdout="diverged\t3\n")
+    status = "ahead"
+    assert prune.commits_behind_main(MID, api) == 19
+    assert paths == [f"/repos/cohere-ai/blobheart/compare/{MID}...main"]
+
+    status = "diverged"
     with pytest.raises(SystemExit, match="not an ancestor of main"):
-        prune.commits_behind_main(MID)
+        prune.commits_behind_main(MID, api)
 
 
 def test_update_retains_newest_gcp_sources_before_detecting_changes(
@@ -727,15 +732,19 @@ def test_update_retains_newest_gcp_sources_before_detecting_changes(
 
     class Prune:
         @staticmethod
-        def prune_manifest(manifest, *, keep_latest, provider):
-            calls.append((manifest, keep_latest, provider))
+        def prune_manifest(manifest, *, keep_latest, provider, protect_environments):
+            calls.append((manifest, keep_latest, provider, protect_environments))
             return Mock(retired=[], removed=0, trimmed=0)
 
     monkeypatch.setattr(manage, "load_prune", lambda: Prune)
 
-    manage.retain_latest_sources(tmp_path / "m.yaml", [("gcp", 2)])
+    manage.retain_latest_sources(
+        tmp_path / "m.yaml", [("gcp", 3)], ["production", "staging"],
+    )
 
-    assert calls == [(tmp_path / "m.yaml", 2, "gcp")]
+    assert calls == [
+        (tmp_path / "m.yaml", 3, "gcp", ["production", "staging"]),
+    ]
 
 
 @pytest.mark.parametrize("value", ["gcp", "gcp=0", "gcp=-1", "GCP=2", "=2"])
@@ -757,7 +766,181 @@ def test_add_from_blobheart_keeps_three_gcp_sources():
     )
 
     assert "--retain gcp=3" in step["run"]
+    assert "--protect-deployed production staging" in step["run"]
     assert step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+
+
+GEOFENCE_JOB = "deploy-production / deploy-blobheart-backend / deploy-backend / deploy"
+OTHER_JOB = "deploy-production / deploy-platform-vaults / deploy"
+
+
+class FakeBlobheart:
+    """GitHub API answers for a linear blobheart main and its deployments.
+
+    `history` lists commits oldest first. Each deployment is
+    (environment, sha, job name, state of its success-or-not status).
+    """
+
+    def __init__(self, history: list[str], deployments: list[tuple]):
+        self.history = history
+        self.deployments = deployments
+        self.jobs = {}
+
+    def __call__(self, path: str):
+        if "/compare/" in path:
+            base, head = path.rsplit("/", 1)[1].split("...")
+            head = self.history[-1] if head == "main" else head
+            if base not in self.history or head not in self.history:
+                return {"status": "diverged", "ahead_by": 0}
+            ahead = self.history.index(head) - self.history.index(base)
+            if ahead < 0:
+                return {"status": "behind", "ahead_by": 0}
+            return {"status": "identical" if ahead == 0 else "ahead", "ahead_by": ahead}
+        if path.endswith("/statuses?per_page=100"):
+            index = int(path.split("/deployments/")[1].split("/")[0])
+            _, _, _, state = self.deployments[index]
+            return [
+                {"state": "inactive", "log_url": ""},
+                {"state": state, "log_url": f"https://x/actions/runs/1/job/{index}"},
+            ]
+        if "/actions/jobs/" in path:
+            return {"name": self.deployments[int(path.rsplit("/", 1)[1])][2]}
+        if "/deployments?environment=" in path:
+            environment = path.split("environment=")[1].split("&")[0]
+            # Newest first, as GitHub returns them.
+            return [
+                {"id": index, "sha": sha}
+                for index, (env, sha, _, _) in reversed(list(enumerate(self.deployments)))
+                if env == environment
+            ]
+        raise AssertionError(f"unexpected API path {path}")
+
+
+# blobheart main, oldest first. S1..S5 are CC-chart commits (manifest
+# sources); D-commits are later deploys that did not touch CC charts.
+S1, S2, S3, S4, S5 = (str(i) * 40 for i in range(1, 6))
+D2, D3 = "a2" + "0" * 38, "a3" + "0" * 38
+HISTORY = [S1, S2, D2, S3, D3, S4, S5]
+
+
+def _five_source_manifest(tmp_path: Path) -> Path:
+    return _write_manifest(tmp_path, [
+        _sourced_target(f"m{i}-gcp", "gcp", [source])
+        for i, source in enumerate([S1, S2, S3, S4, S5])
+    ] + [_sourced_target("m-azure", "azure", [S1])])
+
+
+def _gcp_sources(manifest: Path) -> set[str]:
+    return {
+        source
+        for target in yaml.safe_load(manifest.read_text())["targets"]
+        if target["provider"] == "gcp"
+        for source in target["sources"]
+    }
+
+
+def _deployment_aware_prune(tmp_path, api):
+    prune = load_action(
+        f"prune_deployed_{tmp_path.name}",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    manifest = _five_source_manifest(tmp_path)
+    prune.prune_manifest(
+        manifest,
+        keep_latest=3,
+        provider="gcp",
+        protect_environments=["production", "staging"],
+        api=api,
+    )
+    return _gcp_sources(manifest)
+
+
+def test_up_to_date_deploys_retire_only_beyond_the_newest_three(tmp_path):
+    api = FakeBlobheart(HISTORY, [
+        ("production", S4, GEOFENCE_JOB, "success"),
+        ("production", S5, GEOFENCE_JOB, "success"),
+        ("staging", S4, GEOFENCE_JOB, "success"),
+        ("staging", S5, GEOFENCE_JOB, "success"),
+    ])
+
+    assert _deployment_aware_prune(tmp_path, api) == {S3, S4, S5}
+
+
+def test_a_stalled_production_keeps_the_source_it_serves(tmp_path):
+    # Production last shipped geofence at D2, which runs S2's charts, and S1
+    # before that. S3..S5 merged since. Count alone would retire S2 and S1.
+    api = FakeBlobheart(HISTORY, [
+        ("production", S1, GEOFENCE_JOB, "success"),
+        ("production", D2, GEOFENCE_JOB, "success"),
+        ("staging", S4, GEOFENCE_JOB, "success"),
+        ("staging", S5, GEOFENCE_JOB, "success"),
+    ])
+
+    assert _deployment_aware_prune(tmp_path, api) == {S1, S2, S3, S4, S5}
+
+
+def test_the_rollback_target_is_kept(tmp_path):
+    # Production runs S5's charts, but its previous geofence deploy served S2.
+    api = FakeBlobheart(HISTORY, [
+        ("production", D2, GEOFENCE_JOB, "success"),
+        ("production", S5, GEOFENCE_JOB, "success"),
+        ("staging", S4, GEOFENCE_JOB, "success"),
+        ("staging", S5, GEOFENCE_JOB, "success"),
+    ])
+
+    assert _deployment_aware_prune(tmp_path, api) == {S2, S3, S4, S5}
+
+
+def test_deploys_that_did_not_ship_geofence_or_failed_are_ignored(tmp_path):
+    api = FakeBlobheart(HISTORY, [
+        ("production", S4, GEOFENCE_JOB, "success"),
+        ("production", S5, GEOFENCE_JOB, "success"),
+        # Neither of these changed what geofence serves.
+        ("production", S1, OTHER_JOB, "success"),
+        ("production", S1, GEOFENCE_JOB, "failure"),
+        ("staging", S4, GEOFENCE_JOB, "success"),
+        ("staging", S5, GEOFENCE_JOB, "success"),
+    ])
+
+    assert _deployment_aware_prune(tmp_path, api) == {S3, S4, S5}
+
+
+def test_unknown_deploy_history_retires_nothing(tmp_path, capsys):
+    # Only one geofence deploy on record: the rollback target is unknown.
+    api = FakeBlobheart(HISTORY, [
+        ("production", S5, GEOFENCE_JOB, "success"),
+        ("staging", S4, GEOFENCE_JOB, "success"),
+        ("staging", S5, GEOFENCE_JOB, "success"),
+    ])
+
+    assert _deployment_aware_prune(tmp_path, api) == {S1, S2, S3, S4, S5}
+    assert "retiring nothing" in capsys.readouterr().out
+
+
+def test_an_api_failure_retires_nothing(tmp_path, capsys):
+    calls = FakeBlobheart(HISTORY, [])
+
+    def api(path):
+        if "/deployments" in path:
+            raise subprocess.CalledProcessError(1, ["gh", "api", path])
+        return calls(path)
+
+    assert _deployment_aware_prune(tmp_path, api) == {S1, S2, S3, S4, S5}
+    assert "retiring nothing" in capsys.readouterr().out
+
+
+def test_protect_deployed_requires_keep_latest(tmp_path, monkeypatch):
+    prune = load_action(
+        "prune_protect_requires_keep",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    monkeypatch.setattr(sys, "argv", [
+        "prune.py", "--manifest", str(tmp_path / "m.yaml"),
+        "--retire", S1, "--protect-deployed", "production",
+    ])
+
+    with pytest.raises(SystemExit):
+        prune.main()
 
 
 @pytest.mark.parametrize("status", ["ahead", "identical"])
