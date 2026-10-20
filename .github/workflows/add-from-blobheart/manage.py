@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -16,8 +17,31 @@ from pathlib import Path
 REPOSITORY_RE = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA384_FILE_RE = re.compile(r"[0-9a-f]{96}\.toml")
+RETAIN_RE = re.compile(r"([a-z0-9-]+)=([1-9][0-9]*)")
 BLOBHEART_REPOSITORY = "cohere-ai/blobheart"
 BLOBHEART_DEFAULT_BRANCH = "main"
+PRUNE_SCRIPT = (
+    Path(__file__).resolve().parents[1] / "prune-from-blobheart" / "prune.py"
+)
+
+
+def load_prune():
+    """Import the prune workflow's script, which owns source retirement."""
+    spec = importlib.util.spec_from_file_location("prune", PRUNE_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def parse_retain(value: str) -> tuple[str, int]:
+    """Parse PROVIDER=N, the newest N blobheart sources a provider keeps."""
+    match = RETAIN_RE.fullmatch(value)
+    if not match:
+        raise argparse.ArgumentTypeError(
+            f"--retain must be PROVIDER=N with N >= 1, got {value!r}"
+        )
+    return match.group(1), int(match.group(2))
 
 
 def run(
@@ -90,6 +114,30 @@ def install_initdata(source_dir: Path, destination_dir: Path) -> None:
             shutil.copyfile(source, destination)
 
 
+def retain_latest_sources(
+    manifest: Path,
+    retain: list[tuple[str, int]],
+) -> None:
+    """Retire all but each provider's newest blobheart sources.
+
+    ITA rejects a policy over 20 KB, and every GCP source the manifest keeps
+    adds its targets' workload rules to that policy. Retiring the oldest
+    sources as new ones arrive keeps it bounded without a manual prune.
+    """
+    if not retain:
+        return
+    prune = load_prune()
+    for provider, keep in retain:
+        result = prune.prune_manifest(
+            manifest, keep_latest=keep, provider=provider,
+        )
+        if result.retired:
+            print(
+                f"Retired {provider} sources {' '.join(result.retired)}: "
+                f"{result.removed} targets removed, {result.trimmed} trimmed"
+            )
+
+
 def update(args: argparse.Namespace) -> None:
     """Install the merged manifest and report changes."""
     output_path = os.environ.get("GITHUB_OUTPUT")
@@ -97,6 +145,7 @@ def update(args: argparse.Namespace) -> None:
         raise SystemExit("GITHUB_OUTPUT is required")
     shutil.copyfile(args.merged, args.manifest)
     install_initdata(args.initdata_source, args.initdata_dir)
+    retain_latest_sources(args.manifest, args.retain)
 
     status_lines = run(
         "git",
@@ -106,6 +155,7 @@ def update(args: argparse.Namespace) -> None:
         capture_output=True,
     ).stdout.splitlines()
     changed_files = [line[3:] for line in status_lines]
+    deleted_files = {line[3:] for line in status_lines if "D" in line[:2]}
     initdata_prefix = f"{args.initdata_dir}/"
     unexpected = [
         path
@@ -129,7 +179,8 @@ def update(args: argparse.Namespace) -> None:
     run("git", "diff", "--", str(args.manifest))
     for path in changed_files:
         if path.startswith(initdata_prefix):
-            print(f"Added initdata: {path}")
+            action = "Removed" if path in deleted_files else "Added"
+            print(f"{action} initdata: {path}")
 
 
 def publish(args: argparse.Namespace) -> None:
@@ -269,6 +320,14 @@ def parser() -> argparse.ArgumentParser:
     update_parser.add_argument("--initdata-source", type=Path, required=True)
     update_parser.add_argument("--initdata-dir", type=Path, required=True)
     update_parser.add_argument("--added", type=int, required=True)
+    update_parser.add_argument(
+        "--retain",
+        type=parse_retain,
+        action="append",
+        default=[],
+        metavar="PROVIDER=N",
+        help="Keep only the newest N blobheart sources on PROVIDER's targets",
+    )
     update_parser.set_defaults(handler=update)
 
     publish_parser = commands.add_parser("publish")

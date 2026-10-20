@@ -502,6 +502,36 @@ def test_renders_an_inert_policy_when_nothing_matched(tmp_path, capsys):
     assert "::warning::" in capsys.readouterr().out
 
 
+def _workload_target(index: int) -> dict:
+    target = _tdx_target()
+    target["model"] = f"model-{index}"
+    target["measurements"] = {**target["measurements"], "rtmr3": f"{index:096x}"}
+    target["baseline_variants"][0]["measurements"] = target["measurements"]
+    return target
+
+
+def test_refuses_to_write_a_policy_ita_would_reject(tmp_path):
+    output = tmp_path / "policy.rego"
+    # One distinct workload rule per target; enough to cross the limit.
+    targets = [_workload_target(i) for i in range(100)]
+
+    with pytest.raises(ita.PolicyTooLargeError, match="Retire older GCP"):
+        ita.render_policy(targets, ["580.159.04"], output)
+
+    assert not output.exists()
+
+
+def test_three_sources_of_the_current_gcp_targets_fit_under_the_limit(tmp_path):
+    # 16 GCP models, each measured under three retained blobheart sources.
+    output = tmp_path / "policy.rego"
+
+    ita.render_policy(
+        [_workload_target(i) for i in range(48)], ["580.159.04"], output,
+    )
+
+    assert len(output.read_bytes()) <= ita.MAX_POLICY_BYTES
+
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 # ITA supplies data.public.intel.ita.tdxutils and the CSP RIM catalogs on the

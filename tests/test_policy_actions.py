@@ -603,6 +603,163 @@ def test_prune_deletes_initdata_orphaned_by_removed_targets(tmp_path, monkeypatc
     assert [path.name for path in initdata.iterdir()] == [f"{kept}.toml"]
 
 
+def _sourced_target(model: str, provider: str, sources: list[str]) -> dict:
+    digest = hashlib.sha384(f"{model}-{provider}-{sources}".encode()).hexdigest()
+    return {
+        "model": model,
+        "provider": provider,
+        "initdata_file": f"initdata/{digest}.toml",
+        "initdata_sha384": digest,
+        "sources": sources,
+    }
+
+
+def _write_manifest(tmp_path: Path, targets: list[dict]) -> Path:
+    initdata = tmp_path / "initdata"
+    initdata.mkdir()
+    for target in targets:
+        (initdata / Path(target["initdata_file"]).name).touch()
+    manifest = tmp_path / "policy-manifest.yaml"
+    manifest.write_text(yaml.dump({"schema_version": 1, "targets": targets}))
+    return manifest
+
+
+# Distance behind blobheart main: OLD is the oldest, NEW the head.
+OLD, MID, NEW = "1" * 40, "2" * 40, "3" * 40
+BEHIND_MAIN = {OLD: 40, MID: 19, NEW: 0}
+
+
+def test_keep_latest_retires_only_the_oldest_gcp_sources(tmp_path):
+    prune = load_action(
+        "prune_keep_latest",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    targets = [
+        # A deduplicated target lists sources in arrival order, not age order.
+        _sourced_target("e4-l-gcp", "gcp", [MID, OLD, NEW]),
+        _sourced_target("cmp-l-gcp", "gcp", [OLD]),
+        _sourced_target("r4f-l-gcp", "gcp", [NEW]),
+        _sourced_target("e4-l-azure", "azure", [OLD]),
+    ]
+    manifest = _write_manifest(tmp_path, targets)
+
+    result = prune.prune_manifest(
+        manifest, keep_latest=2, provider="gcp", distance=BEHIND_MAIN.__getitem__,
+    )
+
+    assert result.retired == [OLD]
+    assert (result.removed, result.trimmed, result.remaining) == (1, 1, 3)
+    survivors = {
+        (t["model"], tuple(t["sources"]))
+        for t in yaml.safe_load(manifest.read_text())["targets"]
+    }
+    assert survivors == {
+        ("e4-l-gcp", (MID, NEW)),
+        ("r4f-l-gcp", (NEW,)),
+        # Azure is out of scope: ITA only appraises GCP, so it keeps OLD.
+        ("e4-l-azure", (OLD,)),
+    }
+    removed = Path(targets[1]["initdata_file"]).name
+    assert not (tmp_path / "initdata" / removed).exists()
+
+
+def test_keep_latest_is_a_no_op_within_the_limit(tmp_path):
+    prune = load_action(
+        "prune_keep_latest_noop",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    manifest = _write_manifest(
+        tmp_path, [_sourced_target("e4-l-gcp", "gcp", [MID, NEW])],
+    )
+    before = manifest.read_text()
+
+    result = prune.prune_manifest(
+        manifest, keep_latest=2, provider="gcp", distance=BEHIND_MAIN.__getitem__,
+    )
+
+    assert result.retired == []
+    assert manifest.read_text() == before
+
+
+def test_retire_with_provider_keeps_other_providers_sources(tmp_path):
+    prune = load_action(
+        "prune_retire_provider",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    manifest = _write_manifest(tmp_path, [
+        _sourced_target("e4-l-gcp", "gcp", [OLD, NEW]),
+        _sourced_target("e4-l-azure", "azure", [OLD, NEW]),
+    ])
+
+    prune.prune_manifest(manifest, retire={OLD}, provider="gcp")
+
+    sources = {
+        t["model"]: t["sources"]
+        for t in yaml.safe_load(manifest.read_text())["targets"]
+    }
+    assert sources == {"e4-l-gcp": [NEW], "e4-l-azure": [OLD, NEW]}
+
+
+def test_sources_are_ranked_by_distance_behind_blobheart_main(monkeypatch):
+    prune = load_action(
+        "prune_rank",
+        ".github/workflows/prune-from-blobheart/prune.py",
+    )
+    run = Mock(return_value=Mock(stdout="ahead\t19\n"))
+    monkeypatch.setattr(prune.subprocess, "run", run)
+
+    assert prune.commits_behind_main(MID) == 19
+    assert f"{MID}...main" in run.call_args.args[0][2]
+
+    run.return_value = Mock(stdout="diverged\t3\n")
+    with pytest.raises(SystemExit, match="not an ancestor of main"):
+        prune.commits_behind_main(MID)
+
+
+def test_update_retains_newest_gcp_sources_before_detecting_changes(
+    tmp_path, monkeypatch,
+):
+    manage = load_action(
+        "add_from_blobheart_retain",
+        ".github/workflows/add-from-blobheart/manage.py",
+    )
+    calls = []
+
+    class Prune:
+        @staticmethod
+        def prune_manifest(manifest, *, keep_latest, provider):
+            calls.append((manifest, keep_latest, provider))
+            return Mock(retired=[], removed=0, trimmed=0)
+
+    monkeypatch.setattr(manage, "load_prune", lambda: Prune)
+
+    manage.retain_latest_sources(tmp_path / "m.yaml", [("gcp", 2)])
+
+    assert calls == [(tmp_path / "m.yaml", 2, "gcp")]
+
+
+@pytest.mark.parametrize("value", ["gcp", "gcp=0", "gcp=-1", "GCP=2", "=2"])
+def test_retain_rejects_malformed_values(value):
+    manage = load_action(
+        f"add_from_blobheart_retain_{abs(hash(value))}",
+        ".github/workflows/add-from-blobheart/manage.py",
+    )
+
+    with pytest.raises(argparse.ArgumentTypeError):
+        manage.parse_retain(value)
+
+
+def test_add_from_blobheart_keeps_three_gcp_sources():
+    step = next(
+        step
+        for step in _load_workflow("add-from-blobheart")["jobs"]["generate"]["steps"]
+        if step.get("id") == "changes"
+    )
+
+    assert "--retain gcp=3" in step["run"]
+    assert step["env"]["GH_TOKEN"] == "${{ steps.app-token.outputs.token }}"
+
+
 @pytest.mark.parametrize("status", ["ahead", "identical"])
 def test_blobheart_ref_validation_accepts_main_ancestors(status, monkeypatch):
     manage = load_action(
@@ -991,3 +1148,25 @@ def test_merge_action_splits_new_input_on_any_whitespace(tmp_path, new_input):
         check=True,
     )
     assert result.stdout.splitlines() == ["a.yaml", "b.yaml"]
+
+
+@pytest.mark.parametrize(
+    "workflow, artifact",
+    [
+        ("prune-from-blobheart", "pruned-policy-manifest"),
+        ("add-from-blobheart", "merged-policy-manifest"),
+    ],
+)
+def test_publish_clears_initdata_before_applying_the_artifact(workflow, artifact):
+    """download-artifact adds and overwrites but never deletes, so publishing
+    over an uncleared checkout commits every retired target's initdata back."""
+    steps = _load_workflow(workflow)["jobs"]["publish"]["steps"]
+    download = next(
+        i for i, step in enumerate(steps)
+        if step.get("with", {}).get("name") == artifact
+    )
+
+    assert any(
+        "rm -rf attestation-policy/initdata" in step.get("run", "")
+        for step in steps[:download]
+    )
