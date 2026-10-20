@@ -1331,3 +1331,25 @@ def test_merge_action_splits_new_input_on_any_whitespace(tmp_path, new_input):
         check=True,
     )
     assert result.stdout.splitlines() == ["a.yaml", "b.yaml"]
+
+
+@pytest.mark.parametrize(
+    "workflow, artifact",
+    [
+        ("prune-from-blobheart", "pruned-policy-manifest"),
+        ("add-from-blobheart", "merged-policy-manifest"),
+    ],
+)
+def test_publish_clears_initdata_before_applying_the_artifact(workflow, artifact):
+    """download-artifact adds and overwrites but never deletes, so publishing
+    over an uncleared checkout commits every retired target's initdata back."""
+    steps = _load_workflow(workflow)["jobs"]["publish"]["steps"]
+    download = next(
+        i for i, step in enumerate(steps)
+        if step.get("with", {}).get("name") == artifact
+    )
+
+    assert any(
+        "rm -rf attestation-policy/initdata" in step.get("run", "")
+        for step in steps[:download]
+    )
