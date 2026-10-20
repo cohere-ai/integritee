@@ -991,3 +991,18 @@ def test_merge_action_splits_new_input_on_any_whitespace(tmp_path, new_input):
         check=True,
     )
     assert result.stdout.splitlines() == ["a.yaml", "b.yaml"]
+
+
+def test_prune_publish_clears_initdata_before_applying_the_artifact():
+    """download-artifact adds and overwrites but never deletes, so publishing
+    over an uncleared checkout commits every retired target's initdata back."""
+    steps = _load_workflow("prune-from-blobheart")["jobs"]["publish"]["steps"]
+    download = next(
+        i for i, step in enumerate(steps)
+        if step.get("with", {}).get("name") == "pruned-policy-manifest"
+    )
+
+    assert any(
+        "rm -rf attestation-policy/initdata" in step.get("run", "")
+        for step in steps[:download]
+    )
