@@ -55,7 +55,10 @@ carries the release version as `cohere.policy-version`.
 
 Every release contains:
 
-- `ita_policy.rego` -- the composite ITA appraisal policy that was uploaded
+- `ita_policy.rego` -- the composite ITA appraisal policy that was uploaded.
+  It accepts every RTMR3 workload measurement through one `accepted_rtmr3`
+  set and carries no comments, to stay under ITA's 20 KB policy limit;
+  `predicate.json` maps each RTMR3 to its model and initdata
 - `trustee_policy_cpu.rego` -- the Trustee CPU appraisal policy, for Azure SEV-SNP
 - `trustee_policy_gpu.rego` -- the Trustee GPU appraisal policy (uses NRAS)
 - `policy-manifest.yaml` -- every workload the policies cover

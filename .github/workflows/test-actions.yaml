@@ -121,7 +121,11 @@ jobs:
           # Only the generated blocks. Everything else is template text that
           # cannot go missing without the policy failing to compile anyway.
           generated = {
-              "ITA_POLICY": ["matches_tdx_platform if {", "# Model: cmp-l (Initdata:"],
+              "ITA_POLICY": [
+                  "matches_tdx_platform if {",
+                  "accepted_rtmr3 := {",
+                  "accepted_rtmr3[input.tdx.tdx_rtmr3]",
+              ],
               "TRUSTEE_CPU_POLICY": [
                   "azsnp_image_ok if {",
                   "azsnp.tpm.pcr04 ==",
@@ -204,6 +208,58 @@ jobs:
           path: |
             generated-policies/
             predicate.json
+
+  # ITA accepts only a subset of Rego, and the minimal policy below cannot
+  # tell whether the generated one is inside it. This uploads what
+  # test-generate-policy rendered, the shape a release uploads, to the dev
+  # tenant and deletes it again.
+  test-ita-accepts-generated-policy:
+    needs: test-generate-policy
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Download generated policy
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: test-generate-policy-output
+          path: generated
+
+      - name: Locate ITA policy
+        id: policy
+        run: |
+          POLICY=$(find generated -name ita_policy.rego -print -quit)
+          [ -s "$POLICY" ] || { echo "ERROR: no generated ITA policy"; exit 1; }
+          echo "file=$POLICY" >> "$GITHUB_OUTPUT"
+
+      - name: Upload generated policy to ITA
+        id: create
+        uses: ./.github/actions/upload-ita-policy
+        with:
+          policy-file: ${{ steps.policy.outputs.file }}
+          policy-name: ci-generated-${{ github.run_id }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Fetch generated policy back
+        id: fetch
+        uses: ./.github/actions/fetch-ita-policy
+        with:
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Assert ITA stored the policy unchanged
+        run: diff "${{ steps.policy.outputs.file }}" "${{ steps.fetch.outputs.policy-file }}"
+
+      - name: Delete generated policy from ITA
+        if: always() && steps.create.outputs.policy-id != ''
+        uses: ./.github/actions/delete-ita-policy
+        with:
+          policy-id: ${{ steps.create.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
 
   test-ita-roundtrip:
     runs-on: ubuntu-latest

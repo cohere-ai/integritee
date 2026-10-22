@@ -60,6 +60,15 @@ EMPTY_POLICY_HEADER = """\
 
 """
 
+# ITA rejects a larger policy at upload: "Policy size should not exceed 20kb".
+# Checked at render so a release fails before it reaches ITA. ITA does not say
+# whether its kb is 1000 or 1024 bytes, so this takes the stricter reading.
+MAX_POLICY_BYTES = 20_000
+
+
+class PolicyTooLargeError(ValueError):
+    pass
+
 
 def validate_measurement(field: str, value: object) -> str:
     if not isinstance(value, str) or not MEASUREMENT_RE.fullmatch(value):
@@ -72,38 +81,31 @@ def generate_nonce_rule() -> str:
     return f'integritee_nonce := "{nonce}"'
 
 
-def generate_driver_versions_block(versions: list[str]) -> str:
-    """Emit the accepted driver versions as a rule-local set assignment.
+def generate_set_assignment(name: str, values: list[str]) -> str:
+    """Emit values as a rule-local set assignment, indented for a rule body.
 
     A rule-local set tested by reference is the form with ITA release history;
     a top-level collection and a defaulted function are both constructs ITA
     rejected in the past.
     """
-    if not versions:
-        return "    accepted_gpu_driver_versions := {}"
-    entries = ",\n".join(
-        f"        {json.dumps(version)}" for version in versions
-    )
-    return "\n".join([
-        "    accepted_gpu_driver_versions := {",
-        entries,
-        "    }",
-    ])
+    if not values:
+        return f"    {name} := {{}}"
+    entries = ",\n".join(f"        {json.dumps(value)}" for value in values)
+    return "\n".join([f"    {name} := {{", entries, "    }"])
 
 
-def generate_platform_match_block(
-    baseline_label: str,
-    measurements: dict,
-) -> str:
+def generate_driver_versions_block(versions: list[str]) -> str:
+    return generate_set_assignment("accepted_gpu_driver_versions", versions)
+
+
+def generate_platform_match_block(measurements: dict) -> str:
     values = {
         field: validate_measurement(field, measurements.get(field))
         for field in PLATFORM_FIELDS
     }
     lines = [
-        f"# Platform baseline: {baseline_label}",
         "matches_tdx_platform if {",
         "    tdx := input.tdx",
-        "",
     ]
     for field in PLATFORM_FIELDS:
         lines.append(
@@ -113,18 +115,35 @@ def generate_platform_match_block(
     return "\n".join(lines)
 
 
-def generate_workload_match_block(
-    model: str,
-    initdata_label: str,
-    rtmr3: str,
-) -> str:
-    rtmr3 = validate_measurement("rtmr3", rtmr3)
+def generate_workload_match_block(rtmr3_values: list[str]) -> str:
+    """One rule admitting every accepted RTMR3, by set membership.
+
+    A rule per value costs about 200 bytes against ITA's 20 KB limit; an entry
+    in one set costs about 100. Which model a value belongs to is recorded in
+    the signed predicate, so the policy does not repeat it.
+    """
+    values = [validate_measurement("rtmr3", value) for value in rtmr3_values]
     return "\n".join([
-        f"# Model: {model} (Initdata: {initdata_label})",
         "matches_tdx_workload if {",
-        f"    input.tdx.tdx_rtmr3 == {json.dumps(rtmr3)}",
+        generate_set_assignment("accepted_rtmr3", values),
+        "    accepted_rtmr3[input.tdx.tdx_rtmr3]",
         "}",
     ])
+
+
+def strip_comments(policy: str) -> str:
+    """Drop comment-only and blank lines from the policy ITA stores.
+
+    Comments explain the template, which is read in this repository, and cost a
+    third of ITA's size limit if uploaded. Every literal ITA evaluates stays as
+    written. Trailing comments are left alone, since telling one from a `#`
+    inside a string would take a Rego lexer.
+    """
+    kept = [
+        line for line in policy.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    return "\n".join(kept) + "\n"
 
 
 def render_policy(
@@ -144,43 +163,25 @@ def render_policy(
             raise ValueError(f"template does not contain {placeholder}")
 
     platform_blocks: list[str] = []
-    workload_blocks: list[str] = []
+    rtmr3_values: list[str] = []
     seen_platforms: set[tuple] = set()
-    seen_workloads: set[tuple] = set()
     variant_count = 0
     for target in targets:
-        model = target["model"]
-        initdata_label = target.get("initdata_sha384", "unknown")[:12]
         baseline_variants = target.get("baseline_variants") or [
-            {
-                "version": None,
-                "firmware_sha384": None,
-                "measurements": target["measurements"],
-            }
+            {"measurements": target["measurements"]}
         ]
         for baseline_variant in baseline_variants:
-            baseline_label = "current"
-            if baseline_variant["version"]:
-                firmware = baseline_variant["firmware_sha384"]
-                baseline_label = f"{firmware[:12]}/{baseline_variant['version']}"
             variant = baseline_variant["measurements"]
             platform_key = tuple(
                 variant.get(field) for field in PLATFORM_FIELDS
             )
             if platform_key not in seen_platforms:
                 seen_platforms.add(platform_key)
-                platform_blocks.append(
-                    generate_platform_match_block(baseline_label, variant)
-                )
+                platform_blocks.append(generate_platform_match_block(variant))
 
-            workload_key = (model, variant.get("rtmr3"))
-            if workload_key not in seen_workloads:
-                seen_workloads.add(workload_key)
-                workload_blocks.append(generate_workload_match_block(
-                    model,
-                    initdata_label,
-                    variant["rtmr3"],
-                ))
+            # Two models sharing initdata share an RTMR3; one entry admits both.
+            if variant.get("rtmr3") not in rtmr3_values:
+                rtmr3_values.append(variant.get("rtmr3"))
             variant_count += 1
 
     policy = template.replace(
@@ -189,18 +190,30 @@ def render_policy(
     )
     policy = policy.replace(
         WORKLOAD_PLACEHOLDER,
-        "\n\n".join(workload_blocks),
+        generate_workload_match_block(rtmr3_values) if rtmr3_values else "",
     )
     policy = policy.replace(NONCE_PLACEHOLDER, generate_nonce_rule())
     policy = policy.replace(
         DRIVER_VERSIONS_PLACEHOLDER,
         generate_driver_versions_block(nv_driver_versions),
     )
+    policy = strip_comments(policy)
 
     if not variant_count:
-        # Warn on inert policy
+        # Warn on inert policy. The header is the one comment worth uploading:
+        # it is what a reader of the stored ITA policy needs to see first.
         print("::warning::ITA policy matched no TDX targets; it admits nothing")
         policy = EMPTY_POLICY_HEADER + policy
+
+    size = len(policy.encode())
+    if size > MAX_POLICY_BYTES:
+        raise PolicyTooLargeError(
+            f"ITA policy is {size} bytes, over ITA's {MAX_POLICY_BYTES}-byte "
+            f"limit ({len(rtmr3_values)} workload measurements, "
+            f"{len(platform_blocks)} platform baselines, from "
+            f"{len(targets)} target(s)). Retire older GCP blobheart sources "
+            "with prune-from-blobheart."
+        )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(policy)
@@ -211,7 +224,7 @@ def render_policy(
         f"from {len(targets)} target(s): "
         f"{', '.join(model_names) or 'none'} "
         f"(drivers={', '.join(nv_driver_versions) or 'none'}"
-        f") -> {output_path}"
+        f") -> {output_path} ({size}/{MAX_POLICY_BYTES} bytes)"
     )
 
 
