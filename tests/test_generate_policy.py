@@ -40,6 +40,12 @@ def test_computes_rtmr3_directly_from_initdata():
     )
 
 
+def test_computes_pcr8_as_cvm_measure_does():
+    assert measure.compute_initdata_pcr8(b'algorithm = "sha384"\n') == (
+        "633c03ff85c6f3a62be58e87b3989cbb406c399b5e24093962e0e68d2def0a44"
+    )
+
+
 def test_every_machine_type_declares_the_expected_fields():
     """Pin the schema of machine-types.yaml.
 

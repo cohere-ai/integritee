@@ -27,6 +27,7 @@ FIXTURES = Path(__file__).parent / "fixtures"
 sys.path.insert(0, str(ACTION_ROOT))
 
 from generate_policy import generate  # noqa: E402
+from generate_policy import measure  # noqa: E402
 from generate_policy import trustee  # noqa: E402
 
 # Affirming values the CPU policy assigns when everything matches. rats-cert
@@ -495,11 +496,13 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
 ):
     """The renderer end to end, with the fetches and cvm-measure stubbed.
 
-    Two targets on one image and one initdata each: the image block is shared
-    and deduplicated, the initdata blocks are not, and the predicate carries
-    the platform reference values that no target entry could state.
+    Two targets on one image and a third on another: each image is measured
+    once and gets its own block, PCR 8 is computed per initdata and
+    deduplicated, and the predicate carries the platform reference values
+    that no target entry could state.
     """
     pcrs = _pcrs(snp_claims)
+    other_image_pcrs = {name: "b" * 64 for name in trustee.IMAGE_PCRS}
     monkeypatch.setattr(generate, "fetch_uki", lambda *args: None)
     monkeypatch.setattr(
         generate, "fetch_oci_digest", lambda ref: "sha256:123"
@@ -511,8 +514,10 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
     measured = []
 
     def fake_pcrs(*, initdata, uki_path, disk_path, output_dir):
-        measured.append(hashlib.sha384(initdata).hexdigest())
-        return {**pcrs, "pcr8": hashlib.sha256(initdata).hexdigest()}
+        podvm_tag = uki_path.parent.name
+        measured.append((podvm_tag, hashlib.sha384(initdata).hexdigest()))
+        image = pcrs if podvm_tag == "image-a" else other_image_pcrs
+        return {**image, "pcr8": measure.compute_initdata_pcr8(initdata)}
 
     monkeypatch.setattr(trustee, "compute_azure_snp_pcrs", fake_pcrs)
 
@@ -528,14 +533,15 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
     manifest.write_text("targets:\n" + "".join(
         f"  - model: {model}\n"
         f"    machine_type: {machine_type}\n"
-        "    podvm_image_tag: image-tag\n"
+        f"    podvm_image_tag: {podvm_tag}\n"
         f"    initdata_file: initdata/{digest}.toml\n"
         f"    initdata_sha384: {digest}\n"
         f"    sources: [{'b' * 40}]\n"
-        for model, machine_type, digest in [
-            ("cat2508rws-l", "Standard_NCC40ads_H100_v5", digests[0]),
-            ("cmp-l", "Standard_NCC40ads_H100_v5", digests[1]),
-            ("cmp-l-tdx", "a3-highgpu-1g", digests[0]),
+        for model, machine_type, podvm_tag, digest in [
+            ("cat2508rws-l", "Standard_NCC40ads_H100_v5", "image-a", digests[0]),
+            ("cmp-l", "Standard_NCC40ads_H100_v5", "image-a", digests[1]),
+            ("cmp-l-tdx", "a3-highgpu-1g", "image-a", digests[0]),
+            ("cmp-l-next", "Standard_NCC40ads_H100_v5", "image-b", digests[1]),
         ]
     ))
     predicate = tmp_path / "predicate.json"
@@ -552,18 +558,26 @@ def test_renderer_measures_azure_targets_and_records_what_it_pinned(
     )
 
     # The TDX target has no section, so it is never measured.
-    assert measured == [digests[0], digests[1]]
+    assert measured == [("image-a", digests[0]), ("image-b", digests[1])]
     policy = renderer.cpu_policy_file.read_text()
-    assert policy.count("azsnp_image_ok if {") == 1
+    assert policy.count("azsnp_image_ok if {") == 2
     assert policy.count("azsnp_initdata_ok if {") == 2
-    assert "# PodVM image: image-tag" in policy
+    assert "# PodVM image: image-a" in policy
+    assert "# PodVM image: image-b" in policy
 
     written = json.loads(predicate.read_text())
-    assert written["target_counts"] == {"trustee": 2}
+    assert written["target_counts"] == {"trustee": 3}
     assert [entry["model"] for entry in written["targets"]] == [
-        "cat2508rws-l", "cmp-l",
+        "cat2508rws-l", "cmp-l", "cmp-l-next",
     ]
-    assert written["targets"][0]["azure_snp"]["pcr4"] == pcrs["pcr4"]
+    snp = [entry["azure_snp"] for entry in written["targets"]]
+    assert [entry["pcr4"] for entry in snp] == [
+        pcrs["pcr4"], pcrs["pcr4"], other_image_pcrs["pcr4"],
+    ]
+    assert [entry["pcr8"] for entry in snp] == [
+        measure.compute_initdata_pcr8(body)
+        for body in (b"first", b"second", b"second")
+    ]
     # The machine table entry reaches the predicate, so the signed artifact
     # keeps stating the attributes that produced each measurement.
     assert written["targets"][0]["platform"] == "azure"

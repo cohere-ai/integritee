@@ -22,11 +22,12 @@ from pathlib import Path
 
 from .generate import (
     GenerationContext,
+    PodVMArtifact,
     RenderResult,
     ResolvedTarget,
     resolve_nvidia_driver_versions,
 )
-from .measure import compute_azure_snp_pcrs
+from .measure import compute_azure_snp_pcrs, compute_initdata_pcr8
 
 CPU_TEMPLATE = Path(__file__).parent / "trustee-cpu-template.rego"
 GPU_TEMPLATE = Path(__file__).parent / "trustee-gpu-template.rego"
@@ -237,9 +238,9 @@ class TrusteeRenderer:
     output_dir: Path
     policy_version: str | None
 
-    # Per-run cache. The registers are a function of the image and the
-    # initdata, so two targets sharing both measure once.
-    _pcrs: dict[tuple, dict] = field(
+    # Per-run cache of the image registers by PodVM tag. Only PCR 8 depends on
+    # initdata, so each image is measured once however many targets use it.
+    _image_pcrs: dict[str, dict] = field(
         default_factory=dict, init=False, repr=False
     )
 
@@ -343,6 +344,41 @@ class TrusteeRenderer:
             },
         }
 
+    def _get_image_pcrs(
+        self,
+        podvm_tag: str,
+        podvm: PodVMArtifact,
+        initdata: bytes,
+        pcr8: str,
+        output_dir: Path,
+    ) -> dict:
+        image_pcrs = self._image_pcrs.get(podvm_tag)
+        if image_pcrs is not None:
+            print(f"  Reusing image PCRs for {podvm_tag}")
+            return image_pcrs
+
+        print(f"  Computing image PCRs for {podvm_tag}...")
+        computed = compute_azure_snp_pcrs(
+            initdata=initdata,
+            uki_path=podvm.uki_path / "BOOTX64.EFI",
+            disk_path=podvm.uki_path / "disk.tar.gz",
+            output_dir=output_dir,
+        )
+        # Every other target's PCR 8 comes from compute_initdata_pcr8 alone,
+        # so it has to agree with cvm-measure on the one target measured.
+        if computed.get(INITDATA_PCR) != pcr8:
+            raise ValueError(
+                f"{podvm_tag}: cvm-measure PCR 8 disagrees with the initdata "
+                "extend computed for it"
+            )
+        image_pcrs = {
+            name: value
+            for name, value in computed.items()
+            if name != INITDATA_PCR
+        }
+        self._image_pcrs[podvm_tag] = image_pcrs
+        return image_pcrs
+
     def _measure_target(
         self,
         resolved: ResolvedTarget,
@@ -362,23 +398,19 @@ class TrusteeRenderer:
         except ValueError as error:
             raise ValueError(f"{model}: {error}") from error
 
-        key = (podvm_tag, target["initdata_sha384"])
-        pcrs = self._pcrs.get(key)
-        if pcrs is None:
-            output_dir = (
-                context.artifacts_dir
-                / f"target-{resolved.index}"
-                / "azure-snp"
-            )
-            pcrs = compute_azure_snp_pcrs(
-                initdata=initdata,
-                uki_path=podvm.uki_path / "BOOTX64.EFI",
-                disk_path=podvm.uki_path / "disk.tar.gz",
-                output_dir=output_dir,
-            )
-            self._pcrs[key] = pcrs
-        else:
-            print(f"  Reusing Azure SNP PCRs for {podvm_tag}")
+        output_dir = (
+            context.artifacts_dir / f"target-{resolved.index}" / "azure-snp"
+        )
+        pcr8 = compute_initdata_pcr8(initdata)
+        pcrs = {
+            **self._get_image_pcrs(podvm_tag, podvm, initdata, pcr8, output_dir),
+            INITDATA_PCR: pcr8,
+        }
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "initdata.toml").write_bytes(initdata)
+        (output_dir / "measurements.json").write_text(
+            json.dumps(pcrs, indent=2) + "\n"
+        )
 
         return pcrs, {
             **target,
