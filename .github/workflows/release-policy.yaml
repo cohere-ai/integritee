@@ -122,7 +122,8 @@ jobs:
           manifest-file: attestation-policy/policy-manifest.yaml
           github-token: ${{ steps.app-token.outputs.token }}
           output-artifacts-dir: artifacts
-          policy-types: ita trustee
+          # ITA is disabled until it's used in production
+          policy-types: trustee
           predicate-file: predicate.json
           version: ${{ steps.version.outputs.version }}
 
@@ -142,7 +143,6 @@ jobs:
         with:
           name: attestation-release-assets
           path: |
-            ${{ steps.generate.outputs.ita-policy-file }}
             ${{ steps.generate.outputs.trustee-cpu-policy-file }}
             ${{ steps.generate.outputs.trustee-gpu-policy-file }}
             predicate.json
@@ -193,32 +193,6 @@ jobs:
           permission-contents: write
 
       # ----------------------------------------------------------------
-      # Upload to ITA, then read it back to prove the stored policy is exactly
-      # what generate produced
-      # ----------------------------------------------------------------
-      - name: Upload policy to ITA
-        id: upload
-        uses: ./.github/actions/upload-ita-policy
-        with:
-          policy-file: ${{ needs.generate.outputs.ita-policy-file }}
-          policy-id: ${{ env.ITA_POLICY_ID }}
-          policy-name: ${{ env.ITA_POLICY_NAME }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ vars.ITA_API_URL }}
-          predicate-file: predicate.json
-
-      - name: Fetch uploaded policy from ITA
-        id: fetch
-        uses: ./.github/actions/fetch-ita-policy
-        with:
-          policy-id: ${{ env.ITA_POLICY_ID }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ vars.ITA_API_URL }}
-
-      - name: Verify uploaded policy
-        run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"
-
-      # ----------------------------------------------------------------
       # Attest policies with Sigstore
       # ----------------------------------------------------------------
       # One bundle with several subjects, so a single Rekor entry covers every
@@ -230,7 +204,6 @@ jobs:
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
         with:
           subject-path: |
-            ${{ needs.generate.outputs.ita-policy-file }}
             ${{ needs.generate.outputs.trustee-cpu-policy-file }}
             ${{ needs.generate.outputs.trustee-gpu-policy-file }}
             attestation-policy/policy-manifest.yaml
@@ -246,8 +219,7 @@ jobs:
           POLICY_ID: ${{ env.ITA_POLICY_ID }}
         run: >-
           python3 .github/workflows/release-policy/manage.py prepare-assets
-          --policy "${{ needs.generate.outputs.ita-policy-file }}"
-          "${{ needs.generate.outputs.trustee-cpu-policy-file }}"
+          --policy "${{ needs.generate.outputs.trustee-cpu-policy-file }}"
           "${{ needs.generate.outputs.trustee-gpu-policy-file }}"
           --manifest attestation-policy/policy-manifest.yaml
           --predicate predicate.json
@@ -265,7 +237,6 @@ jobs:
           gh release create "$VERSION"
           --title "Attestation Policy $VERSION"
           --notes-file release-body.md
-          release-assets/ita_policy.rego
           release-assets/trustee_policy_cpu.rego
           release-assets/trustee_policy_gpu.rego
           release-assets/policy-manifest.yaml
