@@ -29,9 +29,13 @@ on:
 permissions:
   contents: read
 
+# queue: max releases every pushed manifest in order. The default cancels a
+# waiting release when another push queues, failing add-from-blobheart's
+# wait-release for that commit.
 concurrency:
   group: production-ita-policy-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   generate:
