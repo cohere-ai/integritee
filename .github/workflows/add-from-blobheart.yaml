@@ -22,9 +22,13 @@ on:
 permissions:
   contents: read
 
+# Shared with auto-prune so only one workflow writes the manifest at a time.
+# queue: max keeps every waiting run; the default cancels all but the newest,
+# which would drop a Blobheart ref.
 concurrency:
-  group: add-from-blobheart
+  group: policy-manifest-writer
   cancel-in-progress: false
+  queue: max
 
 jobs:
   generate:
@@ -33,14 +37,23 @@ jobs:
     permissions:
       contents: read
     outputs:
+      base-sha: ${{ steps.base.outputs.sha }}
       changed: ${{ steps.changes.outputs.changed }}
     env:
       BLOBHEART_REFS: ${{ inputs.blobheart_refs || github.event.client_payload.blobheart_refs }}
     steps:
+      # Check out the branch rather than github.sha, which is main at dispatch
+      # time: a run that waited in the concurrency queue must merge into the
+      # manifest the runs ahead of it left behind.
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
+          ref: ${{ github.ref }}
           persist-credentials: false
+
+      - name: Record base commit
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       # Read-only token for blobheart + baselines. Cannot write to integritee.
       - name: Mint CC reader app token (read-only)
@@ -125,6 +138,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
         with:
+          ref: ${{ needs.generate.outputs.base-sha }}
           persist-credentials: false
 
       - name: Install Python
