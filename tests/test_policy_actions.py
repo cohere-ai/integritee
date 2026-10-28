@@ -604,20 +604,20 @@ def test_prune_deletes_initdata_orphaned_by_removed_targets(tmp_path, monkeypatc
     assert [path.name for path in initdata.iterdir()] == [f"{kept}.toml"]
 
 
-def test_auto_prune_retires_a_ref_three_days_after_the_next_merges():
+def test_auto_prune_retires_a_ref_three_days_after_the_next_is_added():
     expired_refs = load_action(
         "auto_prune_expired_refs",
         ".github/workflows/auto-prune/expired_refs.py",
     )
     now = datetime(2026, 10, 23, 14, tzinfo=timezone.utc)
-    merged = {
+    added = {
         "old": now - timedelta(days=10),
         "previous": now - timedelta(days=5),
         "recent": now - timedelta(days=3),
         "newest": now - timedelta(days=2, hours=23),
     }
 
-    assert expired_refs.refs_to_retire(merged, now, timedelta(days=3)) == [
+    assert expired_refs.refs_to_retire(added, now, timedelta(days=3)) == [
         "old",
         "previous",
     ]
