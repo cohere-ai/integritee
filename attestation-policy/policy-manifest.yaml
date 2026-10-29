@@ -14,6 +14,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: e4-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -28,6 +29,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: e5f-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -42,6 +44,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: e5p-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -56,6 +59,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: r4f-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -70,6 +74,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: r4f-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -84,6 +89,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: r4p-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -98,6 +104,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: r4p-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -112,6 +119,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: r5f-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -126,6 +134,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: r5p-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -140,6 +149,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: cvp4-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -154,6 +164,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: cat2508rws-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -168,6 +179,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: cat2508rws-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -182,6 +194,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: cmp-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -196,6 +209,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: cmp-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -210,6 +224,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: nmc2606-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -524,6 +539,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: cta2605-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -538,6 +554,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: diarization-l-azure
   provider: azure
   machine_type: Standard_NCC40ads_H100_v5
@@ -552,6 +569,7 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
 - model: qw3-4b-l-gcp
   provider: gcp
   machine_type: a3-highgpu-1g
@@ -576,3 +594,201 @@ targets:
   - a43fd4f417ecc9e361462ee9edfd9e0a650cc962
   - af107f056985f0b3d5d5cf53f91e611d1e825b82
   - 0adfff0d9bf0919fef640bdefff4a5434cd89734
+- model: nmc2606-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/a7ea91f26566e3fda7c67b75bcf3abd2dbcf3783a47235cbf392350cb7a57c9aca75a70b8755d99afa753ca5dbfe801e.toml
+  initdata_sha384: a7ea91f26566e3fda7c67b75bcf3abd2dbcf3783a47235cbf392350cb7a57c9aca75a70b8755d99afa753ca5dbfe801e
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: nmc2606-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/f762f8651b3b0aeb542a17b1d051f75dc84d70f0e001b3a17f259bdeaa1b853b69c1370f1200803a5cf915294d533ab9.toml
+  initdata_sha384: f762f8651b3b0aeb542a17b1d051f75dc84d70f0e001b3a17f259bdeaa1b853b69c1370f1200803a5cf915294d533ab9
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw3-4b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/f5fbfc41e919f739f284fb1a0c2aad4089a84001a19e8e9c772acc115fbad1abd6ab21acb8376e53a8851273bd8f0616.toml
+  initdata_sha384: f5fbfc41e919f739f284fb1a0c2aad4089a84001a19e8e9c772acc115fbad1abd6ab21acb8376e53a8851273bd8f0616
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw3-4b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/0660d6c9ce923781d8ce5ac5f14652faf2d69e0889abddcb3e119ab32fdebfc893555c021287e4e6925f71028be1d966.toml
+  initdata_sha384: 0660d6c9ce923781d8ce5ac5f14652faf2d69e0889abddcb3e119ab32fdebfc893555c021287e4e6925f71028be1d966
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw3-5-4b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/72b57c75da9d7b8d163dfff9763cbac91340d1d1e045ee2504ff25afbb80c45b05e18aa0dc40c6198295e5a676ea2d76.toml
+  initdata_sha384: 72b57c75da9d7b8d163dfff9763cbac91340d1d1e045ee2504ff25afbb80c45b05e18aa0dc40c6198295e5a676ea2d76
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw3-5-4b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/019a069dcf11af006bac70c1098ec27d1863b727bb1ddabb1576ca40e04d738fc294f557cc4a49ef513ef63c21352aa3.toml
+  initdata_sha384: 019a069dcf11af006bac70c1098ec27d1863b727bb1ddabb1576ca40e04d738fc294f557cc4a49ef513ef63c21352aa3
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw3-5-35b-a3b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/1b3403a2fb3f7ae26e7126216c546ea65b1b5034536c30cc7dd696166250bbd557b006756b648dd9ed0cf7095c53646d.toml
+  initdata_sha384: 1b3403a2fb3f7ae26e7126216c546ea65b1b5034536c30cc7dd696166250bbd557b006756b648dd9ed0cf7095c53646d
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw3-5-35b-a3b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/a6bc77dac4e3cc57d0005c1060d27fabe23252c81158a6d1aa28a7f7df3077bec8c0389ec843c4c17b1ade8e2fa5b91e.toml
+  initdata_sha384: a6bc77dac4e3cc57d0005c1060d27fabe23252c81158a6d1aa28a7f7df3077bec8c0389ec843c4c17b1ade8e2fa5b91e
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw36-27b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/2bd8d11ff7a72ce0fed0e1fccd098187a87b018d8e1424f97ae3fa7bfc751c9537ed64167835b2fa70756cfe91e7221f.toml
+  initdata_sha384: 2bd8d11ff7a72ce0fed0e1fccd098187a87b018d8e1424f97ae3fa7bfc751c9537ed64167835b2fa70756cfe91e7221f
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw36-27b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/a8b1ef022aa8f8c75de9019c5d36c59e86f33c03fb669640961de5f1048cb2f81e5bb8cb26c40a265f7d9e21b5e85e48.toml
+  initdata_sha384: a8b1ef022aa8f8c75de9019c5d36c59e86f33c03fb669640961de5f1048cb2f81e5bb8cb26c40a265f7d9e21b5e85e48
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw38-27b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/8eb8041c20ecf7f03690067b609d0f43e32063bd3a407049ce57e5da41b4582a5828d72e4c35233518d450e2eb77cd8c.toml
+  initdata_sha384: 8eb8041c20ecf7f03690067b609d0f43e32063bd3a407049ce57e5da41b4582a5828d72e4c35233518d450e2eb77cd8c
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: qw38-27b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/346b3939fa631c8db6fcedf9cb42431eb57bbbb3432a4894d8802a39460ea4c0e7f14c223fff9ebeae2476844411c004.toml
+  initdata_sha384: 346b3939fa631c8db6fcedf9cb42431eb57bbbb3432a4894d8802a39460ea4c0e7f14c223fff9ebeae2476844411c004
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: mstr3-3b-r-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/94408784d383edbcfdcd85beb8cee0e6a129fb7f4f236b1613b333a0a59c7bc20f6df451bfe5026eb6e752ebdbe9eafe.toml
+  initdata_sha384: 94408784d383edbcfdcd85beb8cee0e6a129fb7f4f236b1613b333a0a59c7bc20f6df451bfe5026eb6e752ebdbe9eafe
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: mstr3-3b-r-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/d8f2357cc15647ade33af8bf6a5c49d2c3a2efa4dd0ba35a4e460dfc71f574b19cdabd6b98d80d3a4ed683ba46d20b3c.toml
+  initdata_sha384: d8f2357cc15647ade33af8bf6a5c49d2c3a2efa4dd0ba35a4e460dfc71f574b19cdabd6b98d80d3a4ed683ba46d20b3c
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: dvs2-24b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/b27c4a7a0ae2fa30b2345fae5a878de42ff86b9bd261a1635e9dcb610af81a0e18e81fca09b1aadd255d377482e1572c.toml
+  initdata_sha384: b27c4a7a0ae2fa30b2345fae5a878de42ff86b9bd261a1635e9dcb610af81a0e18e81fca09b1aadd255d377482e1572c
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: dvs2-24b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/22fd5d62ad74434bc43d5ef99294b881464b022d3fca037fb5ac03dcb3cd0ca77e8deaf475afc06a5d3107d956b84b25.toml
+  initdata_sha384: 22fd5d62ad74434bc43d5ef99294b881464b022d3fca037fb5ac03dcb3cd0ca77e8deaf475afc06a5d3107d956b84b25
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: phi4m-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/986916227869f4e5ae9188a2564f74c9f9cb4625a7691dc886c9b633c285ec578db97077c99eda25b74afbf6c53986b2.toml
+  initdata_sha384: 986916227869f4e5ae9188a2564f74c9f9cb4625a7691dc886c9b633c285ec578db97077c99eda25b74afbf6c53986b2
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: phi4m-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/f4d37f928d7479a1f095ff489aa6a7c30e9e46922a8f50cec594b9d61124e9a14486bc60b98749cad878ee3af13ec58e.toml
+  initdata_sha384: f4d37f928d7479a1f095ff489aa6a7c30e9e46922a8f50cec594b9d61124e9a14486bc60b98749cad878ee3af13ec58e
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: gm4-26b-a4b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/25b55e533bc5c7178b7594fa78e44b0b0736dfafd94290539e1ef51b1363a5dcd27d6cccd9d3d7c1682e7ede9393f178.toml
+  initdata_sha384: 25b55e533bc5c7178b7594fa78e44b0b0736dfafd94290539e1ef51b1363a5dcd27d6cccd9d3d7c1682e7ede9393f178
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: gm4-26b-a4b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/81188c360564a55677136b313b660e251eb4c33311405d0e648a61620949b4759f4f28c25f95b98478085bbdf569cc66.toml
+  initdata_sha384: 81188c360564a55677136b313b660e251eb4c33311405d0e648a61620949b4759f4f28c25f95b98478085bbdf569cc66
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: gptoss20b-l-gcp
+  provider: gcp
+  machine_type: a3-highgpu-1g
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/197f87ba69f5f338340d7a09d96d16f17bec425f27a219b8c094400b60c276991c33ecb2f385c1a40d1f5be27e5fcd8e.toml
+  initdata_sha384: 197f87ba69f5f338340d7a09d96d16f17bec425f27a219b8c094400b60c276991c33ecb2f385c1a40d1f5be27e5fcd8e
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
+- model: gptoss20b-l-azure
+  provider: azure
+  machine_type: Standard_NCC40ads_H100_v5
+  podvm_image_tag: podvm-ubuntu-release-0-3-1-cohere-2
+  initdata_file: initdata/0e1074b1fa7274647325201b0ce10c20d5cd03b32659770b3ea487da835a7eed3f32a853c69220bdf6841c9b7b2dfb92.toml
+  initdata_sha384: 0e1074b1fa7274647325201b0ce10c20d5cd03b32659770b3ea487da835a7eed3f32a853c69220bdf6841c9b7b2dfb92
+  added: '2026-10-29'
+  sources:
+  - d21cbca4b892cb8b6d271f30a1e4b18af324d9ef
