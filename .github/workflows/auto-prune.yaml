@@ -21,8 +21,9 @@ permissions:
 
 # Shared with add-from-blobheart so only one workflow writes the manifest at a
 # time. queue: max keeps every waiting run instead of cancelling all but one.
+# Non-main runs do not execute the publish job, so they get their own group.
 concurrency:
-  group: policy-manifest-writer
+  group: ${{ github.ref == 'refs/heads/main' && 'policy-manifest-writer' || github.run_id }}
   cancel-in-progress: false
   queue: max
 

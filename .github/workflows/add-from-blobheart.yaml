@@ -24,9 +24,10 @@ permissions:
 
 # Shared with auto-prune so only one workflow writes the manifest at a time.
 # queue: max keeps every waiting run; the default cancels all but the newest,
-# which would drop a Blobheart ref.
+# which would drop a Blobheart ref. Manual dispatches do not run publish job,
+# so they get their own group and never hold up a write.
 concurrency:
-  group: policy-manifest-writer
+  group: ${{ github.event_name == 'repository_dispatch' && 'policy-manifest-writer' || github.run_id }}
   cancel-in-progress: false
   queue: max
 
