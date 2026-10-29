@@ -1,6 +1,8 @@
-# Retires each Blobheart ref 3 days after the next ref is added to the manifest,
-# so the newer ref has time to deploy and roll out first. The newest ref is
-# never retired. Use prune-from-blobheart to retire refs by hand.
+# Retires each Blobheart ref 5 days after the next ref is added to the manifest,
+# so the newer ref has time to deploy and roll out first. 5 days outlasts the
+# longest stretch without a Blobheart production deploy (Christmas, about 4 days
+# 21 hours). The newest ref is never retired. Use prune-from-blobheart to
+# retire refs by hand.
 #
 # select: builds the pruned manifest and shows the diff. No write secrets.
 # publish: pushes it to main. Gated by the `release` environment, so a run on
@@ -56,7 +58,7 @@ jobs:
         id: select
         run: |
           RETIRE=$(python3 .github/workflows/auto-prune/expired_refs.py \
-            --manifest attestation-policy/policy-manifest.yaml --days 3)
+            --manifest attestation-policy/policy-manifest.yaml --days 5)
           echo "retire=$RETIRE" >> "$GITHUB_OUTPUT"
           echo "Refs to retire: ${RETIRE:-none}"
 
@@ -79,6 +81,12 @@ jobs:
             git diff --stat -- attestation-policy
             git diff -- attestation-policy/policy-manifest.yaml
           fi
+
+      - name: Validate pruned manifest
+        if: steps.changes.outputs.changed == 'true'
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
 
       - name: Upload pruned manifest
         if: steps.changes.outputs.changed == 'true'
