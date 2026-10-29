@@ -392,9 +392,10 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     assert policy.count("matches_tdx if {") == 1
     assert policy.count("matches_tdx_platform if {") == 2
     assert policy.count("matches_tdx_workload if {") == 1
-    assert policy.count(f'tdx.tdx_rtmr1 == "{"c" * 96}"') == 1
-    assert policy.count(f'tdx.tdx_rtmr1 == "{"f" * 96}"') == 1
-    assert not any(line.lstrip().startswith("#") for line in policy.splitlines())
+    assert "# Platform baseline: 111111111111/v1" in policy
+    assert "# Platform baseline: 111111111111/v2" in policy
+    assert "# Platform baseline: 111111111111/v3" not in policy
+    assert "# Model: cmp-l (Initdata: unknown)" in policy
     assert 'accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]' in policy
     assert '        "580.159.04"\n' in policy
     assert ita.EMPTY_POLICY_HEADER not in policy
@@ -879,6 +880,8 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert policy_text.count("matches_tdx if {") == 1
     assert policy_text.count("matches_tdx_platform if {") == 2
     assert policy_text.count("matches_tdx_workload if {") == 2
+    assert "# Model: cmp-l (Initdata:" in policy_text
+    assert "# Model: cmp-l-old (Initdata:" in policy_text
 
 
 class _StubRenderer:

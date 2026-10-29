@@ -196,12 +196,6 @@ def render_policy(
         DRIVER_VERSIONS_PLACEHOLDER,
         generate_driver_versions_block(nv_driver_versions),
     )
-    # ITA rejects policies over 20 KB, and comments are about a third of the
-    # rendered file. They stay in the template.
-    policy = "".join(
-        line for line in policy.splitlines(keepends=True)
-        if not line.lstrip().startswith("#")
-    )
 
     if not variant_count:
         # Warn on inert policy

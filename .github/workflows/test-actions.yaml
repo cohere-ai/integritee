@@ -121,7 +121,7 @@ jobs:
           # Only the generated blocks. Everything else is template text that
           # cannot go missing without the policy failing to compile anyway.
           generated = {
-              "ITA_POLICY": ["matches_tdx_platform if {", "matches_tdx_workload if {"],
+              "ITA_POLICY": ["matches_tdx_platform if {", "# Model: cmp-l (Initdata:"],
               "TRUSTEE_CPU_POLICY": [
                   "azsnp_image_ok if {",
                   "azsnp.tpm.pcr04 ==",
