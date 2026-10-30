@@ -29,12 +29,45 @@ on:
 permissions:
   contents: read
 
+# queue: max releases every pushed manifest in order. The default cancels a
+# waiting release when another push queues, failing add-from-blobheart's
+# wait-release for that commit.
 concurrency:
   group: production-ita-policy-release
   cancel-in-progress: false
+  queue: max
 
 jobs:
+  # Queued runs may start out of push order. A later push to main has its own
+  # run, which releases everything this commit changed, so skip this one rather
+  # than overwrite the newer release with older policy.
+  freshness:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      stale: ${{ steps.check.outputs.stale }}
+    steps:
+      - name: Check for a release run of a newer commit
+        id: check
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          stale=false
+          for sha in $(gh run list -R "$GITHUB_REPOSITORY" --workflow release-policy.yaml \
+              --event push --branch main --limit 20 --json headSha --jq '.[].headSha'); do
+            status=$(gh api "repos/$GITHUB_REPOSITORY/compare/$GITHUB_SHA...$sha" --jq .status)
+            [ "$status" = ahead ] && stale=true
+          done
+          echo "stale=$stale" >> "$GITHUB_OUTPUT"
+          [ "$stale" = false ] || echo "::notice::a newer commit has a release run; skipping $GITHUB_SHA"
+
   generate:
+    needs: freshness
+    # stale is empty off main, so generate still runs there as a dry run.
+    if: needs.freshness.outputs.stale != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -144,9 +177,11 @@ jobs:
             predicate.json
 
   publish:
-    needs: generate
+    needs: [freshness, generate]
     # Only a push to main publishes; the release environment is limited to main.
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      github.event_name == 'push' && github.ref == 'refs/heads/main' &&
+      needs.freshness.outputs.stale == 'false'
     runs-on: ubuntu-latest
     environment: release
     permissions:

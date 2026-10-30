@@ -7,6 +7,7 @@ import hashlib
 import importlib.util
 import sys
 import types
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -545,7 +546,7 @@ def test_local_derivation_uses_checkout_commit(monkeypatch, tmp_path):
 def test_prune_refuses_to_write_empty_manifest(tmp_path, monkeypatch):
     prune = load_action(
         "prune_manifest",
-        ".github/workflows/prune-from-blobheart/prune.py",
+        ".github/actions/prune-manifest/prune.py",
     )
     manifest = tmp_path / "policy-manifest.yaml"
     original = (
@@ -576,7 +577,7 @@ def test_prune_refuses_to_write_empty_manifest(tmp_path, monkeypatch):
 def test_prune_deletes_initdata_orphaned_by_removed_targets(tmp_path, monkeypatch):
     prune = load_action(
         "prune_initdata",
-        ".github/workflows/prune-from-blobheart/prune.py",
+        ".github/actions/prune-manifest/prune.py",
     )
     orphan, kept = "c" * 96, "d" * 96
     targets = [
@@ -601,6 +602,44 @@ def test_prune_deletes_initdata_orphaned_by_removed_targets(tmp_path, monkeypatc
     survivors = yaml.safe_load(manifest.read_text())["targets"]
     assert [target["initdata_sha384"] for target in survivors] == [kept]
     assert [path.name for path in initdata.iterdir()] == [f"{kept}.toml"]
+
+
+def test_auto_prune_retires_a_ref_a_grace_period_after_the_next_is_added():
+    expired_refs = load_action(
+        "auto_prune_expired_refs",
+        ".github/workflows/auto-prune/expired_refs.py",
+    )
+    now = datetime(2026, 10, 23, 14, tzinfo=timezone.utc)
+    added = {
+        "old": now - timedelta(days=10),
+        "previous": now - timedelta(days=5),
+        "recent": now - timedelta(days=3),
+        "newest": now - timedelta(days=2, hours=23),
+    }
+
+    assert expired_refs.refs_to_retire(added, added, now, timedelta(days=3)) == [
+        "old",
+        "previous",
+    ]
+    assert expired_refs.refs_to_retire(
+        {"newest": now}, {"newest": now}, now, timedelta(0),
+    ) == []
+
+
+def test_auto_prune_orders_refs_by_blobheart_merge_not_manifest_add():
+    expired_refs = load_action(
+        "auto_prune_expired_refs",
+        ".github/workflows/auto-prune/expired_refs.py",
+    )
+    now = datetime(2026, 10, 23, 14, tzinfo=timezone.utc)
+    merged = {"older": now - timedelta(days=9), "newer": now - timedelta(days=8)}
+    out_of_order = {"older": now - timedelta(days=6), "newer": now - timedelta(days=7)}
+    together = {"older": now - timedelta(days=6), "newer": now - timedelta(days=6)}
+
+    for added in (out_of_order, together):
+        assert expired_refs.refs_to_retire(
+            merged, added, now, timedelta(days=5),
+        ) == ["older"]
 
 
 @pytest.mark.parametrize("status", ["ahead", "identical"])

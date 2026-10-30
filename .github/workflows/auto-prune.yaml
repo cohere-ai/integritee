@@ -1,0 +1,169 @@
+# Retires each Blobheart ref 5 days after the next ref, in Blobheart merge
+# order, is added to the manifest, so the newer ref has time to deploy and roll
+# out first. Merge order is used because adds can land out of order or
+# together. 5 days outlasts the
+# longest stretch without a Blobheart production deploy (Christmas, about 4 days
+# 21 hours). The newest ref is never retired. Use prune-from-blobheart to
+# retire refs by hand.
+#
+# select: builds the pruned manifest and shows the diff. No write secrets.
+# publish: pushes it to main. Gated by the `release` environment, so a run on
+# any other branch stops after select.
+name: Auto-prune from Blobheart
+
+on:
+  # Weekdays only, before Blobheart's first automated deploy (15:00 UTC), so
+  # nothing is retired over a weekend while no deploys run.
+  schedule:
+    - cron: "0 14 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Shared with add-from-blobheart so only one workflow writes the manifest at a
+# time. queue: max keeps every waiting run instead of cancelling all but one.
+# Non-main runs do not execute the publish job, so they get their own group.
+concurrency:
+  group: ${{ github.ref == 'refs/heads/main' && 'policy-manifest-writer' || github.run_id }}
+  cancel-in-progress: false
+  queue: max
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    outputs:
+      base-sha: ${{ steps.base.outputs.sha }}
+      retire: ${{ steps.select.outputs.retire }}
+      changed: ${{ steps.changes.outputs.changed }}
+    steps:
+      # Check out the branch rather than github.sha: a run that waited in the
+      # concurrency queue must see the commits made by the runs ahead of it.
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.ref }}
+          # Full history: refs are timed by when they were added to the manifest.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record base commit
+        id: base
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Read-only token for blobheart, to order refs by merge time.
+      - name: Mint CC reader app token (read-only)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart
+
+      - name: Install PyYAML
+        run: pip install pyyaml
+
+      - name: Select expired refs
+        id: select
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          RETIRE=$(python3 .github/workflows/auto-prune/expired_refs.py \
+            --manifest attestation-policy/policy-manifest.yaml --days 5)
+          echo "retire=$RETIRE" >> "$GITHUB_OUTPUT"
+          echo "Refs to retire: ${RETIRE:-none}"
+
+      - name: Prune expired refs
+        id: prune
+        if: steps.select.outputs.retire != ''
+        uses: ./.github/actions/prune-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+          retire: ${{ steps.select.outputs.retire }}
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet -- attestation-policy; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes to manifest"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat -- attestation-policy
+            git diff -- attestation-policy/policy-manifest.yaml
+          fi
+
+      - name: Validate pruned manifest
+        if: steps.changes.outputs.changed == 'true'
+        uses: ./.github/actions/validate-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+
+      - name: Upload pruned manifest
+        if: steps.changes.outputs.changed == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: pruned-policy-manifest
+          path: |
+            attestation-policy/policy-manifest.yaml
+            attestation-policy/initdata/
+
+  publish:
+    needs: select
+    if: needs.select.outputs.changed == 'true' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: read
+    env:
+      RETIRE: ${{ needs.select.outputs.retire }}
+    steps:
+      # Pin to the commit select read. Don't persist GITHUB_TOKEN: it is
+      # read-only and would be used by git push instead of the app token.
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ needs.select.outputs.base-sha }}
+          persist-credentials: false
+
+      # The artifact holds only the initdata that survived the prune, and
+      # downloading over the checkout never deletes files.
+      - name: Clear initdata before applying the pruned manifest
+        run: rm -rf attestation-policy/initdata
+
+      - name: Download pruned manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c  # v8.0.1
+        with:
+          name: pruned-policy-manifest
+          path: attestation-policy
+
+      # Write token. Only available here because this job has
+      # environment: release; select above cannot read these secrets.
+      - name: Mint CC policy app token (integritee write)
+        id: write-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.CC_POLICY_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: integritee
+          permission-contents: write
+
+      # A plain push fails if main moved since select, e.g. a merged PR; the
+      # next scheduled run retries against the new main.
+      - name: Commit and push manifest
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+        run: |
+          SHORT_SOURCES=$(for ref in $RETIRE; do printf '%s ' "${ref:0:8}"; done)
+          git config user.name "integritee-policy-automation[bot]"
+          git config user.email "integritee-policy-automation[bot]@users.noreply.github.com"
+          git add -A -- attestation-policy/policy-manifest.yaml attestation-policy/initdata
+          git commit -m "feat(policy): Auto-retire blobheart sources (${SHORT_SOURCES% })"
+          gh auth setup-git
+          git push origin HEAD:main
