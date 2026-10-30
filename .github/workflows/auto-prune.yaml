@@ -1,5 +1,7 @@
-# Retires each Blobheart ref 5 days after the next ref is added to the manifest,
-# so the newer ref has time to deploy and roll out first. 5 days outlasts the
+# Retires each Blobheart ref 5 days after the next ref, in Blobheart merge
+# order, is added to the manifest, so the newer ref has time to deploy and roll
+# out first. Merge order is used because adds can land out of order or
+# together. 5 days outlasts the
 # longest stretch without a Blobheart production deploy (Christmas, about 4 days
 # 21 hours). The newest ref is never retired. Use prune-from-blobheart to
 # retire refs by hand.
@@ -52,11 +54,23 @@ jobs:
         id: base
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
+      # Read-only token for blobheart, to order refs by merge time.
+      - name: Mint CC reader app token (read-only)
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1  # v3.2.0
+        with:
+          client-id: ${{ vars.CC_POLICY_READER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.CC_POLICY_READER_APP_PRIVATE_KEY }}
+          owner: cohere-ai
+          repositories: blobheart
+
       - name: Install PyYAML
         run: pip install pyyaml
 
       - name: Select expired refs
         id: select
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           RETIRE=$(python3 .github/workflows/auto-prune/expired_refs.py \
             --manifest attestation-policy/policy-manifest.yaml --days 5)
