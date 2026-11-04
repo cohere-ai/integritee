@@ -424,6 +424,29 @@ jobs:
           fi
           echo "Re-merge dedup OK: added=0, skipped=${{ steps.merge-dedup.outputs.skipped }}"
 
+  test-prune-manifest:
+    runs-on: ubuntu-latest
+    env:
+      FIXTURE: .github/workflows/test-actions/prune-manifest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      - name: Retire the new source
+        id: prune
+        uses: ./.github/actions/prune-manifest
+        with:
+          manifest-file: ${{ env.FIXTURE }}/policy-manifest.yaml
+          retire: 112233aa112233aa112233aa112233aa112233aa
+
+      - name: Assert new-model and its initdata are gone
+        env:
+          RESULT: ${{ steps.prune.outputs.removed }}/${{ steps.prune.outputs.trimmed }}/${{ steps.prune.outputs.remaining }}
+        run: |
+          [ "$RESULT" = 1/1/1 ] || { echo "ERROR: expected removed/trimmed/remaining 1/1/1, got $RESULT"; exit 1; }
+          ls "$FIXTURE/initdata/a433c422"*.toml >/dev/null
+          ! ls "$FIXTURE/initdata/fb03a7b8"*.toml 2>/dev/null || exit 1
+
   test-derive-manifest:
     runs-on: ubuntu-latest
     steps:

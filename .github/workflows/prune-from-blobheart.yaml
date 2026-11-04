@@ -39,22 +39,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
 
-      - name: Install PyYAML
-        run: pip install pyyaml
-
       - name: Prune retired sources
         id: prune
-        run: |
-          read -ra REFS <<< "$RETIRE_SOURCES"
-          for ref in "${REFS[@]}"; do
-            [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || {
-              echo "::error::invalid blobheart commit SHA: $ref"; exit 1;
-            }
-          done
-          RESULT=$(python3 .github/workflows/prune-from-blobheart/prune.py \
-            --manifest attestation-policy/policy-manifest.yaml \
-            --retire "${REFS[@]}")
-          echo "$RESULT" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/prune-manifest
+        with:
+          manifest-file: attestation-policy/policy-manifest.yaml
+          retire: ${{ env.RETIRE_SOURCES }}
 
       - name: Check for changes
         id: changes

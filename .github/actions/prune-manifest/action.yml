@@ -1,0 +1,48 @@
+name: "Prune Manifest"
+description: "Retire Blobheart sources from a policy manifest and delete initdata no remaining target references"
+
+inputs:
+  manifest-file:
+    description: "Path to the policy manifest"
+    required: true
+  retire:
+    description: "Space-separated full Blobheart commit SHAs to retire"
+    required: true
+
+outputs:
+  removed:
+    description: "Number of targets removed because their sources list became empty"
+    value: ${{ steps.prune.outputs.removed }}
+  trimmed:
+    description: "Number of targets that lost a source but are still active"
+    value: ${{ steps.prune.outputs.trimmed }}
+  remaining:
+    description: "Number of targets left in the manifest"
+    value: ${{ steps.prune.outputs.remaining }}
+  warnings:
+    description: "Pipe-separated warnings, e.g. for SHAs no target mentions"
+    value: ${{ steps.prune.outputs.warnings }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install Python dependencies
+      shell: bash
+      run: pip install 'pyyaml>=6,<7' >/dev/null 2>&1
+
+    - name: Prune retired sources
+      id: prune
+      shell: bash
+      env:
+        MANIFEST_FILE: ${{ inputs.manifest-file }}
+        RETIRE: ${{ inputs.retire }}
+      run: |
+        read -ra REFS <<< "$RETIRE"
+        for ref in "${REFS[@]}"; do
+          [[ "$ref" =~ ^[0-9a-f]{40}$ ]] || {
+            echo "::error::invalid blobheart commit SHA: $ref"; exit 1;
+          }
+        done
+        python3 "${{ github.action_path }}/prune.py" \
+          --manifest "$MANIFEST_FILE" \
+          --retire "${REFS[@]}" >> "$GITHUB_OUTPUT"
