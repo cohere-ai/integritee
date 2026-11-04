@@ -154,9 +154,25 @@ jobs:
           repositories: integritee
           permission-contents: write
 
-      # A plain push fails if main moved since select, e.g. a merged PR; the
-      # next scheduled run retries against the new main.
+      # The prune was computed from the manifest at base-sha. If the policy
+      # changed on main since, skip and let the next scheduled run prune it.
+      - name: Check policy unchanged on main
+        id: upstream
+        env:
+          GH_TOKEN: ${{ steps.write-token.outputs.token }}
+          BASE_SHA: ${{ needs.select.outputs.base-sha }}
+        run: |
+          gh auth setup-git
+          git fetch origin main
+          if git diff --quiet "$BASE_SHA" origin/main -- attestation-policy; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::policy changed on main since select; retrying next run"
+          fi
+
       - name: Commit and push manifest
+        if: steps.upstream.outputs.changed == 'false'
         env:
           GH_TOKEN: ${{ steps.write-token.outputs.token }}
         run: |
@@ -165,5 +181,5 @@ jobs:
           git config user.email "integritee-policy-automation[bot]@users.noreply.github.com"
           git add -A -- attestation-policy/policy-manifest.yaml attestation-policy/initdata
           git commit -m "feat(policy): Auto-retire blobheart sources (${SHORT_SOURCES% })"
-          gh auth setup-git
+          git rebase origin/main
           git push origin HEAD:main
