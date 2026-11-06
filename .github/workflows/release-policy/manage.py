@@ -19,6 +19,7 @@ UUID_RE = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
     r"[0-9a-f]{4}-[0-9a-f]{12}"
 )
+RIM_NAME_RE = re.compile(r"[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z][A-Za-z0-9_]*)*")
 
 
 def run(*command: str, capture_output: bool = False) -> str:
@@ -97,8 +98,14 @@ def prepare_assets(args: argparse.Namespace) -> None:
         raise SystemExit(f"invalid ITA policy ID: {args.policy_id}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    # RIM files keep their names, which already start with the release's
+    # namespace, so they sit beside the policies without colliding.
+    rims = sorted(args.rim_dir.glob("*.json"))
+    if not rims:
+        raise SystemExit(f"no RIM files in {args.rim_dir}")
     assets = {
         **{policy: policy.name for policy in args.policy},
+        **{rim: rim.name for rim in rims},
         args.manifest: "policy-manifest.yaml",
         args.predicate: "predicate.json",
         args.bundle: "attestation-bundle.sigstore.json",
@@ -120,11 +127,69 @@ def prepare_assets(args: argparse.Namespace) -> None:
     if args.reason:
         sections.append(f"**Reason:** {args.reason}")
     sections.append(f"**ITA Policy ID:** `{args.policy_id}`")
+    namespaces = sorted({
+        rim.stem.removesuffix(".platform")
+        for rim in rims
+        if rim.stem.endswith(".platform")
+    })
+    sections.append(
+        f"**ITA RIMs:** {len(rims)} under "
+        + ", ".join(f"`{namespace}`" for namespace in namespaces)
+    )
     # Named rather than counted, since a Trustee consumer resolves these by
     # filename and the set of them changes as services are added or dropped.
     policies = ", ".join(f"`{policy.name}`" for policy in args.policy)
     sections.append(f"**Policies:** {policies}")
     args.release_notes.write_text("\n\n".join(sections) + "\n")
+
+
+def superseded(previous: dict, current: dict) -> tuple[str, list[str]]:
+    """The policy ID and RIM names the previous release used that the
+    current one does not, from their predicates."""
+    policy_id = previous.get("policy_id", "")
+    if policy_id == current.get("policy_id"):
+        policy_id = ""
+    current_rims = set(current.get("ita_rims", []))
+    rims = [name for name in previous.get("ita_rims", [])
+            if name not in current_rims]
+    return policy_id, rims
+
+
+def release_predicate(tag: str) -> dict:
+    return json.loads(run(
+        "gh", "release", "download", tag,
+        "--pattern", "predicate.json", "--output", "-",
+        capture_output=True,
+    ))
+
+
+def superseded_ita(args: argparse.Namespace) -> None:
+    """Output what the release before args.version used in ITA that
+    args.version does not, for cleanup to delete."""
+    tags = [
+        release["tagName"]
+        for release in json.loads(run(
+            "gh", "release", "list", "--limit", "100", "--json", "tagName",
+            capture_output=True,
+        ))
+    ]
+    previous_tag = next((tag for tag in tags if tag != args.version), None)
+    previous = release_predicate(previous_tag) if previous_tag else {}
+    policy_id, rims = superseded(previous, release_predicate(args.version))
+    if policy_id and not UUID_RE.fullmatch(policy_id):
+        raise SystemExit(f"invalid ITA policy ID: {policy_id}")
+    for name in rims:
+        if not RIM_NAME_RE.fullmatch(name):
+            raise SystemExit(f"invalid ITA RIM name: {name}")
+
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if not github_output:
+        raise SystemExit("GITHUB_OUTPUT is required")
+    with Path(github_output).open("a") as output:
+        output.write(f"policy-id={policy_id}\n")
+        output.write(f"rim-names={' '.join(rims)}\n")
+    print(f"Superseded by {args.version}: policy {policy_id or 'none'}, "
+          f"{len(rims)} RIM(s) from {previous_tag or 'no release'}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -144,6 +209,7 @@ def parser() -> argparse.ArgumentParser:
 
     assets_parser = commands.add_parser("prepare-assets")
     assets_parser.add_argument("--policy", type=Path, nargs="+", required=True)
+    assets_parser.add_argument("--rim-dir", type=Path, required=True)
     assets_parser.add_argument("--manifest", type=Path, required=True)
     assets_parser.add_argument("--predicate", type=Path, required=True)
     assets_parser.add_argument("--bundle", type=Path, required=True)
@@ -152,6 +218,10 @@ def parser() -> argparse.ArgumentParser:
     assets_parser.add_argument("--policy-id", required=True)
     assets_parser.add_argument("--reason", default="")
     assets_parser.set_defaults(handler=prepare_assets)
+
+    superseded_parser = commands.add_parser("superseded-ita")
+    superseded_parser.add_argument("--version", required=True)
+    superseded_parser.set_defaults(handler=superseded_ita)
     return result
 
 

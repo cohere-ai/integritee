@@ -2,10 +2,10 @@
 #
 # Platform MRTD is verified against the ITA CSP Reference Integrity
 # Measurement (RIM) catalog for GCP TDX, which Intel maintains from
-# Google's signed endorsements (polled every 7 days). RTMR1/RTMR2
-# platform pins and RTMR3 workload pins (model initdata measurements)
-# are listed separately. The policy accepts any approved
-# platform/workload combination.
+# Google's signed endorsements (polled every 7 days). Accepted RTMR1/RTMR2
+# pairs, RTMR3 workload values and GPU driver versions come from Cohere's
+# public RIMs, uploaded and released with this policy. The policy accepts
+# any approved platform/workload combination.
 #
 # References:
 # - https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-gcp-rim.html
@@ -13,6 +13,8 @@
 import rego.v1
 import data.public.intel.ita.tdxutils
 import data.public.google.gcp.tdx.rims.mrtd as gcpmrtds
+import data.${RIM_NAMESPACE}.rtmr3 as rtmr3_rims
+import data.${RIM_NAMESPACE}.platform as platform_rim
 
 default match := false
 
@@ -80,14 +82,24 @@ tdx_base_checks if {
     tdx.tdx_seamsvn >= 271
 }
 
-# When no match blocks are present, we default to a valid deny-only policy.
+# When the RIMs hold no matching entries, we default to a valid deny-only
+# policy.
 default matches_tdx_platform := false
+
+matches_tdx_platform if {
+    some pair in platform_rim.rtmr1_rtmr2
+    pair.rtmr1 == input.tdx.tdx_rtmr1
+    pair.rtmr2 == input.tdx.tdx_rtmr2
+}
 
 default matches_tdx_workload := false
 
-${TDX_PLATFORM_MATCH_BLOCKS}
-
-${TDX_WORKLOAD_MATCH_BLOCKS}
+matches_tdx_workload if {
+${RTMR3_RIM_NAMES}
+    some name in rtmr3_rim_names
+    some rtmr3 in rtmr3_rims[name].rtmr3
+    rtmr3 == input.tdx.tdx_rtmr3
+}
 
 matches_tdx if {
     tdx_base_checks
@@ -100,14 +112,16 @@ matches_tdx if {
 # summarises the result across all GPUs.
 # See: https://docs.trustauthority.intel.com/main/articles/articles/ita/concept-gpu-attestation.html
 
+# One entry per distinct driver version across the manifest's PodVM images.
+nvidia_driver_accepted(gpu) if {
+    some version in platform_rim.nvidia_driver_versions
+    version == gpu["x-nvidia-gpu-driver-version"]
+}
+
 nvgpu_device_base_checks(gpu) if {
     gpu.hwmodel == "GH100"
     gpu.dbgstat == "disabled"
-
-    # One entry per distinct driver version across the manifest's PodVM images.
-    # An empty set denies, since indexing it is undefined.
-${NVIDIA_DRIVER_VERSIONS}
-    accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]
+    nvidia_driver_accepted(gpu)
 
     gpu["x-nvidia-gpu-attestation-report-nonce-match"] == true
     gpu["x-nvidia-gpu-arch-check"] == true
