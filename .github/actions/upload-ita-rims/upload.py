@@ -32,13 +32,15 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 def ita_session() -> requests.Session:
     # ITA answers 409 while it serializes concurrent RIM writes; neither 409
-    # nor 429 applies the write, so retrying POST and PUT is safe.
+    # nor 429 applies the write, so retrying POST and PUT is safe. The last
+    # response is returned rather than raised, so check() shows ITA's error.
     session = requests.Session()
     retries = Retry(
         total=5,
         backoff_factor=2,
         status_forcelist=[409, 429],
         allowed_methods=None,
+        raise_on_status=False,
     )
     session.mount("https://", HTTPAdapter(max_retries=retries))
     return session

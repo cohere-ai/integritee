@@ -31,6 +31,7 @@ def ita_session() -> requests.Session:
         backoff_factor=2,
         status_forcelist=[409, 429],
         allowed_methods=None,
+        raise_on_status=False,
     )
     session.mount("https://", HTTPAdapter(max_retries=retries))
     return session

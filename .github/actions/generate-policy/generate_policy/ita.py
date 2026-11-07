@@ -126,8 +126,9 @@ RIM_MAX_BYTES = 18 * 1024
 def rim_bytes(content: dict) -> bytes:
     """RIM content exactly as uploaded.
 
-    ITA's RIM `hash` is base64 SHA-384 over Python's default `json.dumps`
-    serialization, so the release assets use the same bytes.
+    ITA's RIM `hash` is base64 SHA-384 over the bytes it receives. Upload
+    sends content through requests, which serializes with `json.dumps`
+    defaults, so the release assets use those bytes and match the hash.
     """
     return json.dumps(content).encode()
 

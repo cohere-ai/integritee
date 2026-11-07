@@ -60,7 +60,9 @@ Every release contains:
 - `ita_rp_policy.rego` -- the relying-party policy, Rego a relying party
   evaluates against an ITA token's claims with this release's RIM files as
   data. It allows a token only if ITA appraised it with this release's ITA
-  policy and its measurements are in those RIMs
+  policy and its measurements are in those RIMs. Each RIM must be loaded as
+  data nested at its name, one level per dot: `public.cohere.v1.v0_0_22.platform.json`
+  goes at `data.public.cohere.v1.v0_0_22.platform`
 - `trustee_policy_cpu.rego` -- the Trustee CPU appraisal policy, for Azure SEV-SNP
 - `trustee_policy_gpu.rego` -- the Trustee GPU appraisal policy (uses NRAS)
 - `policy-manifest.yaml` -- every workload the policies cover

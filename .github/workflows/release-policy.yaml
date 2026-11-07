@@ -354,17 +354,18 @@ jobs:
           python3 .github/workflows/release-policy/manage.py superseded-ita
           --version "$VERSION"
 
-      - name: Delete superseded RIMs
-        uses: ./.github/actions/delete-ita-rims
-        with:
-          rim-names: ${{ steps.superseded.outputs.rim-names }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ vars.ITA_API_URL }}
-
+      # The policy goes first, so no policy is left importing missing RIMs.
       - name: Delete superseded policy
         if: steps.superseded.outputs.policy-id != ''
         uses: ./.github/actions/delete-ita-policy
         with:
           policy-id: ${{ steps.superseded.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Delete superseded RIMs
+        uses: ./.github/actions/delete-ita-rims
+        with:
+          rim-names: ${{ steps.superseded.outputs.rim-names }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ vars.ITA_API_URL }}

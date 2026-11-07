@@ -143,16 +143,28 @@ def prepare_assets(args: argparse.Namespace) -> None:
     args.release_notes.write_text("\n\n".join(sections) + "\n")
 
 
-def superseded(previous: dict, current: dict) -> tuple[str, list[str]]:
-    """The policy ID and RIM names the previous release used that the
-    current one does not, from their predicates."""
+def superseded(previous: dict, kept: list[dict]) -> tuple[str, list[str]]:
+    """The policy ID and RIM names the previous release used that no kept
+    release does, from their predicates."""
     policy_id = previous.get("policy_id", "")
-    if policy_id == current.get("policy_id"):
+    if policy_id in {predicate.get("policy_id") for predicate in kept}:
         policy_id = ""
-    current_rims = set(current.get("ita_rims", []))
+    kept_rims = {name for predicate in kept
+                 for name in predicate.get("ita_rims", [])}
     rims = [name for name in previous.get("ita_rims", [])
-            if name not in current_rims]
+            if name not in kept_rims]
     return policy_id, rims
+
+
+def cleanup_tags(tags: list[str], version: str) -> tuple[str | None, str]:
+    """The release before version and the latest release, from tags listed
+    newest first. A rerun of an older release's cleanup still targets the
+    release before it, and the latest release is kept."""
+    if version not in tags:
+        raise SystemExit(f"release {version} not found")
+    index = tags.index(version)
+    previous = tags[index + 1] if index + 1 < len(tags) else None
+    return previous, tags[0]
 
 
 def release_predicate(tag: str) -> dict:
@@ -164,8 +176,8 @@ def release_predicate(tag: str) -> dict:
 
 
 def superseded_ita(args: argparse.Namespace) -> None:
-    """Output what the release before args.version used in ITA that
-    args.version does not, for cleanup to delete."""
+    """Output what the release before args.version used in ITA that neither
+    args.version nor the latest release does, for cleanup to delete."""
     tags = [
         release["tagName"]
         for release in json.loads(run(
@@ -173,9 +185,10 @@ def superseded_ita(args: argparse.Namespace) -> None:
             capture_output=True,
         ))
     ]
-    previous_tag = next((tag for tag in tags if tag != args.version), None)
+    previous_tag, latest_tag = cleanup_tags(tags, args.version)
     previous = release_predicate(previous_tag) if previous_tag else {}
-    policy_id, rims = superseded(previous, release_predicate(args.version))
+    kept = [release_predicate(tag) for tag in {args.version, latest_tag}]
+    policy_id, rims = superseded(previous, kept)
     if policy_id and not UUID_RE.fullmatch(policy_id):
         raise SystemExit(f"invalid ITA policy ID: {policy_id}")
     for name in rims:

@@ -1099,8 +1099,11 @@ def test_rim_delete_removes_only_the_named_rims(monkeypatch, capsys):
          {"policy_id": "p1", "ita_rims": ["ns.a"]},
          ("", ["ns.b"])),
         ({}, {"policy_id": "p1", "ita_rims": ["ns.a"]}, ("", [])),
+        # A predicate from before RIMs were released.
+        ({"policy_id": "p1"}, {"policy_id": "p2", "ita_rims": ["ns.a"]},
+         ("p1", [])),
     ],
-    ids=["new-set", "shared", "first-release"],
+    ids=["new-set", "shared", "first-release", "no-rims"],
 )
 def test_cleanup_deletes_what_the_previous_release_alone_used(
     previous, current, expected
@@ -1110,7 +1113,23 @@ def test_cleanup_deletes_what_the_previous_release_alone_used(
         ".github/workflows/release-policy/manage.py",
     )
 
-    assert manage.superseded(previous, current) == expected
+    assert manage.superseded(previous, [current]) == expected
+
+
+def test_cleanup_rerun_targets_its_previous_release_and_keeps_the_latest():
+    manage = load_action(
+        "release_manage_cleanup_tags",
+        ".github/workflows/release-policy/manage.py",
+    )
+    tags = ["v3", "v2", "v1"]
+
+    assert manage.cleanup_tags(tags, "v2") == ("v1", "v3")
+    assert manage.cleanup_tags(tags, "v1") == (None, "v3")
+    previous = {"policy_id": "p1", "ita_rims": ["ns.v1.a"]}
+    latest = {"policy_id": "p1", "ita_rims": ["ns.v1.a"]}
+    assert manage.superseded(previous, [{"policy_id": "p2"}, latest]) == ("", [])
+    with pytest.raises(SystemExit):
+        manage.cleanup_tags(tags, "v4")
 
 
 @pytest.mark.parametrize(
