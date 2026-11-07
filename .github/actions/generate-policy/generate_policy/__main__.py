@@ -34,14 +34,18 @@ def build_renderers(output_dir: Path) -> dict[str, Renderer]:
     Adding a service means an entry here, wired to whatever configuration it
     needs, and its outputs declared in action.yml.
     """
+    version = os.environ.get("INPUT_VERSION", "")
+    nonce = os.environ.get("INPUT_ITA_POLICY_NONCE") == "true"
     return {
         ItaRenderer.name: ItaRenderer(
             baselines_repo=os.environ["BASELINES_REPO"],
             output_dir=output_dir,
+            version=version,
+            nonce=nonce,
         ),
         TrusteeRenderer.name: TrusteeRenderer(
             output_dir=output_dir,
-            policy_version=os.environ.get("INPUT_VERSION", ""),
+            policy_version=version,
         ),
     }
 
@@ -78,6 +82,19 @@ def main() -> None:
         renderers=[renderers[name] for name in requested],
         predicate_file=Path(predicate_env) if predicate_env else None,
     )
+    give_to_workspace_owner(policy_output_dir())
+
+
+def give_to_workspace_owner(directory: Path) -> None:
+    """Chown what the container wrote, so later host steps can add files.
+
+    The container runs as root, while steps after it run as the runner user
+    who owns the workspace.
+    """
+    workspace = Path.cwd().stat()
+    for root, _, files in os.walk(directory):
+        for path in [root, *(os.path.join(root, name) for name in files)]:
+            os.chown(path, workspace.st_uid, workspace.st_gid)
 
 
 main()

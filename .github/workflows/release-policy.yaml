@@ -1,11 +1,15 @@
-# Generates and validates the composite attestation policy, uploads it to ITA,
-# and publishes signed release assets and provenance.
+# Generates and validates the composite attestation policy, uploads it and its
+# RIMs to ITA, and publishes signed release assets and provenance.
 #
 # generate: builds and validates policies. It authenticates to GCP/GHCR to
 # measure images but does not upload to ITA or create a GitHub release.
 # publish: only on push to main, gated by the `release` environment, with
-# access to ITA. A manual dispatch runs generate only (a dry run); to publish,
-# merge the change to main.
+# access to ITA. Each release gets its own RIM set and policy.
+# cleanup: 5 min after publishing, once servers and clients have moved to
+# the new release, deletes what the previous release used in ITA and this one
+# does not.
+# A manual dispatch runs generate only (a dry run); to publish, merge the
+# change to main.
 name: Release Policy
 
 on:
@@ -31,7 +35,8 @@ permissions:
 
 # queue: max releases every pushed manifest in order. The default cancels a
 # waiting release when another push queues, failing add-from-blobheart's
-# wait-release for that commit.
+# wait-release for that commit. A run holds the group through cleanup, so at
+# most two releases' sets are ever live.
 concurrency:
   group: production-ita-policy-release
   cancel-in-progress: false
@@ -76,14 +81,10 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       ita-policy-file: ${{ steps.generate.outputs.ita-policy-file }}
+      ita-rim-dir: ${{ steps.generate.outputs.ita-rim-dir }}
       trustee-cpu-policy-file: ${{ steps.generate.outputs.trustee-cpu-policy-file }}
       trustee-gpu-policy-file: ${{ steps.generate.outputs.trustee-gpu-policy-file }}
     env:
-      # The single managed ITA policy every deployed initdata pins. The "-a"
-      # suffix is historical, from a retired blue/green slot pair; the name is
-      # sent on every update, so changing it renames the live policy in ITA.
-      ITA_POLICY_ID: cbeedffa-e224-4664-b6b4-573fcd4133d3
-      ITA_POLICY_NAME: integritee-policy-a
       REASON: ${{ inputs.reason || '' }}
     steps:
       - name: Checkout
@@ -172,6 +173,7 @@ jobs:
           name: attestation-release-assets
           path: |
             ${{ steps.generate.outputs.ita-policy-file }}
+            ${{ steps.generate.outputs.ita-rim-dir }}
             ${{ steps.generate.outputs.trustee-cpu-policy-file }}
             ${{ steps.generate.outputs.trustee-gpu-policy-file }}
             predicate.json
@@ -189,8 +191,6 @@ jobs:
       attestations: write
       id-token: write      # Sigstore
     env:
-      ITA_POLICY_ID: cbeedffa-e224-4664-b6b4-573fcd4133d3
-      ITA_POLICY_NAME: integritee-policy-a
       REASON: ${{ inputs.reason || '' }}
     steps:
       # Pin to the commit generate ran against, so a push landing mid-run
@@ -224,16 +224,22 @@ jobs:
           permission-contents: write
 
       # ----------------------------------------------------------------
-      # Upload to ITA, then read it back to prove the stored policy is exactly
-      # what generate produced
+      # Upload the RIMs and a new policy to ITA, then read the policy back to
+      # prove the stored policy is exactly what generate produced. Both uploads
+      # converge on ITA's state, so a rerun reuses what a failed run left.
       # ----------------------------------------------------------------
+      - name: Upload RIMs to ITA
+        uses: ./.github/actions/upload-ita-rims
+        with:
+          rim-dir: ${{ needs.generate.outputs.ita-rim-dir }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
       - name: Upload policy to ITA
-        id: upload
+        id: ita-upload
         uses: ./.github/actions/upload-ita-policy
         with:
           policy-file: ${{ needs.generate.outputs.ita-policy-file }}
-          policy-id: ${{ env.ITA_POLICY_ID }}
-          policy-name: ${{ env.ITA_POLICY_NAME }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ vars.ITA_API_URL }}
           predicate-file: predicate.json
@@ -242,29 +248,42 @@ jobs:
         id: fetch
         uses: ./.github/actions/fetch-ita-policy
         with:
-          policy-id: ${{ env.ITA_POLICY_ID }}
+          policy-id: ${{ steps.ita-upload.outputs.policy-id }}
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ vars.ITA_API_URL }}
 
       - name: Verify uploaded policy
         run: diff "${{ needs.generate.outputs.ita-policy-file }}" "${{ steps.fetch.outputs.policy-file }}"
 
+      - name: Render RP policy
+        id: rp
+        uses: ./.github/actions/render-ita-rp-policy
+        with:
+          rim-dir: ${{ needs.generate.outputs.ita-rim-dir }}
+          policy-id: ${{ steps.ita-upload.outputs.policy-id }}
+          policy-hash: ${{ steps.ita-upload.outputs.policy-hash }}
+
+      # ITA serves a new RIM or policy after up to ~13 s. Nothing attests
+      # against either until the release names them, so one wait here covers
+      # both uploads.
+      - name: Wait for ITA to serve the uploads
+        run: sleep 15
+
       # ----------------------------------------------------------------
       # Attest policies with Sigstore
       # ----------------------------------------------------------------
       # One bundle with several subjects, so a single Rekor entry covers every
-      # released policy. The manifest is named too: its content is already in
-      # the predicate, but a subject gives it a digest a consumer can check
-      # directly instead of diffing a download against the predicate.
+      # released policy.
       - name: Attest policies with Sigstore
         id: attest
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4.1.0
         with:
           subject-path: |
             ${{ needs.generate.outputs.ita-policy-file }}
+            ${{ steps.rp.outputs.ita-rp-policy-file }}
+            ${{ needs.generate.outputs.ita-rim-dir }}/*.json
             ${{ needs.generate.outputs.trustee-cpu-policy-file }}
             ${{ needs.generate.outputs.trustee-gpu-policy-file }}
-            attestation-policy/policy-manifest.yaml
           predicate-type: https://cohere.com/attestation-policy/v1
           predicate-path: predicate.json
 
@@ -274,12 +293,14 @@ jobs:
       - name: Prepare release assets
         env:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-          POLICY_ID: ${{ env.ITA_POLICY_ID }}
+          POLICY_ID: ${{ steps.ita-upload.outputs.policy-id }}
         run: >-
           python3 .github/workflows/release-policy/manage.py prepare-assets
           --policy "${{ needs.generate.outputs.ita-policy-file }}"
+          "${{ steps.rp.outputs.ita-rp-policy-file }}"
           "${{ needs.generate.outputs.trustee-cpu-policy-file }}"
           "${{ needs.generate.outputs.trustee-gpu-policy-file }}"
+          --rim-dir "${{ needs.generate.outputs.ita-rim-dir }}"
           --manifest attestation-policy/policy-manifest.yaml
           --predicate predicate.json
           --bundle "$BUNDLE_PATH"
@@ -296,10 +317,55 @@ jobs:
           gh release create "$VERSION"
           --title "Attestation Policy $VERSION"
           --notes-file release-body.md
-          release-assets/ita_policy.rego
-          release-assets/trustee_policy_cpu.rego
-          release-assets/trustee_policy_gpu.rego
-          release-assets/policy-manifest.yaml
-          release-assets/policy-manifest-bundle.tar.gz
-          release-assets/predicate.json
-          release-assets/attestation-bundle.sigstore.json
+          --latest
+          release-assets/*
+
+  cleanup:
+    needs: [generate, publish]
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+        with:
+          ref: ${{ github.sha }}
+
+      - name: Install Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install requests
+
+      # Servers move to the new policy on their next passport refresh so wait
+      # a few minutes to ensure they stopped using the old policy ID.
+      - name: Wait for servers and clients to move to the release
+        run: sleep 300
+
+      - name: Find what the release superseded
+        id: superseded
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.generate.outputs.version }}
+        run: >-
+          python3 .github/workflows/release-policy/manage.py superseded-ita
+          --version "$VERSION"
+
+      # The policy goes first, so no policy is left importing missing RIMs.
+      - name: Delete superseded policy
+        if: steps.superseded.outputs.policy-id != ''
+        uses: ./.github/actions/delete-ita-policy
+        with:
+          policy-id: ${{ steps.superseded.outputs.policy-id }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Delete superseded RIMs
+        uses: ./.github/actions/delete-ita-rims
+        with:
+          rim-names: ${{ steps.superseded.outputs.rim-names }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}

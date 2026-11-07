@@ -347,7 +347,14 @@ def test_matches_legacy_canonical_to_identical_version(monkeypatch):
     assert variants[0]["baseline"] == baseline
 
 
-def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
+def _read_rims(rim_dir: Path) -> dict[str, dict]:
+    return {
+        path.stem: json.loads(path.read_bytes())
+        for path in rim_dir.glob("*.json")
+    }
+
+
+def test_render_rims_covers_every_baseline_variant(tmp_path):
     measurements_v1 = {
         "mrtd": "a" * 96,
         "rtmr0": "b" * 96,
@@ -357,85 +364,46 @@ def test_render_policy_emits_unique_baseline_blocks_by_model(tmp_path):
     }
     measurements_v2 = {
         **measurements_v1,
-        "rtmr1": "f" * 96,
+        "rtmr1": "1" * 96,
     }
     target = {
         "model": "cmp-l",
         "measurements": measurements_v1,
         "baseline_variants": [
-            {
-                "version": "v1",
-                "firmware_sha384": "1" * 96,
-                "measurements": measurements_v1,
-            },
-            {
-                "version": "v2",
-                "firmware_sha384": "1" * 96,
-                "measurements": measurements_v2,
-            },
-            {
-                "version": "v3",
-                "firmware_sha384": "1" * 96,
-                "measurements": measurements_v2,
-            },
+            {"version": "v1", "measurements": measurements_v1},
+            {"version": "v2", "measurements": measurements_v2},
+            {"version": "v3", "measurements": measurements_v2},
         ],
     }
-    output = tmp_path / "policy.rego"
 
-    ita.render_policy(
+    names = ita.render_rims(
         [target],
-        ["580.159.04"],
-        output,
+        ["580.159.04", "570.1", "580.159.04"],
+        "public.test",
+        tmp_path / "packed",
     )
 
-    policy = output.read_text()
-    assert policy.count("matches_tdx if {") == 1
-    assert policy.count("matches_tdx_platform if {") == 2
-    assert policy.count("matches_tdx_workload if {") == 1
-    assert "# Platform baseline: 111111111111/v1" in policy
-    assert "# Platform baseline: 111111111111/v2" in policy
-    assert "# Platform baseline: 111111111111/v3" not in policy
-    assert "# Model: cmp-l (Initdata: unknown)" in policy
-    assert 'accepted_gpu_driver_versions[gpu["x-nvidia-gpu-driver-version"]]' in policy
-    assert '        "580.159.04"\n' in policy
-    assert ita.EMPTY_POLICY_HEADER not in policy
-
-    injected_version = '580.159.04"\n}\ndefault match := true\n#'
-    ita.render_policy(
-        [target],
-        [injected_version],
-        output,
+    assert sorted(names) == ["public.test.platform", "public.test.rtmr3.s00"]
+    assert _read_rims(tmp_path / "packed") == {
+        "public.test.rtmr3.s00": {"rtmr3": ["e" * 96]},
+        "public.test.platform": {
+            "rtmr1_rtmr2": [
+                {"rtmr1": "1" * 96, "rtmr2": "d" * 96},
+                {"rtmr1": "c" * 96, "rtmr2": "d" * 96},
+            ],
+            "nvidia_driver_versions": ["570.1", "580.159.04"],
+        },
+    }
+    sharded = ita.render_rims(
+        [target], [], "public.test", tmp_path / "sharded", 4
     )
-    policy = output.read_text()
-    assert f"        {json.dumps(injected_version)}\n" in policy
-    assert "\ndefault match := true\n" not in policy
+    assert len(sharded) == 5
 
 
 def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path):
-    # PLATFORM_FIELDS excludes rtmr3, which the workload block requires.
-    measurements = {
-        field: "a" * 96
-        for field in ita.PLATFORM_FIELDS
-    }
-    measurements["rtmr3"] = "b" * 96
-    target = {
-        "model": "cmp-l",
-        "measurements": measurements,
-        "baseline_variants": [
-            {
-                "version": "v1",
-                "firmware_sha384": "1" * 96,
-                "measurements": measurements,
-            },
-        ],
-    }
     output = tmp_path / "policy.rego"
 
-    ita.render_policy(
-        [target],
-        ["580.159.04"],
-        output,
-    )
+    ita.render_policy(ita.RIM_NAMESPACE, ["s00"], output)
     policy = output.read_text()
 
     assert policy.count("tdx_base_checks if {") == 1
@@ -489,23 +457,44 @@ def _tdx_target() -> dict:
     }
 
 
-def test_renders_an_inert_policy_when_nothing_matched(tmp_path, capsys):
-    output = tmp_path / "policy.rego"
+@pytest.mark.parametrize("nonce", [False, True])
+def test_only_a_nonce_makes_identical_renders_differ(tmp_path, nonce):
+    """ITA refuses a second policy with the same content: an unchanged policy
+    has to render identically to be reused, and the nonce lets identical
+    renders coexist."""
+    first, second = tmp_path / "first.rego", tmp_path / "second.rego"
+    ita.render_policy(ita.RIM_NAMESPACE, ["s00"], first, nonce)
+    ita.render_policy(ita.RIM_NAMESPACE, ["s00"], second, nonce)
 
-    ita.render_policy([], [], output)
+    assert (first.read_text() != second.read_text()) is nonce
 
-    policy = output.read_text()
-    # Every generated section is absent, so only the defaults define these.
-    assert "matches_tdx_platform if {" not in policy
-    assert "matches_tdx_workload if {" not in policy
-    assert "default matches_tdx_platform := false" in policy
-    assert "default matches_tdx_workload := false" in policy
-    # An empty set, not a fabricated version no GPU can report.
-    assert "accepted_gpu_driver_versions := {}" in policy
-    assert '""' not in policy
 
-    assert ita.EMPTY_POLICY_HEADER in policy
-    assert "::warning::" in capsys.readouterr().out
+@pytest.mark.parametrize(
+    "version, namespace",
+    [
+        ("v0.0.17", "public.cohere.v1.v0_0_17"),
+        ("v0.0.0-test", "public.cohere.v1.v0_0_0_test"),
+        ("", "public.cohere.v1"),
+    ],
+)
+def test_each_release_names_its_own_rims(version, namespace):
+    assert ita.release_rim_namespace(version) == namespace
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "public.test\nimport data.x",
+        "public.1test",
+        "a." * 10 + "a",
+        "a" * 129,
+    ],
+)
+def test_rim_names_follow_ita_rules(tmp_path, name):
+    with pytest.raises(ValueError, match="invalid ITA RIM name"):
+        ita.render_policy(name, ["s00"], tmp_path / "policy.rego")
+    with pytest.raises(ValueError, match="invalid ITA RIM name"):
+        ita.render_policy("public.test", [name], tmp_path / "policy.rego")
 
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -516,20 +505,51 @@ FIXTURES = Path(__file__).parent / "fixtures"
 RIM_STUBS = [FIXTURES / "ita-rim-stub.rego", FIXTURES / "gcp-mrtd-rims.json"]
 
 
-def _render_module(tmp_path: Path, targets: list[dict]) -> Path:
-    """Render a policy and wrap it in a package for opa to load standalone.
+NAMESPACE = "public.test"
 
+
+def _rim_data(rims: dict[str, dict]) -> dict:
+    """Nest RIMs by name, where ITA's import data.<name> finds them."""
+    data: dict = {}
+    for name, rim in rims.items():
+        *parents, leaf = name.split(".")
+        node = data
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = rim
+    return data
+
+
+def _render_module(
+    tmp_path: Path,
+    targets: list[dict],
+    rtmr3_shards: int | None = None,
+    listed: list[str] | None = None,
+) -> list[Path]:
+    """Render a policy and its RIMs for opa to load standalone.
+
+    The policy lists every rendered RTMR3 RIM unless listed names a subset.
     ITA supplies the package declaration, so the uploaded file carries none.
     """
-    policy = tmp_path / "policy.rego"
-    ita.render_policy(
+    rim_dir = tmp_path / "rims"
+    rim_names = ita.render_rims(
         targets,
         ["580.159.04"] if targets else [],
-        policy,
+        NAMESPACE,
+        rim_dir,
+        rtmr3_shards,
     )
+    if listed is None:
+        listed = ita.rtmr3_short_names(NAMESPACE, rim_names)
+
+    policy = tmp_path / "policy.rego"
+    ita.render_policy(NAMESPACE, listed, policy)
     module = tmp_path / "module.rego"
     module.write_text("package integritee\n\n" + policy.read_text())
-    return module
+
+    data = tmp_path / "rims.json"
+    data.write_text(json.dumps(_rim_data(_read_rims(rim_dir))))
+    return [module, data]
 
 
 @pytest.mark.parametrize(
@@ -543,7 +563,7 @@ def test_rendered_policy_compiles(tmp_path, opa, targets):
     check that the template's defaults hold that off.
     """
     result = subprocess.run(
-        [opa, "check", *RIM_STUBS, str(_render_module(tmp_path, targets))],
+        [opa, "check", *RIM_STUBS, str(_render_module(tmp_path, targets)[0])],
         capture_output=True,
         text=True,
     )
@@ -553,15 +573,15 @@ def test_rendered_policy_compiles(tmp_path, opa, targets):
 
 def _opa_eval(
     opa: str,
-    module: Path,
+    files: list[Path],
     query: str,
     input_file: Path | None = None,
 ):
     """Evaluate a query, returning None where the rule is undefined."""
     command = [opa, "eval"]
-    for stub in RIM_STUBS:
-        command += ["--data", str(stub)]
-    command += ["--data", str(module), query]
+    for path in [*RIM_STUBS, *files]:
+        command += ["--data", str(path)]
+    command.append(query)
     if input_file:
         command += ["--input", str(input_file)]
     result = subprocess.run(command, capture_output=True, text=True, check=True)
@@ -638,7 +658,7 @@ def test_gpu_driver_version_must_be_one_the_policy_lists(
     driver,
     accepted,
 ):
-    """Set membership replaced a direct ==, so it has to enforce both ways.
+    """The driver check reads the platform RIM, so it has to enforce both ways.
 
     An unlisted version leaves the rule undefined rather than false, which
     fails the enclosing body just the same.
@@ -696,8 +716,170 @@ def test_gpu_debug_and_revocation_are_refused(tmp_path, opa, mutate):
     assert value is None
 
 
+RTMR3_VALUES = [hashlib.sha384(str(i).encode()).hexdigest() for i in range(50)]
+
+
+def _tdx_input(tmp_path: Path, rtmr1: str, rtmr2: str, rtmr3: str) -> Path:
+    path = tmp_path / "input.json"
+    path.write_text(json.dumps({
+        "tdx": {"tdx_rtmr1": rtmr1, "tdx_rtmr2": rtmr2, "tdx_rtmr3": rtmr3},
+    }))
+    return path
+
+
+def _two_platform_target() -> dict:
+    """Two released pairs, (c, d) and (e, f), and RTMR3 values 0 to 9."""
+    variants = [
+        {"measurements": {"rtmr1": r1 * 96, "rtmr2": r2 * 96, "rtmr3": rtmr3}}
+        for r1, r2 in (("c", "d"), ("e", "f"))
+        for rtmr3 in RTMR3_VALUES[:10]
+    ]
+    return {
+        "model": "cmp-l",
+        "measurements": {},
+        "baseline_variants": variants,
+    }
+
+
+@pytest.mark.parametrize(
+    "rtmr1, rtmr2, accepted",
+    [("c", "d", True), ("e", "f", True), ("c", "f", False), ("e", "d", False)],
+)
+def test_platform_pair_is_matched_within_one_entry(
+    tmp_path, opa, rtmr1, rtmr2, accepted
+):
+    """Each field of a mixed pair is released, but no entry has both."""
+    value = _opa_eval(
+        opa,
+        _render_module(tmp_path, [_two_platform_target()]),
+        "data.integritee.matches_tdx_platform",
+        _tdx_input(tmp_path, rtmr1 * 96, rtmr2 * 96, RTMR3_VALUES[0]),
+    )
+
+    assert value is accepted
+
+
+@pytest.mark.parametrize(
+    "rtmr3, accepted",
+    [(value, True) for value in RTMR3_VALUES[:10]]
+    + [(RTMR3_VALUES[10], False)],
+)
+def test_workload_matches_a_value_in_any_rtmr3_rim(
+    tmp_path, opa, rtmr3, accepted
+):
+    files = _render_module(tmp_path, [_two_platform_target()], rtmr3_shards=4)
+
+    value = _opa_eval(
+        opa,
+        files,
+        "data.integritee.matches_tdx_workload",
+        _tdx_input(tmp_path, "c" * 96, "d" * 96, rtmr3),
+    )
+
+    assert value is accepted
+
+
+@pytest.mark.parametrize(
+    "listed, accepted",
+    [(["s00", "s01"], True), (["s01"], False), (["s00", "s99"], True)],
+)
+def test_only_listed_rtmr3_rims_are_read(tmp_path, opa, listed, accepted):
+    """The prefix import exposes every RIM under it; the list bounds it."""
+    rtmr3 = ita.shard_rtmr3_rims(RTMR3_VALUES[:10], 2)[0]["rtmr3"][0]
+    target = _two_platform_target()
+
+    value = _opa_eval(
+        opa,
+        _render_module(tmp_path, [target], rtmr3_shards=2, listed=listed),
+        "data.integritee.matches_tdx_workload",
+        _tdx_input(tmp_path, "c" * 96, "d" * 96, rtmr3),
+    )
+
+    assert value is accepted
+
+
+POLICY_ID = "3f2c1a9e-8b7d-4c6e-9a1f-0e2d3c4b5a69"
+POLICY_HASH = "c29tZSBwb2xpY3kgaGFzaA=="
+TOKEN_POLICY_HASH = base64.b64encode(POLICY_HASH.encode()).decode()
+
+
+def _rp_token(**overrides) -> dict:
+    gpu = {"x-nvidia-gpu-driver-version": "580.159.04"}
+    return {
+        "policy_ids_matched": [
+            {"id": POLICY_ID, "version": "v1", "hash": TOKEN_POLICY_HASH},
+        ],
+        "tdx": {
+            "tdx_rtmr1": "c" * 96,
+            "tdx_rtmr2": "d" * 96,
+            "tdx_rtmr3": RTMR3_VALUES[0],
+        },
+        "nvgpu": {"claim_details": {"GPU-0": gpu}},
+        **overrides,
+    }
+
+
+@pytest.mark.parametrize(
+    "token, accepted",
+    [
+        (_rp_token(), True),
+        (_rp_token(policy_ids_matched=[{"id": POLICY_ID, "hash": POLICY_HASH}]),
+         False),
+        (_rp_token(policy_ids_matched=[
+            {"id": "0" * 8 + POLICY_ID[8:], "hash": TOKEN_POLICY_HASH},
+        ]), False),
+        (_rp_token(tdx={**_rp_token()["tdx"], "tdx_rtmr2": "f" * 96}), False),
+        (_rp_token(tdx={**_rp_token()["tdx"], "tdx_rtmr3": RTMR3_VALUES[10]}),
+         False),
+        (_rp_token(nvgpu={"claim_details": {}}), False),
+        (_rp_token(nvgpu={"claim_details": {
+            "GPU-0": {"x-nvidia-gpu-driver-version": "580.159.04"},
+            "GPU-1": {"x-nvidia-gpu-driver-version": "999.99.99"},
+        }}), False),
+    ],
+    ids=[
+        "accepted",
+        "other-hash",
+        "other-policy",
+        "mixed-pair",
+        "unlisted-rtmr3",
+        "no-gpu",
+        "one-unlisted-driver",
+    ],
+)
+def test_rp_policy_accepts_only_this_release(tmp_path, opa, token, accepted):
+    rim_dir = tmp_path / "rims"
+    ita.render_rims(
+        [_two_platform_target()], ["580.159.04"], NAMESPACE, rim_dir, 4
+    )
+    policy = tmp_path / "rp.rego"
+    ita.render_rp_policy(rim_dir, POLICY_ID, POLICY_HASH, policy)
+    data = tmp_path / "rims.json"
+    data.write_text(json.dumps(_rim_data(_read_rims(rim_dir))))
+    token_file = tmp_path / "token.json"
+    token_file.write_text(json.dumps(token))
+
+    value = _opa_eval(opa, [policy, data], "data.ita_rp.allow", token_file)
+
+    assert value is accepted
+
+
+@pytest.mark.parametrize(
+    "policy_id, policy_hash",
+    [(POLICY_ID + '"\nallow := true #', POLICY_HASH),
+     (POLICY_ID, POLICY_HASH + '"\nallow := true #')],
+)
+def test_rp_policy_rejects_invalid_policy_identity(
+    tmp_path, policy_id, policy_hash
+):
+    with pytest.raises(ValueError, match="invalid ITA policy"):
+        ita.render_rp_policy(
+            tmp_path, policy_id, policy_hash, tmp_path / "rp.rego"
+        )
+
+
 @pytest.mark.parametrize("missing_field", ita.PLATFORM_FIELDS)
-def test_platform_match_requires_every_measurement(missing_field):
+def test_platform_rim_requires_every_measurement(missing_field):
     measurements = {
         field: "a" * 96
         for field in ita.PLATFORM_FIELDS
@@ -708,21 +890,45 @@ def test_platform_match_requires_every_measurement(missing_field):
         ValueError,
         match=f"invalid or missing TDX measurement: {missing_field}",
     ):
-        ita.generate_platform_match_block("baseline", measurements)
+        ita.platform_rim([measurements], [])
 
 
-def test_measurement_values_cannot_inject_rego():
-    injected = 'a' * 96 + '"\n}\ndefault match := true\n#'
-    measurements = {
-        field: "a" * 96
-        for field in ita.PLATFORM_FIELDS
-    }
-    measurements["rtmr1"] = injected
+def test_rtmr3_rims_are_tightly_packed_in_sorted_order():
+    max_bytes = 1000
+    shuffled = [*RTMR3_VALUES[::-1], *RTMR3_VALUES[:5]]
 
-    with pytest.raises(ValueError, match="TDX measurement: rtmr1"):
-        ita.generate_platform_match_block("baseline", measurements)
+    rims = ita.pack_rtmr3_rims(shuffled, max_bytes)
+
+    assert len(rims) > 1
+    packed = [value for rim in rims for value in rim["rtmr3"]]
+    assert packed == sorted(RTMR3_VALUES)
+    for previous, rim in zip(rims, rims[1:]):
+        grown = {"rtmr3": [*previous["rtmr3"], rim["rtmr3"][0]]}
+        assert len(ita.rim_bytes(grown)) > max_bytes
+    assert all(len(ita.rim_bytes(rim)) <= max_bytes for rim in rims)
+    assert ita.pack_rtmr3_rims(RTMR3_VALUES, max_bytes) == rims
+
+
+def test_rtmr3_shards_keep_values_in_place():
+    rims = ita.shard_rtmr3_rims(RTMR3_VALUES[:40], 8)
+    grown = ita.shard_rtmr3_rims(RTMR3_VALUES, 8)
+
+    assert len(rims) == len(grown) == 8
+    for value in RTMR3_VALUES[:40]:
+        shard = int(hashlib.sha256(value.encode()).hexdigest(), 16) % 8
+        assert value in rims[shard]["rtmr3"]
+        assert value in grown[shard]["rtmr3"]
+    assert all(rim["rtmr3"] == sorted(rim["rtmr3"]) for rim in grown)
+
+
+def test_rtmr3_shard_over_the_size_limit_is_rejected():
+    with pytest.raises(ValueError, match="shard 0 exceeds"):
+        ita.shard_rtmr3_rims(RTMR3_VALUES, 1, max_bytes=1000)
+
+
+def test_rtmr3_rims_reject_invalid_measurements():
     with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
-        ita.generate_workload_match_block("model", "initdata", injected)
+        ita.pack_rtmr3_rims(["A" * 96])
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -876,12 +1082,15 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert digest_calls == ["ghcr.io/owner/podvm:image-tag"]
     assert rtmr3_calls == [initdata, second_initdata]
     assert measurement_calls == ["v1", "v2"]
-    policy_text = policy.read_text()
-    assert policy_text.count("matches_tdx if {") == 1
-    assert policy_text.count("matches_tdx_platform if {") == 2
-    assert policy_text.count("matches_tdx_workload if {") == 2
-    assert "# Model: cmp-l (Initdata:" in policy_text
-    assert "# Model: cmp-l-old (Initdata:" in policy_text
+    rim_names = json.loads(predicate.read_text())["ita_rims"]
+    assert rim_names == [
+        "public.cohere.v1.platform",
+        "public.cohere.v1.rtmr3.s00",
+    ]
+    rtmr3_rim = renderer.rim_dir / "public.cohere.v1.rtmr3.s00.json"
+    assert json.loads(rtmr3_rim.read_text())["rtmr3"] == sorted(
+        {item["measurements"]["rtmr3"] for item in predicate_targets}
+    )
 
 
 class _StubRenderer:

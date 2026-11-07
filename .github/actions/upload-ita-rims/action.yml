@@ -1,0 +1,31 @@
+name: "Upload ITA RIMs"
+description: "Create or update Intel Trust Authority RIMs from a directory of <rim name>.json files"
+
+inputs:
+  rim-dir:
+    description: "Directory of RIM files, each named <rim name>.json"
+    required: true
+  ita-api-key:
+    description: "ITA admin API key"
+    required: true
+  ita-api-url:
+    description: "ITA API base URL"
+    required: false
+    default: "https://api.trustauthority.intel.com"
+
+outputs:
+  written:
+    description: "Number of RIMs created or updated"
+    value: ${{ steps.upload.outputs.written }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Upload RIMs to ITA
+      id: upload
+      shell: bash
+      env:
+        RIM_DIR: ${{ inputs.rim-dir }}
+        ITA_API_KEY: ${{ inputs.ita-api-key }}
+        ITA_API_URL: ${{ inputs.ita-api-url }}
+      run: python3 "${{ github.action_path }}/upload.py" >> "$GITHUB_OUTPUT"

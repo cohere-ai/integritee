@@ -121,7 +121,10 @@ jobs:
           # Only the generated blocks. Everything else is template text that
           # cannot go missing without the policy failing to compile anyway.
           generated = {
-              "ITA_POLICY": ["matches_tdx_platform if {", "# Model: cmp-l (Initdata:"],
+              "ITA_POLICY": [
+                  "import data.public.cohere.v1.v0_0_0_test.rtmr3 as rtmr3_rims",
+                  '        "s00"',
+              ],
               "TRUSTEE_CPU_POLICY": [
                   "azsnp_image_ok if {",
                   "azsnp.tpm.pcr04 ==",
@@ -144,9 +147,10 @@ jobs:
           print("Generated Rego structure OK")
           PY
 
-      - name: Verify predicate is consistent with rego
+      - name: Verify predicate is consistent with rego and RIMs
         env:
           ITA_POLICY: ${{ steps.generate.outputs.ita-policy-file }}
+          ITA_RIM_DIR: ${{ steps.generate.outputs.ita-rim-dir }}
           TRUSTEE_CPU_POLICY: ${{ steps.generate.outputs.trustee-cpu-policy-file }}
         run: |
           python3 - <<'PY'
@@ -157,7 +161,14 @@ jobs:
 
           predicate = json.loads(Path("predicate.json").read_text())
           cpu_path = Path(os.environ["TRUSTEE_CPU_POLICY"])
-          rego = Path(os.environ["ITA_POLICY"]).read_text() + cpu_path.read_text()
+          rims = sorted(Path(os.environ["ITA_RIM_DIR"]).glob("*.json"))
+          assert predicate["ita_rims"] == [rim.stem for rim in rims], (
+              "predicate names other RIMs than the ones written"
+          )
+          rego = "".join(
+              path.read_text()
+              for path in [Path(os.environ["ITA_POLICY"]), cpu_path, *rims]
+          )
 
           assert "cvm_measure_version" in predicate, "predicate missing cvm_measure_version"
           assert predicate["targets"], "predicate missing targets"
@@ -171,8 +182,8 @@ jobs:
                   f"{service} count disagrees with targets"
               )
 
-          # ITA CSP RIM appraises MRTD from its catalog. The generated policy
-          # embeds only RTMR1/RTMR2 platform pins and RTMR3 workload pins.
+          # ITA CSP RIM appraises MRTD from its catalog. The ITA policy's RIMs
+          # hold only RTMR1/RTMR2 platform pins and RTMR3 workload pins.
           # azure_snp also carries the dm-verity roothash, which no rule names
           # because PCR 9 measures the kernel command line it lives on.
           ita_pinned_fields = {"rtmr1", "rtmr2", "rtmr3"}
@@ -187,13 +198,44 @@ jobs:
               snp = target.get("azure_snp", {})
               values += [v for k, v in snp.items() if k.startswith("pcr")]
               for value in values:
-                  assert value in rego, f'{target["model"]}: {value} is in no policy'
+                  assert value in rego, f'{target["model"]}: {value} is in no policy or RIM'
 
           digest = hashlib.sha256(cpu_path.read_bytes()).hexdigest()
           assert predicate["trustee_policies"]["files"][cpu_path.name] == digest, (
               "predicate records a digest for a file it does not describe"
           )
           print(f"Predicate OK across {len(predicate['targets'])} target(s)")
+          PY
+
+      - name: Render RP policy
+        id: render-rp
+        uses: ./.github/actions/render-ita-rp-policy
+        with:
+          rim-dir: ${{ steps.generate.outputs.ita-rim-dir }}
+          policy-id: 3f2c1a9e-8b7d-4c6e-9a1f-0e2d3c4b5a69
+          policy-hash: c29tZSBwb2xpY3kgaGFzaA==
+
+      # The RP policy has to read exactly the RIMs the ITA policy does, under
+      # the version's namespace.
+      - name: Assert RP policy reads the ITA policy's RIMs
+        env:
+          ITA_POLICY: ${{ steps.generate.outputs.ita-policy-file }}
+          RP_POLICY: ${{ steps.render-rp.outputs.ita-rp-policy-file }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+
+          ita = Path(os.environ["ITA_POLICY"]).read_text()
+          rp = Path(os.environ["RP_POLICY"]).read_text()
+          assert "${" not in rp, "RP policy has unresolved placeholders"
+          assert "import data.public.cohere.v1.v0_0_0_test.platform" in rp
+          for pattern in (r"^import data\.public\.cohere\..*$",
+                          r"rtmr3_rim_names := \{[^}]*\}"):
+              assert re.findall(pattern, ita, re.M) == re.findall(pattern, rp, re.M), (
+                  f"RP policy disagrees with the ITA policy on {pattern}"
+              )
+          print("RP policy reads the ITA policy's RIMs")
           PY
 
       - name: Upload test artifacts
@@ -224,7 +266,6 @@ jobs:
         uses: ./.github/actions/upload-ita-policy
         with:
           policy-file: test-policy.rego
-          policy-name: ci-test-${{ github.run_id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
           ita-api-url: ${{ vars.ITA_API_URL }}
 
@@ -250,7 +291,6 @@ jobs:
         with:
           policy-file: test-policy.rego
           policy-id: ${{ steps.create.outputs.policy-id }}
-          policy-name: ci-test-${{ github.run_id }}
           ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
           ita-api-url: ${{ vars.ITA_API_URL }}
 
@@ -295,6 +335,83 @@ jobs:
             exit 1
           fi
           echo "DELETE verified: first=existed, second=not found (idempotent)"
+
+  test-ita-rims-roundtrip:
+    runs-on: ubuntu-latest
+    env:
+      RIM_DIR: test-rims
+      RIM_PREFIX: cohere_testing.r${{ github.run_id }}_${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
+
+      # The upload compares hashes of the file's bytes, so they have to be
+      # json.dumps output with no trailing newline.
+      - name: Write RIMs
+        run: |
+          mkdir -p "$RIM_DIR"
+          for name in a b; do
+            printf '{"rim": "%s"}' "$name" > "$RIM_DIR/$RIM_PREFIX.$name.json"
+          done
+
+      - name: Upload RIMs (create both)
+        id: create
+        uses: ./.github/actions/upload-ita-rims
+        with:
+          rim-dir: ${{ env.RIM_DIR }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Upload RIMs again (unchanged)
+        id: again
+        uses: ./.github/actions/upload-ita-rims
+        with:
+          rim-dir: ${{ env.RIM_DIR }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Change one RIM
+        run: |
+          printf '{"rim": "changed"}' > "$RIM_DIR/$RIM_PREFIX.b.json"
+
+      - name: Upload RIMs (update one)
+        id: update
+        uses: ./.github/actions/upload-ita-rims
+        with:
+          rim-dir: ${{ env.RIM_DIR }}
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Assert only differing RIMs were written
+        env:
+          RESULT: ${{ steps.create.outputs.written }}/${{ steps.again.outputs.written }}/${{ steps.update.outputs.written }}
+        run: |
+          [ "$RESULT" = 2/0/1 ] || { echo "ERROR: expected written 2/0/1, got $RESULT"; exit 1; }
+
+      - name: Delete test RIMs from ITA
+        id: delete-first
+        if: always()
+        uses: ./.github/actions/delete-ita-rims
+        with:
+          rim-names: ${{ env.RIM_PREFIX }}.a ${{ env.RIM_PREFIX }}.b
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Delete again (idempotent, should find none)
+        id: delete-second
+        if: always()
+        uses: ./.github/actions/delete-ita-rims
+        with:
+          rim-names: ${{ env.RIM_PREFIX }}.a ${{ env.RIM_PREFIX }}.b
+          ita-api-key: ${{ secrets.ITA_DEV_ADMIN_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      - name: Assert delete outputs
+        if: always()
+        env:
+          RESULT: ${{ steps.delete-first.outputs.deleted }}/${{ steps.delete-second.outputs.deleted }}
+        run: |
+          [ "$RESULT" = 2/0 ] || { echo "ERROR: expected deleted 2/0, got $RESULT"; exit 1; }
 
   test-verify-against-policy:
     runs-on: ubuntu-latest
