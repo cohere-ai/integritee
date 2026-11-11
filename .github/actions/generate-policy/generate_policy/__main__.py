@@ -36,10 +36,13 @@ def build_renderers(output_dir: Path) -> dict[str, Renderer]:
     """
     version = os.environ.get("INPUT_VERSION", "")
     nonce = os.environ.get("INPUT_ITA_POLICY_NONCE") == "true"
+    last_rims_file = os.environ.get("INPUT_ITA_LAST_RIMS_FILE", "")
     return {
         ItaRenderer.name: ItaRenderer(
             baselines_repo=os.environ["BASELINES_REPO"],
             output_dir=output_dir,
+            last_rims_file=Path(last_rims_file) if last_rims_file else None,
+            rim_namespace=os.environ.get("INPUT_ITA_RIM_NAMESPACE", ""),
             version=version,
             nonce=nonce,
         ),

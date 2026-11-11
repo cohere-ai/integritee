@@ -347,13 +347,6 @@ def test_matches_legacy_canonical_to_identical_version(monkeypatch):
     assert variants[0]["baseline"] == baseline
 
 
-def _read_rims(rim_dir: Path) -> dict[str, dict]:
-    return {
-        path.stem: json.loads(path.read_bytes())
-        for path in rim_dir.glob("*.json")
-    }
-
-
 def test_render_rims_covers_every_baseline_variant(tmp_path):
     measurements_v1 = {
         "mrtd": "a" * 96,
@@ -368,6 +361,7 @@ def test_render_rims_covers_every_baseline_variant(tmp_path):
     }
     target = {
         "model": "cmp-l",
+        "added": "2026-10-21",
         "measurements": measurements_v1,
         "baseline_variants": [
             {"version": "v1", "measurements": measurements_v1},
@@ -381,11 +375,15 @@ def test_render_rims_covers_every_baseline_variant(tmp_path):
         ["580.159.04", "570.1", "580.159.04"],
         "public.test",
         tmp_path / "packed",
+        version="v0.0.23",
     )
 
-    assert sorted(names) == ["public.test.platform", "public.test.rtmr3.s00"]
-    assert _read_rims(tmp_path / "packed") == {
-        "public.test.rtmr3.s00": {"rtmr3": ["e" * 96]},
+    assert sorted(names) == [
+        "public.test.platform", "public.test.release", "public.test.rtmr3.s000",
+    ]
+    assert ita.load_rims(tmp_path / "packed") == {
+        "public.test.release": {"version": "v0.0.23"},
+        "public.test.rtmr3.s000": {"rtmr3": ["e" * 96]},
         "public.test.platform": {
             "rtmr1_rtmr2": [
                 {"rtmr1": "1" * 96, "rtmr2": "d" * 96},
@@ -394,16 +392,12 @@ def test_render_rims_covers_every_baseline_variant(tmp_path):
             "nvidia_driver_versions": ["570.1", "580.159.04"],
         },
     }
-    sharded = ita.render_rims(
-        [target], [], "public.test", tmp_path / "sharded", 4
-    )
-    assert len(sharded) == 5
 
 
 def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path):
     output = tmp_path / "policy.rego"
 
-    ita.render_policy(ita.RIM_NAMESPACE, ["s00"], output)
+    ita.render_policy(NAMESPACE, ["s000"], output)
     policy = output.read_text()
 
     assert policy.count("tdx_base_checks if {") == 1
@@ -448,6 +442,7 @@ def _tdx_target() -> dict:
     measurements["rtmr3"] = "b" * 96
     return {
         "model": "cmp-l",
+        "added": "2026-10-21",
         "measurements": measurements,
         "baseline_variants": [{
             "version": "v1",
@@ -463,22 +458,10 @@ def test_only_a_nonce_makes_identical_renders_differ(tmp_path, nonce):
     has to render identically to be reused, and the nonce lets identical
     renders coexist."""
     first, second = tmp_path / "first.rego", tmp_path / "second.rego"
-    ita.render_policy(ita.RIM_NAMESPACE, ["s00"], first, nonce)
-    ita.render_policy(ita.RIM_NAMESPACE, ["s00"], second, nonce)
+    ita.render_policy(NAMESPACE, ["s000"], first, nonce)
+    ita.render_policy(NAMESPACE, ["s000"], second, nonce)
 
     assert (first.read_text() != second.read_text()) is nonce
-
-
-@pytest.mark.parametrize(
-    "version, namespace",
-    [
-        ("v0.0.17", "public.cohere.v1.v0_0_17"),
-        ("v0.0.0-test", "public.cohere.v1.v0_0_0_test"),
-        ("", "public.cohere.v1"),
-    ],
-)
-def test_each_release_names_its_own_rims(version, namespace):
-    assert ita.release_rim_namespace(version) == namespace
 
 
 @pytest.mark.parametrize(
@@ -492,7 +475,7 @@ def test_each_release_names_its_own_rims(version, namespace):
 )
 def test_rim_names_follow_ita_rules(tmp_path, name):
     with pytest.raises(ValueError, match="invalid ITA RIM name"):
-        ita.render_policy(name, ["s00"], tmp_path / "policy.rego")
+        ita.render_policy(name, ["s000"], tmp_path / "policy.rego")
     with pytest.raises(ValueError, match="invalid ITA RIM name"):
         ita.render_policy("public.test", [name], tmp_path / "policy.rego")
 
@@ -508,23 +491,11 @@ RIM_STUBS = [FIXTURES / "ita-rim-stub.rego", FIXTURES / "gcp-mrtd-rims.json"]
 NAMESPACE = "public.test"
 
 
-def _rim_data(rims: dict[str, dict]) -> dict:
-    """Nest RIMs by name, where ITA's import data.<name> finds them."""
-    data: dict = {}
-    for name, rim in rims.items():
-        *parents, leaf = name.split(".")
-        node = data
-        for part in parents:
-            node = node.setdefault(part, {})
-        node[leaf] = rim
-    return data
-
-
 def _render_module(
     tmp_path: Path,
     targets: list[dict],
-    rtmr3_shards: int | None = None,
     listed: list[str] | None = None,
+    version: str = "",
 ) -> list[Path]:
     """Render a policy and its RIMs for opa to load standalone.
 
@@ -537,7 +508,7 @@ def _render_module(
         ["580.159.04"] if targets else [],
         NAMESPACE,
         rim_dir,
-        rtmr3_shards,
+        version=version,
     )
     if listed is None:
         listed = ita.rtmr3_short_names(NAMESPACE, rim_names)
@@ -548,7 +519,7 @@ def _render_module(
     module.write_text("package integritee\n\n" + policy.read_text())
 
     data = tmp_path / "rims.json"
-    data.write_text(json.dumps(_rim_data(_read_rims(rim_dir))))
+    data.write_text(json.dumps(ita.rims_document(ita.load_rims(rim_dir))))
     return [module, data]
 
 
@@ -590,6 +561,14 @@ def _opa_eval(
     if not entries:
         return None
     return entries[0]["expressions"][0]["value"]
+
+
+def test_policy_exports_the_release_version(tmp_path, opa):
+    files = _render_module(tmp_path, [], version="v0.0.23")
+
+    assert _opa_eval(opa, files, "data.integritee.exportOnMatch") == {
+        "integritee_version": "v0.0.23"
+    }
 
 
 def test_policy_with_no_targets_denies(tmp_path, opa):
@@ -736,6 +715,7 @@ def _two_platform_target() -> dict:
     ]
     return {
         "model": "cmp-l",
+        "added": "2026-10-21",
         "measurements": {},
         "baseline_variants": variants,
     }
@@ -765,9 +745,10 @@ def test_platform_pair_is_matched_within_one_entry(
     + [(RTMR3_VALUES[10], False)],
 )
 def test_workload_matches_a_value_in_any_rtmr3_rim(
-    tmp_path, opa, rtmr3, accepted
+    tmp_path, opa, monkeypatch, rtmr3, accepted
 ):
-    files = _render_module(tmp_path, [_two_platform_target()], rtmr3_shards=4)
+    monkeypatch.setattr(ita, "RTMR3_RIM_CAPACITY", 4)
+    files = _render_module(tmp_path, [_two_platform_target()])
 
     value = _opa_eval(
         opa,
@@ -781,18 +762,19 @@ def test_workload_matches_a_value_in_any_rtmr3_rim(
 
 @pytest.mark.parametrize(
     "listed, accepted",
-    [(["s00", "s01"], True), (["s01"], False), (["s00", "s99"], True)],
+    [(["s000", "s001"], True), (["s001"], False), (["s000", "s099"], True)],
 )
-def test_only_listed_rtmr3_rims_are_read(tmp_path, opa, listed, accepted):
+def test_only_listed_rtmr3_rims_are_read(
+    tmp_path, opa, monkeypatch, listed, accepted
+):
     """The prefix import exposes every RIM under it; the list bounds it."""
-    rtmr3 = ita.shard_rtmr3_rims(RTMR3_VALUES[:10], 2)[0]["rtmr3"][0]
-    target = _two_platform_target()
+    monkeypatch.setattr(ita, "RTMR3_RIM_CAPACITY", 5)
 
     value = _opa_eval(
         opa,
-        _render_module(tmp_path, [target], rtmr3_shards=2, listed=listed),
+        _render_module(tmp_path, [_two_platform_target()], listed=listed),
         "data.integritee.matches_tdx_workload",
-        _tdx_input(tmp_path, "c" * 96, "d" * 96, rtmr3),
+        _tdx_input(tmp_path, "c" * 96, "d" * 96, RTMR3_VALUES[0]),
     )
 
     assert value is accepted
@@ -847,15 +829,18 @@ def _rp_token(**overrides) -> dict:
         "one-unlisted-driver",
     ],
 )
-def test_rp_policy_accepts_only_this_release(tmp_path, opa, token, accepted):
+def test_rp_policy_accepts_only_this_release(
+    tmp_path, opa, monkeypatch, token, accepted
+):
+    monkeypatch.setattr(ita, "RTMR3_RIM_CAPACITY", 4)
     rim_dir = tmp_path / "rims"
     ita.render_rims(
-        [_two_platform_target()], ["580.159.04"], NAMESPACE, rim_dir, 4
+        [_two_platform_target()], ["580.159.04"], NAMESPACE, rim_dir
     )
     policy = tmp_path / "rp.rego"
     ita.render_rp_policy(rim_dir, POLICY_ID, POLICY_HASH, policy)
     data = tmp_path / "rims.json"
-    data.write_text(json.dumps(_rim_data(_read_rims(rim_dir))))
+    data.write_text(json.dumps(ita.rims_document(ita.load_rims(rim_dir))))
     token_file = tmp_path / "token.json"
     token_file.write_text(json.dumps(token))
 
@@ -893,42 +878,110 @@ def test_platform_rim_requires_every_measurement(missing_field):
         ita.platform_rim([measurements], [])
 
 
-def test_rtmr3_rims_are_tightly_packed_in_sorted_order():
-    max_bytes = 1000
-    shuffled = [*RTMR3_VALUES[::-1], *RTMR3_VALUES[:5]]
+def test_rtmr3s_are_placed_oldest_target_first(tmp_path, monkeypatch):
+    monkeypatch.setattr(ita, "RTMR3_RIM_CAPACITY", 2)
+    newer, older = _tdx_target(), _tdx_target()
+    newer["added"], older["added"] = "2026-11-02", "2026-11-01"
+    newer["measurements"] = {**newer["measurements"], "rtmr3": RTMR3_VALUES[0]}
+    older["measurements"] = {**older["measurements"], "rtmr3": RTMR3_VALUES[1]}
+    third = {**older, "measurements": {
+        **older["measurements"], "rtmr3": RTMR3_VALUES[2],
+    }}
+    del third["added"]
+    for target in (newer, older, third):
+        del target["baseline_variants"]
 
-    rims = ita.pack_rtmr3_rims(shuffled, max_bytes)
+    ita.render_rims([newer, older, third], [], NAMESPACE, tmp_path)
 
-    assert len(rims) > 1
-    packed = [value for rim in rims for value in rim["rtmr3"]]
-    assert packed == sorted(RTMR3_VALUES)
-    for previous, rim in zip(rims, rims[1:]):
-        grown = {"rtmr3": [*previous["rtmr3"], rim["rtmr3"][0]]}
-        assert len(ita.rim_bytes(grown)) > max_bytes
-    assert all(len(ita.rim_bytes(rim)) <= max_bytes for rim in rims)
-    assert ita.pack_rtmr3_rims(RTMR3_VALUES, max_bytes) == rims
-
-
-def test_rtmr3_shards_keep_values_in_place():
-    rims = ita.shard_rtmr3_rims(RTMR3_VALUES[:40], 8)
-    grown = ita.shard_rtmr3_rims(RTMR3_VALUES, 8)
-
-    assert len(rims) == len(grown) == 8
-    for value in RTMR3_VALUES[:40]:
-        shard = int(hashlib.sha256(value.encode()).hexdigest(), 16) % 8
-        assert value in rims[shard]["rtmr3"]
-        assert value in grown[shard]["rtmr3"]
-    assert all(rim["rtmr3"] == sorted(rim["rtmr3"]) for rim in grown)
+    rims = ita.load_rims(tmp_path)
+    # An undated target counts as oldest; RIM content is sorted.
+    assert rims[f"{NAMESPACE}.rtmr3.s000"] == {
+        "rtmr3": sorted(RTMR3_VALUES[1:3])
+    }
+    assert rims[f"{NAMESPACE}.rtmr3.s001"] == {"rtmr3": [RTMR3_VALUES[0]]}
 
 
-def test_rtmr3_shard_over_the_size_limit_is_rejected():
-    with pytest.raises(ValueError, match="shard 0 exceeds"):
-        ita.shard_rtmr3_rims(RTMR3_VALUES, 1, max_bytes=1000)
+def test_rtmr3s_stay_in_the_last_release_rims(tmp_path, monkeypatch):
+    monkeypatch.setattr(ita, "RTMR3_RIM_CAPACITY", 2)
+    target = _tdx_target()
+    del target["baseline_variants"]
+    last_rims = {
+        f"{NAMESPACE}.rtmr3.s000": {"rtmr3": [RTMR3_VALUES[1]]},
+        f"{NAMESPACE}.rtmr3.s001": {"rtmr3": [target["measurements"]["rtmr3"]]},
+        f"{NAMESPACE}.platform": {},
+    }
+
+    ita.render_rims([target], [], NAMESPACE, tmp_path, last_rims)
+
+    rims = ita.load_rims(tmp_path)
+    assert rims[f"{NAMESPACE}.rtmr3.s000"] == {"rtmr3": []}
+    assert rims[f"{NAMESPACE}.rtmr3.s001"] == last_rims[f"{NAMESPACE}.rtmr3.s001"]
 
 
-def test_rtmr3_rims_reject_invalid_measurements():
+def _rtmr3_rims(**shards: str) -> dict[str, dict]:
+    return {
+        f"{NAMESPACE}.rtmr3.{name}": {"rtmr3": sorted(values)}
+        for name, values in shards.items()
+    }
+
+
+def test_missing_rim_dir_fails(tmp_path):
+    with pytest.raises(ValueError, match="RIM directory not found"):
+        ita.load_rims(tmp_path / "missing")
+
+
+def test_last_rtmr3_rims_come_back_out_of_the_rims_document():
+    rtmr3_rims = _rtmr3_rims(s000="a", s001="b")
+    document = ita.rims_document({
+        **rtmr3_rims,
+        f"{NAMESPACE}.platform": {"rtmr1_rtmr2": []},
+    })
+
+    assert document["public"]["test"]["rtmr3"]["s001"] == {"rtmr3": ["b"]}
+    assert ita.last_rtmr3_rims(document, NAMESPACE) == rtmr3_rims
+    assert ita.last_rtmr3_rims(document, "cohere_testing.r1_1") == {}
+
+    document["public"]["test"]["rtmr3"]["zz"] = {"rtmr3": []}
+    with pytest.raises(ValueError, match="unexpected RTMR3 RIM names"):
+        ita.last_rtmr3_rims(document, NAMESPACE)
+
+
+def test_rims_document_rejects_a_rim_nested_in_another():
+    with pytest.raises(ValueError, match="prefix of another RIM"):
+        ita.rims_document({"ns.a": {}, "ns.a.b": {}})
+
+
+def test_rtmr3_values_stay_in_their_rim_across_releases(monkeypatch):
+    monkeypatch.setattr(ita, "RTMR3_RIM_CAPACITY", 3)
+    last = _rtmr3_rims(s000="abc", s001="def", s002="g")
+
+    def update(values: str) -> dict[str, dict]:
+        return ita.update_rtmr3_rims(last, list(values), NAMESPACE)
+
+    # The RIM that lost b takes the first new value, the emptiest the next.
+    assert update("acdefgxy") == _rtmr3_rims(s000="acx", s001="def", s002="gy")
+    # An emptied middle RIM stays; an emptied last RIM goes.
+    assert update("abcg") == _rtmr3_rims(s000="abc", s001="", s002="g")
+    assert update("abcdef") == _rtmr3_rims(s000="abc", s001="def")
+    # Without a last release, values pack in order.
+    assert ita.update_rtmr3_rims({}, list("abcd"), NAMESPACE) == _rtmr3_rims(
+        s000="abc", s001="d"
+    )
+
+
+def test_full_rtmr3_shard_fits_a_rim():
+    shard = {"rtmr3": ["f" * 96] * ita.RTMR3_RIM_CAPACITY}
+
+    assert len(ita.rim_bytes(shard)) <= ita.RIM_MAX_BYTES
+
+
+def test_rtmr3_rims_reject_invalid_measurements(tmp_path):
+    target = _tdx_target()
+    del target["baseline_variants"]
+    target["measurements"] = {**target["measurements"], "rtmr3": "A" * 96}
+
     with pytest.raises(ValueError, match="TDX measurement: rtmr3"):
-        ita.pack_rtmr3_rims(["A" * 96])
+        ita.render_rims([target], [], NAMESPACE, tmp_path)
 
 
 def test_generate_policy_measures_and_records_each_baseline(
@@ -1022,12 +1075,14 @@ def test_generate_policy_measures_and_records_each_baseline(
     manifest.write_text(
         "targets:\n"
         "  - model: cmp-l\n"
+        "    added: '2026-10-21'\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{initdata_sha384}.toml\n"
         f"    initdata_sha384: {initdata_sha384}\n"
         f"    sources: [{'b' * 40}]\n"
         "  - model: cmp-l-old\n"
+        "    added: '2026-10-22'\n"
         "    machine_type: a3-highgpu-1g\n"
         "    podvm_image_tag: image-tag\n"
         f"    initdata_file: initdata/{second_sha384}.toml\n"
@@ -1045,6 +1100,7 @@ def test_generate_policy_measures_and_records_each_baseline(
     renderer = ita.ItaRenderer(
         baselines_repo="owner/baselines",
         output_dir=tmp_path / "policies",
+        rim_namespace="cohere_testing.r1_1",
     )
 
     generate.generate_policy(
@@ -1084,13 +1140,35 @@ def test_generate_policy_measures_and_records_each_baseline(
     assert measurement_calls == ["v1", "v2"]
     rim_names = json.loads(predicate.read_text())["ita_rims"]
     assert rim_names == [
-        "public.cohere.v1.platform",
-        "public.cohere.v1.rtmr3.s00",
+        "cohere_testing.r1_1.platform",
+        "cohere_testing.r1_1.release",
+        "cohere_testing.r1_1.rtmr3.s000",
     ]
-    rtmr3_rim = renderer.rim_dir / "public.cohere.v1.rtmr3.s00.json"
+    assert "import data.cohere_testing.r1_1.rtmr3 as" in policy.read_text()
+    rtmr3_rim = renderer.rim_dir / "cohere_testing.r1_1.rtmr3.s000.json"
     assert json.loads(rtmr3_rim.read_text())["rtmr3"] == sorted(
         {item["measurements"]["rtmr3"] for item in predicate_targets}
     )
+    rims_document = json.loads(renderer.rims_file.read_text())
+    assert rims_document["cohere_testing"]["r1_1"]["rtmr3"]["s000"] == (
+        json.loads(rtmr3_rim.read_text())
+    )
+
+
+@pytest.mark.parametrize(
+    ("rim_namespace", "error"),
+    [("", "is required"), ("cohere-testing.1", "invalid ITA RIM name")],
+)
+def test_ita_renderer_requires_a_valid_rim_namespace(
+    tmp_path, rim_namespace, error
+):
+    renderer = ita.ItaRenderer(
+        baselines_repo="owner/baselines",
+        output_dir=tmp_path,
+        rim_namespace=rim_namespace,
+    )
+    with pytest.raises(ValueError, match=error):
+        renderer.render([], context=None)
 
 
 class _StubRenderer:

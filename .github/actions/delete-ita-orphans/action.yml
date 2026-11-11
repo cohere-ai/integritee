@@ -1,0 +1,38 @@
+name: "Delete orphaned ITA state"
+description: "Delete Intel Trust Authority RIMs and policies under the given prefixes that a release predicate does not record"
+
+inputs:
+  rim-prefix:
+    description: "Only RIMs whose name starts with this are checked"
+    required: true
+  policy-prefix:
+    description: "Only policies whose name starts with this are checked"
+    required: true
+  predicate-file:
+    description: "Release predicate whose policy_id and ita_rims ITA should hold"
+    required: true
+  warn-only:
+    description: "Warn about orphans instead of deleting them"
+    required: false
+    default: "false"
+  ita-api-key:
+    description: "ITA admin API key"
+    required: true
+  ita-api-url:
+    description: "ITA API base URL"
+    required: false
+    default: "https://api.trustauthority.intel.com"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Delete orphaned ITA state
+      shell: bash
+      env:
+        RIM_PREFIX: ${{ inputs.rim-prefix }}
+        POLICY_PREFIX: ${{ inputs.policy-prefix }}
+        PREDICATE_FILE: ${{ inputs.predicate-file }}
+        WARN_ONLY: ${{ inputs.warn-only }}
+        ITA_API_KEY: ${{ inputs.ita-api-key }}
+        ITA_API_URL: ${{ inputs.ita-api-url }}
+      run: python3 "${{ github.action_path }}/delete.py"

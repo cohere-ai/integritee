@@ -35,6 +35,7 @@ RP_TEMPLATE = Path(__file__).parent / "ita-rp-template.rego"
 # agreement.
 POLICY_FILE = "ita_policy.rego"
 RP_POLICY_FILE = "ita_rp_policy.rego"
+RIMS_FILE = "ita_rims.json"
 
 NONCE_PLACEHOLDER = "${POLICY_NONCE}"
 RIM_NAMESPACE_PLACEHOLDER = "${RIM_NAMESPACE}"
@@ -48,9 +49,6 @@ POLICY_ID_RE = re.compile(
 )
 POLICY_HASH_RE = re.compile(r"^[A-Za-z0-9+/]+={0,2}$")
 
-# The policy imports <namespace>.rtmr3 and reads only the RIMs it lists under
-# it, plus <namespace>.platform.
-RIM_NAMESPACE = "public.cohere.v1"
 RIM_DIR_NAME = "ita-rims"
 
 # ITA's RIM name rules: dot-separated, <= 128 characters, <= 10 segments,
@@ -58,12 +56,16 @@ RIM_DIR_NAME = "ita-rims"
 RIM_SEGMENT_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 RIM_NAME_MAX_LENGTH = 128
 RIM_NAME_MAX_SEGMENTS = 10
+# update_rtmr3_rims names RTMR3 RIMs s000..sNNN and relies on that ordering.
+RTMR3_SHORT_NAME_RE = re.compile(r"^s\d{3}$")
 
 # ITA's CSP RIM catalog currently provides MRTD values only. MRTD is verified
 # by the template's mrtd_matches_csp_rim rule; RTMR0 is no longer pinned.
 # RTMR1/RTMR2 pairs are accepted through the platform RIM.
 PLATFORM_FIELDS = ["rtmr1", "rtmr2"]
-MEASUREMENT_RE = re.compile(r"^[0-9a-f]{96,128}$")
+# TDX measurements are SHA-384 digests.
+MEASUREMENT_HEX_DIGITS = 96
+MEASUREMENT_RE = re.compile(rf"^[0-9a-f]{{{MEASUREMENT_HEX_DIGITS}}}$")
 
 # The platforms ITA can appraise with this renderer. Its firmware and baseline
 # inputs describe GCP TDX guests specifically, so another platform using TDX
@@ -88,19 +90,6 @@ def validate_rim_name(name: str) -> str:
     return name
 
 
-def release_rim_namespace(version: str) -> str:
-    """The namespace a release's RIMs live under.
-
-    Each release gets its own, so uploading one never overwrites RIMs a live
-    policy reads. Without a version (a dry run) the RIMs use the base
-    namespace.
-    """
-    if not version:
-        return RIM_NAMESPACE
-    segment = re.sub(r"[^A-Za-z0-9_]", "_", version)
-    return validate_rim_name(f"{RIM_NAMESPACE}.{segment}")
-
-
 def generate_rtmr3_rim_names_block(names: Iterable[str]) -> str:
     """Emit the RTMR3 RIMs the policy reads as a rule-local set.
 
@@ -119,8 +108,13 @@ def generate_nonce_rule() -> str:
     return f'integritee_nonce := "{nonce}"'
 
 
-# ITA rejects RIM content over 20 KB (20480 bytes).
-RIM_MAX_BYTES = 18 * 1024
+# ITA rejects RIM content over 20480 bytes, counted as rim_bytes produces them.
+RIM_MAX_BYTES = 20 * 1024
+RTMR3_BYTES = MEASUREMENT_HEX_DIGITS + len('"", ')
+# Number of RTMR3s per RIM.
+RTMR3_RIM_CAPACITY = (
+    RIM_MAX_BYTES - len('{"rtmr3": []}')
+) // RTMR3_BYTES
 
 
 def rim_bytes(content: dict) -> bytes:
@@ -133,52 +127,100 @@ def rim_bytes(content: dict) -> bytes:
     return json.dumps(content).encode()
 
 
-def _sorted_rtmr3(values: Iterable[str]) -> list[str]:
-    return sorted({validate_measurement("rtmr3", value) for value in values})
+def load_rims(rim_dir: Path) -> dict[str, dict]:
+    """Read a directory of <rim name>.json files, as render_rims writes it."""
+    if not rim_dir.is_dir():
+        raise ValueError(f"RIM directory not found: {rim_dir}")
+    return {
+        path.stem: json.loads(path.read_bytes())
+        for path in sorted(rim_dir.glob("*.json"))
+    }
 
 
-def pack_rtmr3_rims(
-    values: Iterable[str],
-    max_bytes: int = RIM_MAX_BYTES,
-) -> list[dict]:
-    """Pack RTMR3 values into as few RIMs as possible.
+def rims_document(rims: Mapping[str, dict]) -> dict:
+    """Every RIM nested at its name, one level per dot, where an ITA policy
+    finds it as data.<name>."""
+    document: dict = {}
+    for name in sorted(rims):
+        if any(other.startswith(f"{name}.") for other in rims):
+            raise ValueError(f"RIM {name} is a prefix of another RIM")
+        *parents, leaf = validate_rim_name(name).split(".")
+        node = document
+        for part in parents:
+            node = node.setdefault(part, {})
+        node[leaf] = rims[name]
+    return document
 
-    Values are deduplicated and sorted, then each RIM is filled until the next
-    value would push it past max_bytes, so the output depends only on the set
-    of values.
+
+def last_rtmr3_rims(document: Mapping, rim_namespace: str) -> dict[str, dict]:
+    """The RTMR3 RIMs in a rims_document, by name; none if it has no RTMR3
+    RIMs under rim_namespace."""
+    node = document
+    for part in f"{rim_namespace}.rtmr3".split("."):
+        node = node.get(part, {})
+    bad = [s for s in node if not RTMR3_SHORT_NAME_RE.fullmatch(s)]
+    if bad:
+        raise ValueError(f"unexpected RTMR3 RIM names: {bad}")
+    return {
+        f"{rim_namespace}.rtmr3.{short}": rim for short, rim in node.items()
+    }
+
+
+def update_rtmr3_rims(
+    last_rtmr3_rims: Mapping[str, dict],
+    rtmr3_values: list[str],
+    rim_namespace: str,
+) -> dict[str, dict]:
+    """Return this release's RTMR3 RIMs, {name: {"rtmr3": [...]}}.
+
+    last_rtmr3_rims: the last release's RTMR3 RIMs, in the same shape, or {}
+        without one.
+    rtmr3_values: every RTMR3 this release accepts, oldest target first.
+
+    A value never moves between RIMs, so ITA can apply a release's writes in
+    any order without rejecting one that both releases accept.
     """
-    rims: list[dict] = []
-    current: list[str] = []
-    for value in _sorted_rtmr3(values):
-        grown = {"rtmr3": [*current, value]}
-        if current and len(rim_bytes(grown)) > max_bytes:
-            rims.append({"rtmr3": current})
-            current = []
-        current.append(value)
-    if current:
-        rims.append({"rtmr3": current})
-    return rims
+    prefix = f"{rim_namespace}.rtmr3."
+    last_shards = {
+        name.removeprefix(prefix): set(rim["rtmr3"])
+        for name, rim in last_rtmr3_rims.items()
+    }
 
+    # 1. Prune: drop values this release no longer accepts. The shards that
+    #    lost one are modified, so ITA rewrites them anyway.
+    shards = {
+        name: shard & set(rtmr3_values) for name, shard in last_shards.items()
+    }
+    modified = {name for name in shards if shards[name] != last_shards[name]}
 
-def shard_rtmr3_rims(
-    values: Iterable[str],
-    shard_count: int,
-    max_bytes: int = RIM_MAX_BYTES,
-) -> list[dict]:
-    """Place each RTMR3 value in shard sha256(value) % shard_count.
+    # 2. Fill: place new values oldest first, into modified shards, then the
+    #    emptiest, then new shards at the end.
+    kept = set().union(*shards.values())
+    fill_order = sorted(
+        shards, key=lambda n: (n not in modified, len(shards[n]), n)
+    )
+    for value in rtmr3_values:
+        if value in kept:
+            continue
+        name = next(
+            (n for n in fill_order if len(shards[n]) < RTMR3_RIM_CAPACITY),
+            None,
+        )
+        if name is None:
+            name = f"s{len(shards):03d}"
+            shards[name] = set()
+            fill_order.append(name)
+        shards[name].add(value)
 
-    A value's shard never depends on the other values, so adding or removing
-    one rewrites only its own shard. Every shard is returned, empty or not.
-    """
-    shards: list[list[str]] = [[] for _ in range(shard_count)]
-    for value in _sorted_rtmr3(values):
-        digest = hashlib.sha256(value.encode()).digest()
-        shards[int.from_bytes(digest, "big") % shard_count].append(value)
-    rims = [{"rtmr3": shard} for shard in shards]
-    for index, rim in enumerate(rims):
-        if len(rim_bytes(rim)) > max_bytes:
-            raise ValueError(f"RTMR3 shard {index} exceeds {max_bytes} bytes")
-    return rims
+    # 3. Drop empty shards at the end. Empty ones in the middle stay, so names
+    #    remain s000..sNNN and later releases refill them.
+    while shards and not shards[max(shards)]:
+        del shards[max(shards)]
+
+    return {
+        validate_rim_name(prefix + name): {"rtmr3": sorted(shard)}
+        for name, shard in sorted(shards.items())
+    }
 
 
 def platform_rim(
@@ -242,7 +284,7 @@ def render_policy(
 ) -> None:
     """Render the Rego policy reading the named RIMs under rim_namespace.
 
-    rtmr3_rim_names are the last name segments, e.g. "s00". Without nonce the
+    rtmr3_rim_names are the last name segments, e.g. "s000". Without nonce the
     policy depends only on its inputs.
     """
     _render_template(
@@ -325,36 +367,40 @@ def render_rims(
     nv_driver_versions: Iterable[str],
     rim_namespace: str,
     output_dir: Path,
-    rtmr3_shards: int | None = None,
+    last_rims: Mapping[str, dict] | None = None,
+    version: str = "",
 ) -> list[str]:
     """Write every RIM the policy reads to output_dir/<name>.json.
 
-    Returns the RIM names.
-
-    RTMR3 values are packed tightly unless rtmr3_shards is set, in which case
-    they are hash-sharded into that many RIMs.
+    Returns the RIM names. last_rims maps each RIM name the last release
+    uploaded to its content; each RTMR3 it holds stays in the same RIM. The
+    release RIM records version, for tokens to carry as information only.
 
     An empty target list is a legitimate input, not a failure: RIMs with no
     values admit nothing, which is what revoking every target looks like.
     """
+    # The sort is stable, so targets added the same day keep manifest order.
+    # added is optional in the schema; undated targets count as oldest.
+    oldest_first = sorted(targets, key=lambda target: target.get("added", ""))
     variants = [
         measurements
-        for target in targets
+        for target in oldest_first
         for measurements in _variant_measurements(target)
     ]
-    rtmr3_values = [variant.get("rtmr3") for variant in variants]
-    if rtmr3_shards is None:
-        rtmr3_rims = pack_rtmr3_rims(rtmr3_values)
-    else:
-        rtmr3_rims = shard_rtmr3_rims(rtmr3_values, rtmr3_shards)
-
-    rims = {
-        validate_rim_name(f"{rim_namespace}.rtmr3.s{index:02d}"): rim
-        for index, rim in enumerate(rtmr3_rims)
+    rtmr3_values = list(dict.fromkeys(
+        validate_measurement("rtmr3", variant.get("rtmr3"))
+        for variant in variants
+    ))
+    last_rtmr3_rims = {
+        name: rim
+        for name, rim in (last_rims or {}).items()
+        if name.startswith(f"{rim_namespace}.rtmr3.")
     }
+    rims = update_rtmr3_rims(last_rtmr3_rims, rtmr3_values, rim_namespace)
     rims[validate_rim_name(f"{rim_namespace}.platform")] = platform_rim(
         variants, nv_driver_versions
     )
+    rims[validate_rim_name(f"{rim_namespace}.release")] = {"version": version}
     output_dir.mkdir(parents=True, exist_ok=True)
     for name, rim in rims.items():
         (output_dir / f"{name}.json").write_bytes(rim_bytes(rim))
@@ -381,8 +427,12 @@ class ItaRenderer:
     # Run configuration.
     baselines_repo: str
     output_dir: Path
+    last_rims_file: Path | None = None
+    # The policy imports <namespace>.rtmr3 and reads only the RIMs it lists
+    # under it, plus <namespace>.platform. Callers that upload must not share
+    # one, or they overwrite each other's RIMs.
+    rim_namespace: str = ""
     version: str = ""
-    rtmr3_shards: int | None = None
     nonce: bool = False
 
     # Per-run caches. Only a TDX measurement reads these, so they belong to
@@ -402,12 +452,12 @@ class ItaRenderer:
         return self.output_dir / POLICY_FILE
 
     @property
-    def rim_namespace(self) -> str:
-        return release_rim_namespace(self.version)
-
-    @property
     def rim_dir(self) -> Path:
         return self.output_dir / RIM_DIR_NAME
+
+    @property
+    def rims_file(self) -> Path:
+        return self.output_dir / RIMS_FILE
 
     @property
     def policy_files(self) -> list[Path]:
@@ -415,6 +465,7 @@ class ItaRenderer:
         return [
             self.policy_file,
             self.output_dir / RP_POLICY_FILE,
+            self.rims_file,
             *sorted(self.rim_dir.glob("*.json")),
         ]
 
@@ -432,6 +483,9 @@ class ItaRenderer:
         targets: list[ResolvedTarget],
         context: GenerationContext,
     ) -> RenderResult:
+        if not self.rim_namespace:
+            raise ValueError("ita-rim-namespace is required for ITA policies")
+        validate_rim_name(self.rim_namespace)
         measured_targets = {
             resolved.index: self._measure_target(resolved, context)
             for resolved in targets
@@ -451,7 +505,15 @@ class ItaRenderer:
             ),
             self.rim_namespace,
             self.rim_dir,
-            self.rtmr3_shards,
+            last_rtmr3_rims(
+                json.loads(self.last_rims_file.read_bytes()),
+                self.rim_namespace,
+            ) if self.last_rims_file else None,
+            self.version,
+        )
+        self.rims_file.write_text(
+            json.dumps(rims_document(load_rims(self.rim_dir)), indent=2)
+            + "\n"
         )
         render_policy(
             self.rim_namespace,
@@ -463,6 +525,7 @@ class ItaRenderer:
             outputs={
                 "ita-policy-file": str(self.policy_file),
                 "ita-rim-dir": str(self.rim_dir),
+                "ita-rims-file": str(self.rims_file),
             },
             predicate_targets=measured_targets,
             predicate_metadata={"ita_rims": sorted(rim_names)},

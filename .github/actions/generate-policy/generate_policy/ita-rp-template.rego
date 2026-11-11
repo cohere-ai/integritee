@@ -1,5 +1,5 @@
 # ITA relying-party policy, evaluated by the relying party against the claims
-# of an ITA token, with this release's RIM files loaded as data at their names.
+# of an ITA token, with this release's ita_rims.json loaded as data.
 #
 # Besides checking that ITA appraised the token with this release's policy, it
 # pins the measurements ITA accepted to this release's RIM values. ITA reads

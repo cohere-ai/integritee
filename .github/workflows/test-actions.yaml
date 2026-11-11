@@ -22,6 +22,8 @@ permissions:
 jobs:
   test-generate-policy:
     runs-on: ubuntu-latest
+    env:
+      RIM_NAMESPACE: cohere_testing.r${{ github.run_id }}_${{ github.run_attempt }}
     steps:
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10  # v6.0.3
@@ -57,6 +59,7 @@ jobs:
           output-artifacts-dir: artifacts
           policy-types: ita
           predicate-file: predicate.json
+          ita-rim-namespace: ${{ env.RIM_NAMESPACE }}
 
       # An unrequested type must cost nothing, not merely produce no file: this
       # is the guard for the cross-repo consumer, whose manifest is GCP-only and
@@ -86,6 +89,7 @@ jobs:
           policy-types: ita trustee
           predicate-file: predicate.json
           version: v0.0.0-test
+          ita-rim-namespace: ${{ env.RIM_NAMESPACE }}
 
       - name: Assert the action reported what it wrote
         env:
@@ -122,8 +126,8 @@ jobs:
           # cannot go missing without the policy failing to compile anyway.
           generated = {
               "ITA_POLICY": [
-                  "import data.public.cohere.v1.v0_0_0_test.rtmr3 as rtmr3_rims",
-                  '        "s00"',
+                  f"import data.{os.environ['RIM_NAMESPACE']}.rtmr3 as rtmr3_rims",
+                  '        "s000"',
               ],
               "TRUSTEE_CPU_POLICY": [
                   "azsnp_image_ok if {",
@@ -151,6 +155,7 @@ jobs:
         env:
           ITA_POLICY: ${{ steps.generate.outputs.ita-policy-file }}
           ITA_RIM_DIR: ${{ steps.generate.outputs.ita-rim-dir }}
+          ITA_RIMS_FILE: ${{ steps.generate.outputs.ita-rims-file }}
           TRUSTEE_CPU_POLICY: ${{ steps.generate.outputs.trustee-cpu-policy-file }}
         run: |
           python3 - <<'PY'
@@ -165,6 +170,12 @@ jobs:
           assert predicate["ita_rims"] == [rim.stem for rim in rims], (
               "predicate names other RIMs than the ones written"
           )
+          document = json.loads(Path(os.environ["ITA_RIMS_FILE"]).read_text())
+          for rim in rims:
+              node = document
+              for part in rim.stem.split("."):
+                  node = node[part]
+              assert node == json.loads(rim.read_text()), f"ita_rims.json disagrees on {rim.stem}"
           rego = "".join(
               path.read_text()
               for path in [Path(os.environ["ITA_POLICY"]), cpu_path, *rims]
@@ -229,8 +240,9 @@ jobs:
           ita = Path(os.environ["ITA_POLICY"]).read_text()
           rp = Path(os.environ["RP_POLICY"]).read_text()
           assert "${" not in rp, "RP policy has unresolved placeholders"
-          assert "import data.public.cohere.v1.v0_0_0_test.platform" in rp
-          for pattern in (r"^import data\.public\.cohere\..*$",
+          namespace = os.environ["RIM_NAMESPACE"]
+          assert f"import data.{namespace}.platform" in rp
+          for pattern in (rf"^import data\.{re.escape(namespace)}\.(rtmr3|platform) as .*$",
                           r"rtmr3_rim_names := \{[^}]*\}"):
               assert re.findall(pattern, ita, re.M) == re.findall(pattern, rp, re.M), (
                   f"RP policy disagrees with the ITA policy on {pattern}"

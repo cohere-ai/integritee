@@ -15,8 +15,13 @@ import data.public.intel.ita.tdxutils
 import data.public.google.gcp.tdx.rims.mrtd as gcpmrtds
 import data.${RIM_NAMESPACE}.rtmr3 as rtmr3_rims
 import data.${RIM_NAMESPACE}.platform as platform_rim
+import data.${RIM_NAMESPACE}.release as release_rim
 
 default match := false
+
+# Informational only: the release RIM is updated in place, so an existing
+# policy may pick up the new version before the new release is active.
+exportOnMatch := {"integritee_version": release_rim.version}
 
 match if {
     matches_tdx

@@ -98,14 +98,12 @@ def prepare_assets(args: argparse.Namespace) -> None:
         raise SystemExit(f"invalid ITA policy ID: {args.policy_id}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
-    # RIM files keep their names, which already start with the release's
-    # namespace, so they sit beside the policies without colliding.
-    rims = sorted(args.rim_dir.glob("*.json"))
+    rims = json.loads(args.predicate.read_text()).get("ita_rims", [])
     if not rims:
-        raise SystemExit(f"no RIM files in {args.rim_dir}")
+        raise SystemExit(f"{args.predicate} names no ITA RIMs")
     assets = {
         **{policy: policy.name for policy in args.policy},
-        **{rim: rim.name for rim in rims},
+        args.rims_file: "ita_rims.json",
         args.manifest: "policy-manifest.yaml",
         args.predicate: "predicate.json",
         args.bundle: "attestation-bundle.sigstore.json",
@@ -128,13 +126,14 @@ def prepare_assets(args: argparse.Namespace) -> None:
         sections.append(f"**Reason:** {args.reason}")
     sections.append(f"**ITA Policy ID:** `{args.policy_id}`")
     namespaces = sorted({
-        rim.stem.removesuffix(".platform")
-        for rim in rims
-        if rim.stem.endswith(".platform")
+        name.removesuffix(".platform")
+        for name in rims
+        if name.endswith(".platform")
     })
     sections.append(
         f"**ITA RIMs:** {len(rims)} under "
         + ", ".join(f"`{namespace}`" for namespace in namespaces)
+        + ", all in `ita_rims.json`"
     )
     # Named rather than counted, since a Trustee consumer resolves these by
     # filename and the set of them changes as services are added or dropped.
@@ -167,6 +166,17 @@ def cleanup_tags(tags: list[str], version: str) -> tuple[str | None, str]:
     return previous, tags[0]
 
 
+def release_tags() -> list[str]:
+    """Release tags, newest first."""
+    return [
+        release["tagName"]
+        for release in json.loads(run(
+            "gh", "release", "list", "--limit", "100", "--json", "tagName",
+            capture_output=True,
+        ))
+    ]
+
+
 def release_predicate(tag: str) -> dict:
     return json.loads(run(
         "gh", "release", "download", tag,
@@ -178,14 +188,7 @@ def release_predicate(tag: str) -> dict:
 def superseded_ita(args: argparse.Namespace) -> None:
     """Output what the release before args.version used in ITA that neither
     args.version nor the latest release does, for cleanup to delete."""
-    tags = [
-        release["tagName"]
-        for release in json.loads(run(
-            "gh", "release", "list", "--limit", "100", "--json", "tagName",
-            capture_output=True,
-        ))
-    ]
-    previous_tag, latest_tag = cleanup_tags(tags, args.version)
+    previous_tag, latest_tag = cleanup_tags(release_tags(), args.version)
     previous = release_predicate(previous_tag) if previous_tag else {}
     kept = [release_predicate(tag) for tag in {args.version, latest_tag}]
     policy_id, rims = superseded(previous, kept)
@@ -205,6 +208,30 @@ def superseded_ita(args: argparse.Namespace) -> None:
           f"{len(rims)} RIM(s) from {previous_tag or 'no release'}")
 
 
+def download_last_rims(args: argparse.Namespace) -> None:
+    """Download the latest release's ita_rims.json into args.output_dir and
+    output its path, or output nothing without one. Only RTMR3 placement
+    depends on it; every value still comes from the commit."""
+    tags = release_tags()
+    names = release_predicate(tags[0]).get("ita_rims", []) if tags else []
+    rims_file = args.output_dir / "ita_rims.json"
+    if names:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        run(
+            "gh", "release", "download", tags[0],
+            "--dir", str(args.output_dir), "--pattern", rims_file.name,
+        )
+        if not rims_file.is_file():
+            raise SystemExit(f"{tags[0]} lacks {rims_file.name}")
+
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if not github_output:
+        raise SystemExit("GITHUB_OUTPUT is required")
+    with Path(github_output).open("a") as output:
+        output.write(f"rims-file={rims_file if names else ''}\n")
+    print(f"{len(names)} RIM(s) from {tags[0] if tags else 'no release'}")
+
+
 def parser() -> argparse.ArgumentParser:
     """Build the command-line parser."""
     result = argparse.ArgumentParser(description=__doc__)
@@ -222,7 +249,7 @@ def parser() -> argparse.ArgumentParser:
 
     assets_parser = commands.add_parser("prepare-assets")
     assets_parser.add_argument("--policy", type=Path, nargs="+", required=True)
-    assets_parser.add_argument("--rim-dir", type=Path, required=True)
+    assets_parser.add_argument("--rims-file", type=Path, required=True)
     assets_parser.add_argument("--manifest", type=Path, required=True)
     assets_parser.add_argument("--predicate", type=Path, required=True)
     assets_parser.add_argument("--bundle", type=Path, required=True)
@@ -235,6 +262,10 @@ def parser() -> argparse.ArgumentParser:
     superseded_parser = commands.add_parser("superseded-ita")
     superseded_parser.add_argument("--version", required=True)
     superseded_parser.set_defaults(handler=superseded_ita)
+
+    last_rims_parser = commands.add_parser("download-last-rims")
+    last_rims_parser.add_argument("--output-dir", type=Path, required=True)
+    last_rims_parser.set_defaults(handler=download_last_rims)
     return result
 
 

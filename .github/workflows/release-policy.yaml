@@ -4,8 +4,9 @@
 # generate: builds and validates policies. It authenticates to GCP/GHCR to
 # measure images but does not upload to ITA or create a GitHub release.
 # publish: only on push to main, gated by the `release` environment, with
-# access to ITA. Each release gets its own RIM set and policy.
-# cleanup: 5 min after publishing, once servers and clients have moved to
+# access to ITA. RIMs are updated in place; each RTMR3 stays in the RIM the
+# latest release put it in.
+# cleanup: 10 min after publishing, once servers and clients have moved to
 # the new release, deletes what the previous release used in ITA and this one
 # does not.
 # A manual dispatch runs generate only (a dry run); to publish, merge the
@@ -32,6 +33,9 @@ on:
 
 permissions:
   contents: read
+
+env:
+  ITA_RIM_NAMESPACE: public.cohere.v1
 
 # queue: max releases every pushed manifest in order. The default cancels a
 # waiting release when another push queues, failing add-from-blobheart's
@@ -82,6 +86,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       ita-policy-file: ${{ steps.generate.outputs.ita-policy-file }}
       ita-rim-dir: ${{ steps.generate.outputs.ita-rim-dir }}
+      ita-rims-file: ${{ steps.generate.outputs.ita-rims-file }}
       trustee-cpu-policy-file: ${{ steps.generate.outputs.trustee-cpu-policy-file }}
       trustee-gpu-policy-file: ${{ steps.generate.outputs.trustee-gpu-policy-file }}
     env:
@@ -142,6 +147,14 @@ jobs:
           --version "$VERSION"
           --output predicate.json
 
+      - name: Download the latest release's RIMs
+        id: last-rims
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 .github/workflows/release-policy/manage.py download-last-rims
+          --output-dir last-rims
+
       # ----------------------------------------------------------------
       # Generate policy (appends targets + cvm_measure_version to predicate)
       # ----------------------------------------------------------------
@@ -155,6 +168,8 @@ jobs:
           policy-types: ita trustee
           predicate-file: predicate.json
           version: ${{ steps.version.outputs.version }}
+          ita-last-rims-file: ${{ steps.last-rims.outputs.rims-file }}
+          ita-rim-namespace: ${{ env.ITA_RIM_NAMESPACE }}
 
       # ----------------------------------------------------------------
       # Validate manifest
@@ -174,6 +189,7 @@ jobs:
           path: |
             ${{ steps.generate.outputs.ita-policy-file }}
             ${{ steps.generate.outputs.ita-rim-dir }}
+            ${{ steps.generate.outputs.ita-rims-file }}
             ${{ steps.generate.outputs.trustee-cpu-policy-file }}
             ${{ steps.generate.outputs.trustee-gpu-policy-file }}
             predicate.json
@@ -224,17 +240,12 @@ jobs:
           permission-contents: write
 
       # ----------------------------------------------------------------
-      # Upload the RIMs and a new policy to ITA, then read the policy back to
-      # prove the stored policy is exactly what generate produced. Both uploads
-      # converge on ITA's state, so a rerun reuses what a failed run left.
+      # Upload the policy and read it back to prove the stored policy is exactly
+      # what generate produced, render the RP policy, then upload the RIMs. RIMs
+      # go last so a failure stops the release before any RIM changes; nothing
+      # attests with a new policy until the release names it. Both uploads converge on
+      # ITA's state, so a rerun reuses what a failed run left.
       # ----------------------------------------------------------------
-      - name: Upload RIMs to ITA
-        uses: ./.github/actions/upload-ita-rims
-        with:
-          rim-dir: ${{ needs.generate.outputs.ita-rim-dir }}
-          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
-          ita-api-url: ${{ vars.ITA_API_URL }}
-
       - name: Upload policy to ITA
         id: ita-upload
         uses: ./.github/actions/upload-ita-policy
@@ -263,6 +274,13 @@ jobs:
           policy-id: ${{ steps.ita-upload.outputs.policy-id }}
           policy-hash: ${{ steps.ita-upload.outputs.policy-hash }}
 
+      - name: Upload RIMs to ITA
+        uses: ./.github/actions/upload-ita-rims
+        with:
+          rim-dir: ${{ needs.generate.outputs.ita-rim-dir }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
       # ITA serves a new RIM or policy after up to ~13 s. Nothing attests
       # against either until the release names them, so one wait here covers
       # both uploads.
@@ -281,7 +299,7 @@ jobs:
           subject-path: |
             ${{ needs.generate.outputs.ita-policy-file }}
             ${{ steps.rp.outputs.ita-rp-policy-file }}
-            ${{ needs.generate.outputs.ita-rim-dir }}/*.json
+            ${{ needs.generate.outputs.ita-rims-file }}
             ${{ needs.generate.outputs.trustee-cpu-policy-file }}
             ${{ needs.generate.outputs.trustee-gpu-policy-file }}
           predicate-type: https://cohere.com/attestation-policy/v1
@@ -300,7 +318,7 @@ jobs:
           "${{ steps.rp.outputs.ita-rp-policy-file }}"
           "${{ needs.generate.outputs.trustee-cpu-policy-file }}"
           "${{ needs.generate.outputs.trustee-gpu-policy-file }}"
-          --rim-dir "${{ needs.generate.outputs.ita-rim-dir }}"
+          --rims-file "${{ needs.generate.outputs.ita-rims-file }}"
           --manifest attestation-policy/policy-manifest.yaml
           --predicate predicate.json
           --bundle "$BUNDLE_PATH"
@@ -340,10 +358,10 @@ jobs:
       - name: Install Python dependencies
         run: pip install requests
 
-      # Servers move to the new policy on their next passport refresh so wait
-      # a few minutes to ensure they stopped using the old policy ID.
+      # Servers move to the new policy on their next passport refresh (5 min);
+      # 10 min leaves room for one failed release pull.
       - name: Wait for servers and clients to move to the release
-        run: sleep 300
+        run: sleep 600
 
       - name: Find what the release superseded
         id: superseded
@@ -367,5 +385,24 @@ jobs:
         uses: ./.github/actions/delete-ita-rims
         with:
           rim-names: ${{ steps.superseded.outputs.rim-names }}
+          ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
+          ita-api-url: ${{ vars.ITA_API_URL }}
+
+      # The latest release rather than this run's, so rerunning an older
+      # release's cleanup does not flag what a newer release uses.
+      - name: Download the latest release predicate
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download --pattern predicate.json
+
+      # Warn only for now, as a precaution, until the orphans it finds are
+      # trusted to be safe to delete.
+      - name: Warn about ITA state the latest release does not record
+        uses: ./.github/actions/delete-ita-orphans
+        with:
+          rim-prefix: ${{ env.ITA_RIM_NAMESPACE }}.
+          policy-prefix: integritee-
+          predicate-file: predicate.json
+          warn-only: "true"
           ita-api-key: ${{ secrets.ITA_ADMIN_API_KEY }}
           ita-api-url: ${{ vars.ITA_API_URL }}

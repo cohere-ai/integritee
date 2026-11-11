@@ -18,7 +18,13 @@ inputs:
     description: "Path to predicate JSON file; read and updated in place with target data (optional)"
     required: false
   version:
-    description: "Release version the Trustee policies report in every appraisal and the ITA RIMs are named under, left out when unset"
+    description: "Release version the Trustee policies report in every appraisal and the ITA release RIM records, left out when unset"
+    required: false
+  ita-last-rims-file:
+    description: "The last release's ita_rims.json; RTMR3s stay in the RIM they were in, and without it they are packed afresh"
+    required: false
+  ita-rim-namespace:
+    description: "ITA RIM name prefix the policy reads and the RIMs are named under, required with ITA. Releases use public.cohere.v1; any other caller that uploads its RIMs must pass its own (e.g. cohere_testing.r<run_id>_<attempt>)"
     required: false
   ita-policy-nonce:
     description: "Add a random nonce to the ITA policy, so identical renders can coexist in ITA, which refuses duplicate policy content"
@@ -31,7 +37,9 @@ outputs:
   ita-policy-file:
     description: "Path to the generated ITA policy, empty unless ita was requested"
   ita-rim-dir:
-    description: "Directory holding the RIMs the ITA policy reads, one <rim name>.json each, empty unless ita was requested"
+    description: "Directory holding the RIMs the ITA policy reads, one <rim name>.json each as uploaded, empty unless ita was requested"
+  ita-rims-file:
+    description: "Path to ita_rims.json, every RIM nested at its name, one level per dot, empty unless ita was requested"
   ita-target-count:
     description: "How many manifest targets the ITA policy covers, 0 if none matched"
   trustee-cpu-policy-file:
@@ -55,4 +63,6 @@ runs:
     INPUT_POLICY_TYPES: ${{ inputs.policy-types }}
     INPUT_PREDICATE_FILE: ${{ inputs.predicate-file }}
     INPUT_VERSION: ${{ inputs.version }}
+    INPUT_ITA_LAST_RIMS_FILE: ${{ inputs.ita-last-rims-file }}
+    INPUT_ITA_RIM_NAMESPACE: ${{ inputs.ita-rim-namespace }}
     INPUT_ITA_POLICY_NONCE: ${{ inputs.ita-policy-nonce }}

@@ -1067,14 +1067,14 @@ def test_rim_delete_removes_only_the_named_rims(monkeypatch, capsys):
     session = Mock()
     session.get.return_value = Mock(ok=True, json=Mock(return_value=[
         {"id": "id-old", "name": "ns.v1.platform"},
-        {"id": "id-raced", "name": "ns.v1.rtmr3.s00"},
+        {"id": "id-raced", "name": "ns.v1.rtmr3.s000"},
         {"id": "id-live", "name": "ns.v2.platform"},
     ]))
     session.delete.side_effect = lambda url, **_: Mock(
         ok="raced" not in url, status_code=404 if "raced" in url else 204,
     )
     monkeypatch.setattr(delete, "ita_session", lambda: session)
-    monkeypatch.setenv("RIM_NAMES", "ns.v1.platform ns.v1.rtmr3.s00 ns.v1.gone")
+    monkeypatch.setenv("RIM_NAMES", "ns.v1.platform ns.v1.rtmr3.s000 ns.v1.gone")
     monkeypatch.setenv("ITA_API_KEY", "test-api-key")
     monkeypatch.setenv("ITA_API_URL", "https://example.com")
 
@@ -1116,6 +1116,89 @@ def test_cleanup_deletes_what_the_previous_release_alone_used(
     assert manage.superseded(previous, [current]) == expected
 
 
+@pytest.mark.parametrize("warn_only", [False, True])
+def test_orphans_are_what_the_release_predicate_does_not_record(
+    tmp_path, monkeypatch, capsys, warn_only
+):
+    install_http_import_stubs(monkeypatch)
+    delete = load_action(
+        "ita_delete_orphans", ".github/actions/delete-ita-orphans/delete.py"
+    )
+    listed = {
+        "rims": [
+            {"id": f"id-{name}", "name": name}
+            for name in ("ns.a", "ns.b", "other.c")
+        ],
+        "policies": [
+            {"policy_name": "integritee-1", "policy_id": "p1"},
+            {"policy_name": "integritee-2", "policy_id": "p2"},
+            {"policy_name": "someone-else", "policy_id": "p3"},
+        ],
+    }
+    session = Mock()
+    session.get.side_effect = lambda url, **_: Mock(
+        ok=True, json=Mock(return_value=listed[url.rsplit("/", 1)[1]])
+    )
+    session.delete.return_value = Mock(ok=True, status_code=204)
+    monkeypatch.setattr(delete, "ita_session", lambda: session)
+    predicate = tmp_path / "predicate.json"
+    predicate.write_text(json.dumps({"policy_id": "p1", "ita_rims": ["ns.a"]}))
+    monkeypatch.setenv("PREDICATE_FILE", str(predicate))
+    monkeypatch.setenv("RIM_PREFIX", "ns.")
+    monkeypatch.setenv("POLICY_PREFIX", "integritee-")
+    monkeypatch.setenv("WARN_ONLY", str(warn_only).lower())
+    monkeypatch.setenv("ITA_API_KEY", "test-api-key")
+    monkeypatch.setenv("ITA_API_URL", "https://example.com")
+
+    delete.main()
+
+    deleted = [call.args[0] for call in session.delete.call_args_list]
+    warned = capsys.readouterr().out.count("::warning::")
+    if warn_only:
+        assert (deleted, warned) == ([], 2)
+    else:
+        assert deleted == [
+            "https://example.com/management/v1/policies/p2",
+            "https://example.com/management/v1/rims/id-ns.b",
+        ]
+        assert warned == 0
+
+
+def test_release_cleanup_only_warns_about_orphans():
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github/actions/delete-ita-orphans/action.yml")
+        .read_text()
+    )
+    step = action["runs"]["steps"][0]
+    assert step["env"]["WARN_ONLY"] == "${{ inputs.warn-only }}"
+
+    cleanup = _load_workflow("release-policy")["jobs"]["cleanup"]["steps"]
+    [orphans] = [
+        step for step in cleanup
+        if step.get("uses") == "./.github/actions/delete-ita-orphans"
+    ]
+    assert orphans["with"]["warn-only"] == "true"
+
+
+def test_orphan_cleanup_refuses_a_predicate_without_ita_state(
+    tmp_path, monkeypatch
+):
+    install_http_import_stubs(monkeypatch)
+    delete = load_action(
+        "ita_delete_orphans_guard",
+        ".github/actions/delete-ita-orphans/delete.py",
+    )
+    session = Mock()
+    monkeypatch.setattr(delete, "ita_session", lambda: session)
+    predicate = tmp_path / "predicate.json"
+    predicate.write_text(json.dumps({"policy_id": "p1"}))
+    monkeypatch.setenv("PREDICATE_FILE", str(predicate))
+
+    with pytest.raises(SystemExit):
+        delete.main()
+    assert not session.method_calls
+
+
 def test_cleanup_rerun_targets_its_previous_release_and_keeps_the_latest():
     manage = load_action(
         "release_manage_cleanup_tags",
@@ -1130,6 +1213,40 @@ def test_cleanup_rerun_targets_its_previous_release_and_keeps_the_latest():
     assert manage.superseded(previous, [{"policy_id": "p2"}, latest]) == ("", [])
     with pytest.raises(SystemExit):
         manage.cleanup_tags(tags, "v4")
+
+
+@pytest.mark.parametrize(
+    ("tags", "downloaded"),
+    [([], []), (["v1"], []), (["v2", "v1"], ["v2"])],
+    ids=["no-release", "no-rims", "rims"],
+)
+def test_last_rims_come_from_the_latest_release(
+    tmp_path, monkeypatch, tags, downloaded
+):
+    manage = load_action(
+        "release_manage_last_rims",
+        ".github/workflows/release-policy/manage.py",
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    rim_dir = tmp_path / "rims"
+    predicates = {"v2": {"ita_rims": ["ns.a", "ns.b"]}, "v1": {}}
+    monkeypatch.setattr(manage, "release_tags", lambda: tags)
+    monkeypatch.setattr(manage, "release_predicate", predicates.get)
+    downloads = []
+
+    def fake_run(*command, capture_output=False):
+        downloads.append(command[3])
+        (rim_dir / "ita_rims.json").write_text("{}")
+        return ""
+
+    monkeypatch.setattr(manage, "run", fake_run)
+
+    manage.download_last_rims(argparse.Namespace(output_dir=rim_dir))
+
+    assert downloads == downloaded
+    expected = rim_dir / "ita_rims.json" if downloaded else ""
+    assert github_output.read_text() == f"rims-file={expected}\n"
 
 
 @pytest.mark.parametrize(
