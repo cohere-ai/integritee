@@ -1042,6 +1042,36 @@ def test_rim_upload_writes_only_what_differs(tmp_path, monkeypatch, capsys):
     assert capsys.readouterr().out == "written=2\n"
 
 
+def test_rim_upload_rerun_writes_only_what_a_failed_run_missed(
+    tmp_path, monkeypatch
+):
+    upload, session = _rim_upload(tmp_path, monkeypatch)
+    stored = {rim["name"]: rim for rim in session.get.return_value.json()}
+    session.get.side_effect = lambda *a, **k: Mock(
+        ok=True, json=Mock(return_value=list(stored.values()))
+    )
+    write = session.put.side_effect
+    post_results = iter([Mock(ok=False, status_code=500), None])
+
+    def put(url, **kwargs):
+        response = write(url, **kwargs)
+        stored["changed"] = {**stored["changed"], **response.json()}
+        return response
+
+    session.put.side_effect = put
+    session.post.side_effect = lambda *a, **k: next(post_results) or write(
+        *a, **k
+    )
+
+    with pytest.raises(SystemExit):
+        upload.main()
+    upload.main()
+
+    # The rerun skips `changed`, written before the failure.
+    assert session.put.call_count == 1
+    assert session.post.call_count == 2
+
+
 def test_rim_upload_fails_when_ita_stores_other_content(tmp_path, monkeypatch):
     upload, _ = _rim_upload(tmp_path, monkeypatch, stored_hash="other")
 
