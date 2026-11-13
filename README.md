@@ -56,16 +56,33 @@ carries the release version as `cohere.policy-version`.
 Every release contains:
 
 - `ita_policy.rego` -- the composite ITA appraisal policy that was uploaded
+- `ita_rims.json` -- every RIM uploaded to ITA, each nested at its name, one
+  level per dot: RIM `public.cohere.v1.platform` is at
+  `public` → `cohere` → `v1` → `platform`, where ITA policies read it as
+  `data.public.cohere.v1.platform`. The predicate's `ita_rims` lists the
+  names. The bytes uploaded for a RIM are Python's `json.dumps` of its
+  content with default separators, and ITA's RIM hash is the base64 SHA-384
+  of those bytes. RIMs keep their names across releases and are updated in
+  place, and an RTMR3 stays in the RIM it was first placed in. The `release`
+  RIM holds the release version, which ITA tokens carry for information only
+  as `policy_defined_claims.integritee_version`
+- `ita_rp_policy.rego` -- the relying-party policy, Rego a relying party
+  evaluates against an ITA token's claims with `ita_rims.json` as data. It
+  allows a token only if ITA appraised it with this release's ITA policy and
+  its measurements are in those RIMs. Any Rego engine can evaluate it, with
+  the token's verified claims as input, e.g.
+  `opa eval -d ita_rp_policy.rego -d ita_rims.json -i claims.json 'data.ita_rp.allow'`;
+  anything but `true` is a denial
 - `trustee_policy_cpu.rego` -- the Trustee CPU appraisal policy, for Azure SEV-SNP
 - `trustee_policy_gpu.rego` -- the Trustee GPU appraisal policy (uses NRAS)
 - `policy-manifest.yaml` -- every workload the policies cover
 - `policy-manifest-bundle.tar.gz` -- the manifest plus its content-addressed initdata
 - `predicate.json` -- in-toto predicate: per-target measurements and baseline refs,
-  `cvm_measure_version`, the `policy_id`, how many targets each policy covers,
+  `cvm_measure_version`, the `policy_id`, the `ita_rims` names, how many targets each policy covers,
   a `trustee_policies` block with each file's digest and the Azure platform
   reference values it accepts, the manifest commit, and the chain link
-- `attestation-bundle.sigstore.json` -- one Sigstore bundle over all three
-  policies and the manifest, verifiable against public Rekor
+- `attestation-bundle.sigstore.json` -- one Sigstore bundle over every policy
+  and RIM, verifiable against public Rekor
 
 The Azure policy pins exact `cvm-measure` references with no degrade path. A
 reboot lets `systemd-repart` rewrite the partition UUID, which moves PCR 5 and
@@ -91,12 +108,18 @@ choose which services to generate for and pass no output path:
     policy-types: ita trustee    # space- or comma-separated: ita, trustee
     predicate-file: predicate.json
     version: v0.0.2              # optional, reported in Trustee appraisals
+    ita-last-rims-file: last-rims/ita_rims.json  # optional, the last release's RIMs to update in place
+    ita-rim-namespace: cohere_testing.r1_1  # required with ita, the RIM name prefix
 ```
 
+Releases write RIMs under `public.cohere.v1`. Any other caller that uploads
+its RIMs passes its own namespace, e.g. `cohere_testing.r<run_id>_<attempt>`
+
 The action writes to `generated-policies/` in the workspace and reports
-`ita-policy-file`, `trustee-cpu-policy-file`, `trustee-gpu-policy-file`,
-`trustee-policy-dir` and a target count per type, so every later step reads a
-path the generator wrote rather than a literal it has to keep in agreement.
+`ita-policy-file`, `ita-rim-dir`, `ita-rims-file`, `trustee-cpu-policy-file`,
+`trustee-gpu-policy-file`, `trustee-policy-dir` and a target count per type,
+so every later step reads a path the generator wrote rather than a literal it
+has to keep in agreement.
 Reported paths are workspace-relative, since the action runs in a container
 where the workspace is `/github/workspace` and the steps that consume them do
 not. Filenames are the action's to choose because Trustee resolves them by name;

@@ -1,16 +1,16 @@
 name: "Upload ITA Policy"
-description: "Create or update an Intel Trust Authority attestation policy"
+description: "Create or update an Intel Trust Authority attestation policy, reusing an existing policy with the same name and content"
 
 inputs:
   policy-file:
     description: "Path to the .rego policy file"
     required: true
   policy-id:
-    description: "Existing policy ID to update (omit to create a new policy)"
+    description: "ID of an existing policy to overwrite"
     required: false
   policy-name:
-    description: "Human-readable name for the policy"
-    required: true
+    description: "Name for the policy (default: integritee-<SHA-256 prefix of the content>)"
+    required: false
   ita-api-key:
     description: "ITA admin API key"
     required: true
@@ -26,6 +26,9 @@ outputs:
   policy-id:
     description: "ID of the created/updated policy"
     value: ${{ steps.upload.outputs.policy-id }}
+  policy-hash:
+    description: "ITA's policy_hash for the policy's content"
+    value: ${{ steps.upload.outputs.policy-hash }}
 
 runs:
   using: "composite"
@@ -40,6 +43,4 @@ runs:
         ITA_API_KEY: ${{ inputs.ita-api-key }}
         ITA_API_URL: ${{ inputs.ita-api-url }}
         PREDICATE_FILE: ${{ inputs.predicate-file }}
-      run: |
-        RESULT=$(python3 "${{ github.action_path }}/upload.py")
-        echo "policy-id=$RESULT" >> "$GITHUB_OUTPUT"
+      run: python3 "${{ github.action_path }}/upload.py" >> "$GITHUB_OUTPUT"

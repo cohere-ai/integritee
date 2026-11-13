@@ -21,7 +21,7 @@ REQUEST_TIMEOUT_SECONDS = 30
 
 def ita_session() -> requests.Session:
     session = requests.Session()
-    retries = Retry(total=3, backoff_factor=1, status_forcelist=[429])
+    retries = Retry(total=5, backoff_factor=2, status_forcelist=[429])
     session.mount("https://", HTTPAdapter(max_retries=retries))
     return session
 
