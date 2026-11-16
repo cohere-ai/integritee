@@ -1,0 +1,36 @@
+name: "Render ITA RP Policy"
+description: "Render the relying-party policy for an uploaded ITA policy and the RIMs it reads"
+
+inputs:
+  rim-dir:
+    description: "Directory of RIMs the ITA policy reads, the ita-rim-dir output of generate-policy"
+    required: true
+  policy-id:
+    description: "ID of the uploaded ITA policy, the policy-id output of upload-ita-policy"
+    required: true
+  policy-hash:
+    description: "ITA's policy_hash for it, the policy-hash output of upload-ita-policy"
+    required: true
+
+# Like generate-policy, the action names and places the file it writes.
+outputs:
+  ita-rp-policy-file:
+    description: "Path to the generated RP policy"
+    value: ${{ steps.render.outputs.ita-rp-policy-file }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install dependencies
+      shell: bash
+      run: pip install 'pyyaml>=6,<7' >/dev/null 2>&1
+
+    - name: Render RP policy
+      id: render
+      shell: bash
+      env:
+        RIM_DIR: ${{ inputs.rim-dir }}
+        POLICY_ID: ${{ inputs.policy-id }}
+        POLICY_HASH: ${{ inputs.policy-hash }}
+        PYTHONPATH: ${{ github.action_path }}/../generate-policy
+      run: python3 -m generate_policy.rp

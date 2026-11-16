@@ -1,0 +1,31 @@
+name: "Delete ITA RIMs"
+description: "Delete Intel Trust Authority RIMs by name"
+
+inputs:
+  rim-names:
+    description: "Whitespace-separated names of the RIMs to delete; names ITA does not hold are skipped"
+    required: true
+  ita-api-key:
+    description: "ITA admin API key"
+    required: true
+  ita-api-url:
+    description: "ITA API base URL"
+    required: false
+    default: "https://api.trustauthority.intel.com"
+
+outputs:
+  deleted:
+    description: "Number of RIMs deleted, 0 if none were left"
+    value: ${{ steps.delete.outputs.deleted }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Delete RIMs from ITA
+      id: delete
+      shell: bash
+      env:
+        RIM_NAMES: ${{ inputs.rim-names }}
+        ITA_API_KEY: ${{ inputs.ita-api-key }}
+        ITA_API_URL: ${{ inputs.ita-api-url }}
+      run: python3 "${{ github.action_path }}/delete.py" >> "$GITHUB_OUTPUT"

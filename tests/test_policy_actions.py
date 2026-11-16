@@ -5,6 +5,7 @@ import base64
 import gzip
 import hashlib
 import importlib.util
+import json
 import sys
 import types
 from datetime import datetime, timedelta, timezone
@@ -769,6 +770,7 @@ def test_workflows_use_explicit_publish_gates():
         "push" in release_publish["if"]
         or "inputs.publish" in release_publish["if"]
     )
+    assert release["jobs"]["cleanup"]["environment"] == "release"
     release_generate = release["jobs"]["generate"]
     assert "ITA_ADMIN_API_KEY" not in str(release_generate)
     assert "CC_POLICY_APP" not in str(release_generate)
@@ -902,41 +904,379 @@ def test_ita_read_and_delete_requests_have_timeouts(
     assert request.call_args.kwargs["timeout"] == 30
 
 
-@pytest.mark.parametrize(
-    ("policy_id", "request_method"),
-    [
-        ("", "post"),
-        ("test-policy-id", "put"),
-    ],
-)
-def test_ita_upload_requests_have_timeouts(
-    policy_id,
-    request_method,
-    tmp_path,
-    monkeypatch,
-):
+def _policy_upload(tmp_path, monkeypatch, content, **env):
+    """Run the policy upload against an ITA holding `package policy` and an
+    unrelated policy. Its list ignores the name filter, as ITA does for an
+    unknown parameter, so only the action's own name check can pick one."""
     install_http_import_stubs(monkeypatch)
     upload = load_action(
-        f"ita_upload_{request_method}",
-        ".github/actions/upload-ita-policy/upload.py",
+        "ita_upload_policy", ".github/actions/upload-ita-policy/upload.py"
     )
     policy = tmp_path / "policy.rego"
-    policy.write_text("package policy\n")
-    response = Mock(ok=True, status_code=200)
-    response.json.return_value = {"policy_id": "test-policy-id"}
+    policy.write_text(content)
+    stored = {
+        "policy_id": "stored-id",
+        "policy_name": upload.policy_name_for("package policy\n"),
+        "policy": "package policy\n",
+        "policy_hash": "c3RvcmVk",
+    }
+    unrelated = {"policy_id": "other-id", "policy_name": "other",
+                 "policy": "package other\n", "policy_hash": "b3RoZXI="}
+    base = "https://example.com/management/v1/policies"
+    responses = {base: [unrelated, stored], f"{base}/stored-id": stored}
+    written = Mock(ok=True, json=Mock(return_value={
+        "policy_id": "new-id", "policy_hash": "bmV3",
+    }))
     session = Mock()
-    getattr(session, request_method).return_value = response
+    session.get.side_effect = lambda url, **kwargs: Mock(
+        ok=True, json=Mock(return_value=responses[url])
+    )
+    session.put.return_value = written
+    session.post.return_value = written
     monkeypatch.setattr(upload, "ita_session", lambda: session)
     monkeypatch.setenv("POLICY_FILE", str(policy))
-    monkeypatch.setenv("POLICY_NAME", "test-policy")
-    monkeypatch.setenv("POLICY_ID", policy_id)
     monkeypatch.setenv("ITA_API_KEY", "test-api-key")
     monkeypatch.setenv("ITA_API_URL", "https://example.com")
+    monkeypatch.delenv("POLICY_ID", raising=False)
+    monkeypatch.delenv("POLICY_NAME", raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+
+    upload.main()
+    for request in (session.get, session.put, session.post):
+        if request.called:
+            assert request.call_args.kwargs["timeout"] == 30
+    return upload, session
+
+
+def test_ita_upload_reuses_the_policy_named_for_this_content(
+    tmp_path, monkeypatch, capsys
+):
+    _, session = _policy_upload(tmp_path, monkeypatch, "package policy\n")
+
+    session.put.assert_not_called()
+    session.post.assert_not_called()
+    assert capsys.readouterr().out == (
+        "policy-id=stored-id\npolicy-hash=c3RvcmVk\n"
+    )
+
+
+@pytest.mark.parametrize("policy_name", [None, "custom"])
+def test_ita_upload_creates_a_policy_for_new_content(
+    tmp_path, monkeypatch, capsys, policy_name
+):
+    env = {"POLICY_NAME": policy_name} if policy_name else {}
+    upload, session = _policy_upload(
+        tmp_path, monkeypatch, "package new\n", **env
+    )
+
+    assert session.post.call_args.kwargs["json"]["policy_name"] == (
+        policy_name or upload.policy_name_for("package new\n")
+    )
+    assert capsys.readouterr().out == "policy-id=new-id\npolicy-hash=bmV3\n"
+
+
+def test_ita_upload_overwrites_the_given_policy(tmp_path, monkeypatch):
+    upload, session = _policy_upload(
+        tmp_path, monkeypatch, "package new\n", POLICY_ID="stored-id"
+    )
+
+    assert session.put.call_args.kwargs["json"] == {
+        "policy_id": "stored-id",
+        "policy_name": upload.policy_name_for("package new\n"),
+        "policy": "package new\n",
+    }
+    session.post.assert_not_called()
+
+
+def _rim_upload(tmp_path, monkeypatch, stored_hash=None):
+    """The RIM upload action over files `same`, `changed` and `new`.
+
+    ITA already holds `same` unchanged and an older `changed`. Writes return
+    stored_hash, or the hash of what was sent.
+    """
+    install_http_import_stubs(monkeypatch)
+    upload = load_action(
+        "ita_upload_rims", ".github/actions/upload-ita-rims/upload.py"
+    )
+    for name in ("same", "changed", "new"):
+        (tmp_path / f"{name}.json").write_bytes(
+            json.dumps({"rtmr3": [name]}).encode()
+        )
+
+    def written(*args, **kwargs):
+        sent = json.dumps(kwargs["json"]["content"]).encode()
+        return Mock(ok=True, json=Mock(return_value={
+            "hash": stored_hash or upload.rim_hash(sent),
+        }))
+
+    session = Mock()
+    session.get.return_value = Mock(ok=True, json=Mock(return_value=[
+        {"id": "id-same", "name": "same",
+         "hash": upload.rim_hash((tmp_path / "same.json").read_bytes())},
+        {"id": "id-changed", "name": "changed", "hash": "older"},
+    ]))
+    session.post.side_effect = written
+    session.put.side_effect = written
+    monkeypatch.setattr(upload, "ita_session", lambda: session)
+    monkeypatch.setenv("RIM_DIR", str(tmp_path))
+    monkeypatch.setenv("ITA_API_KEY", "test-api-key")
+    monkeypatch.setenv("ITA_API_URL", "https://example.com")
+    return upload, session
+
+
+def test_rim_upload_writes_only_what_differs(tmp_path, monkeypatch, capsys):
+    upload, session = _rim_upload(tmp_path, monkeypatch)
 
     upload.main()
 
-    request = getattr(session, request_method)
-    assert request.call_args.kwargs["timeout"] == 30
+    assert session.post.call_args.kwargs["json"] == {
+        "name": "new", "content": {"rtmr3": ["new"]},
+    }
+    assert session.put.call_args.args == (
+        "https://example.com/management/v1/rims/id-changed",
+    )
+    assert session.post.call_count == session.put.call_count == 1
+    for request in (session.get, session.post, session.put):
+        assert request.call_args.kwargs["timeout"] == 30
+    assert capsys.readouterr().out == "written=2\n"
+
+
+def test_rim_upload_rerun_writes_only_what_a_failed_run_missed(
+    tmp_path, monkeypatch
+):
+    upload, session = _rim_upload(tmp_path, monkeypatch)
+    stored = {rim["name"]: rim for rim in session.get.return_value.json()}
+    session.get.side_effect = lambda *a, **k: Mock(
+        ok=True, json=Mock(return_value=list(stored.values()))
+    )
+    write = session.put.side_effect
+    post_results = iter([Mock(ok=False, status_code=500), None])
+
+    def put(url, **kwargs):
+        response = write(url, **kwargs)
+        stored["changed"] = {**stored["changed"], **response.json()}
+        return response
+
+    session.put.side_effect = put
+    session.post.side_effect = lambda *a, **k: next(post_results) or write(
+        *a, **k
+    )
+
+    with pytest.raises(SystemExit):
+        upload.main()
+    upload.main()
+
+    # The rerun skips `changed`, written before the failure.
+    assert session.put.call_count == 1
+    assert session.post.call_count == 2
+
+
+def test_rim_upload_fails_when_ita_stores_other_content(tmp_path, monkeypatch):
+    upload, _ = _rim_upload(tmp_path, monkeypatch, stored_hash="other")
+
+    with pytest.raises(SystemExit):
+        upload.main()
+
+
+def test_rim_upload_fails_when_ita_lists_no_hash(tmp_path, monkeypatch):
+    upload, session = _rim_upload(tmp_path, monkeypatch)
+    session.get.return_value.json.return_value[0].pop("hash")
+
+    with pytest.raises(SystemExit):
+        upload.main()
+    session.put.assert_not_called()
+    session.post.assert_not_called()
+
+
+def test_rim_delete_removes_only_the_named_rims(monkeypatch, capsys):
+    install_http_import_stubs(monkeypatch)
+    delete = load_action(
+        "ita_delete_rims", ".github/actions/delete-ita-rims/delete.py"
+    )
+    session = Mock()
+    session.get.return_value = Mock(ok=True, json=Mock(return_value=[
+        {"id": "id-old", "name": "ns.v1.platform"},
+        {"id": "id-raced", "name": "ns.v1.rtmr3.s000"},
+        {"id": "id-live", "name": "ns.v2.platform"},
+    ]))
+    session.delete.side_effect = lambda url, **_: Mock(
+        ok="raced" not in url, status_code=404 if "raced" in url else 204,
+    )
+    monkeypatch.setattr(delete, "ita_session", lambda: session)
+    monkeypatch.setenv("RIM_NAMES", "ns.v1.platform ns.v1.rtmr3.s000 ns.v1.gone")
+    monkeypatch.setenv("ITA_API_KEY", "test-api-key")
+    monkeypatch.setenv("ITA_API_URL", "https://example.com")
+
+    delete.main()
+
+    assert [call.args[0] for call in session.delete.call_args_list] == [
+        "https://example.com/management/v1/rims/id-old",
+        "https://example.com/management/v1/rims/id-raced",
+    ]
+    assert capsys.readouterr().out == "deleted=1\n"
+
+
+@pytest.mark.parametrize(
+    ("previous", "current", "expected"),
+    [
+        # Blue-green: a new set and policy, so all of the previous goes.
+        ({"policy_id": "p1", "ita_rims": ["ns.v1.a", "ns.v1.b"]},
+         {"policy_id": "p2", "ita_rims": ["ns.v2.a"]},
+         ("p1", ["ns.v1.a", "ns.v1.b"])),
+        # Shared names and an unchanged policy stay.
+        ({"policy_id": "p1", "ita_rims": ["ns.a", "ns.b"]},
+         {"policy_id": "p1", "ita_rims": ["ns.a"]},
+         ("", ["ns.b"])),
+        ({}, {"policy_id": "p1", "ita_rims": ["ns.a"]}, ("", [])),
+        # A predicate from before RIMs were released.
+        ({"policy_id": "p1"}, {"policy_id": "p2", "ita_rims": ["ns.a"]},
+         ("p1", [])),
+    ],
+    ids=["new-set", "shared", "first-release", "no-rims"],
+)
+def test_cleanup_deletes_what_the_previous_release_alone_used(
+    previous, current, expected
+):
+    manage = load_action(
+        "release_manage_superseded",
+        ".github/workflows/release-policy/manage.py",
+    )
+
+    assert manage.superseded(previous, [current]) == expected
+
+
+@pytest.mark.parametrize("warn_only", [False, True])
+def test_orphans_are_what_the_release_predicate_does_not_record(
+    tmp_path, monkeypatch, capsys, warn_only
+):
+    install_http_import_stubs(monkeypatch)
+    delete = load_action(
+        "ita_delete_orphans", ".github/actions/delete-ita-orphans/delete.py"
+    )
+    listed = {
+        "rims": [
+            {"id": f"id-{name}", "name": name}
+            for name in ("ns.a", "ns.b", "other.c")
+        ],
+        "policies": [
+            {"policy_name": "integritee-1", "policy_id": "p1"},
+            {"policy_name": "integritee-2", "policy_id": "p2"},
+            {"policy_name": "someone-else", "policy_id": "p3"},
+        ],
+    }
+    session = Mock()
+    session.get.side_effect = lambda url, **_: Mock(
+        ok=True, json=Mock(return_value=listed[url.rsplit("/", 1)[1]])
+    )
+    session.delete.return_value = Mock(ok=True, status_code=204)
+    monkeypatch.setattr(delete, "ita_session", lambda: session)
+    predicate = tmp_path / "predicate.json"
+    predicate.write_text(json.dumps({"policy_id": "p1", "ita_rims": ["ns.a"]}))
+    monkeypatch.setenv("PREDICATE_FILE", str(predicate))
+    monkeypatch.setenv("RIM_PREFIX", "ns.")
+    monkeypatch.setenv("POLICY_PREFIX", "integritee-")
+    monkeypatch.setenv("WARN_ONLY", str(warn_only).lower())
+    monkeypatch.setenv("ITA_API_KEY", "test-api-key")
+    monkeypatch.setenv("ITA_API_URL", "https://example.com")
+
+    delete.main()
+
+    deleted = [call.args[0] for call in session.delete.call_args_list]
+    warned = capsys.readouterr().out.count("::warning::")
+    if warn_only:
+        assert (deleted, warned) == ([], 2)
+    else:
+        assert deleted == [
+            "https://example.com/management/v1/policies/p2",
+            "https://example.com/management/v1/rims/id-ns.b",
+        ]
+        assert warned == 0
+
+
+def test_release_cleanup_only_warns_about_orphans():
+    action = yaml.safe_load(
+        (REPO_ROOT / ".github/actions/delete-ita-orphans/action.yml")
+        .read_text()
+    )
+    step = action["runs"]["steps"][0]
+    assert step["env"]["WARN_ONLY"] == "${{ inputs.warn-only }}"
+
+    cleanup = _load_workflow("release-policy")["jobs"]["cleanup"]["steps"]
+    [orphans] = [
+        step for step in cleanup
+        if step.get("uses") == "./.github/actions/delete-ita-orphans"
+    ]
+    assert orphans["with"]["warn-only"] == "true"
+
+
+def test_orphan_cleanup_refuses_a_predicate_without_ita_state(
+    tmp_path, monkeypatch
+):
+    install_http_import_stubs(monkeypatch)
+    delete = load_action(
+        "ita_delete_orphans_guard",
+        ".github/actions/delete-ita-orphans/delete.py",
+    )
+    session = Mock()
+    monkeypatch.setattr(delete, "ita_session", lambda: session)
+    predicate = tmp_path / "predicate.json"
+    predicate.write_text(json.dumps({"policy_id": "p1"}))
+    monkeypatch.setenv("PREDICATE_FILE", str(predicate))
+
+    with pytest.raises(SystemExit):
+        delete.main()
+    assert not session.method_calls
+
+
+def test_cleanup_rerun_targets_its_previous_release_and_keeps_the_latest():
+    manage = load_action(
+        "release_manage_cleanup_tags",
+        ".github/workflows/release-policy/manage.py",
+    )
+    tags = ["v3", "v2", "v1"]
+
+    assert manage.cleanup_tags(tags, "v2") == ("v1", "v3")
+    assert manage.cleanup_tags(tags, "v1") == (None, "v3")
+    previous = {"policy_id": "p1", "ita_rims": ["ns.v1.a"]}
+    latest = {"policy_id": "p1", "ita_rims": ["ns.v1.a"]}
+    assert manage.superseded(previous, [{"policy_id": "p2"}, latest]) == ("", [])
+    with pytest.raises(SystemExit):
+        manage.cleanup_tags(tags, "v4")
+
+
+@pytest.mark.parametrize(
+    ("tags", "downloaded"),
+    [([], []), (["v1"], []), (["v2", "v1"], ["v2"])],
+    ids=["no-release", "no-rims", "rims"],
+)
+def test_last_rims_come_from_the_latest_release(
+    tmp_path, monkeypatch, tags, downloaded
+):
+    manage = load_action(
+        "release_manage_last_rims",
+        ".github/workflows/release-policy/manage.py",
+    )
+    github_output = tmp_path / "github-output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(github_output))
+    rim_dir = tmp_path / "rims"
+    predicates = {"v2": {"ita_rims": ["ns.a", "ns.b"]}, "v1": {}}
+    monkeypatch.setattr(manage, "release_tags", lambda: tags)
+    monkeypatch.setattr(manage, "release_predicate", predicates.get)
+    downloads = []
+
+    def fake_run(*command, capture_output=False):
+        downloads.append(command[3])
+        (rim_dir / "ita_rims.json").write_text("{}")
+        return ""
+
+    monkeypatch.setattr(manage, "run", fake_run)
+
+    manage.download_last_rims(argparse.Namespace(output_dir=rim_dir))
+
+    assert downloads == downloaded
+    expected = rim_dir / "ita_rims.json" if downloaded else ""
+    assert github_output.read_text() == f"rims-file={expected}\n"
 
 
 @pytest.mark.parametrize(
