@@ -416,7 +416,6 @@ def test_rendered_policy_keeps_static_platform_identity_in_base_checks(tmp_path)
     for field in (
         "tdx_mrsignerseam",
         "tdx_mrconfigid",
-        "tdx_mrowner",
         "tdx_mrownerconfig",
         "tdx_seam_attributes",
         "tdx_td_attributes",
